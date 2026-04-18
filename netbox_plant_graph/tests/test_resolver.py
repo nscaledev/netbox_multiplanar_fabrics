@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from netbox_plant_graph.models import AttachmentUnit, Fabric, FabricPlane
-from netbox_plant_graph.services import compute_blast_radius, resolve_path, run_plane_audit
+from netbox_plant_graph.services import build_lane_drilldown, compute_blast_radius, resolve_path, run_plane_audit
 from netbox_plant_graph.services.sync import rebuild_graph
 
 from .topology import PlantGraphTopologyMixin
@@ -209,3 +209,16 @@ class GraphServiceIntegrationTestCase(PlantGraphTopologyMixin):
             finding['metadata'].get('mapping_side') == 'rear'
             for finding in findings_by_type['missing_port_mapping']
         ))
+
+    def test_lane_drilldown_returns_lane_groups_for_core_child_interface(self):
+        topology = self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Lane Drilldown')
+        rebuild_graph(scope={'fabric': fabric})
+
+        result = build_lane_drilldown(target=topology['host_children'][2])
+
+        self.assertEqual(result['total_attachment_units'], 1)
+        self.assertEqual(result['total_signal_lanes'], 4)
+        self.assertEqual(result['available_lane_indexes'], [0, 1, 2, 3])
+        self.assertEqual(result['attachment_units'][0]['attachment_unit']['display'], topology['host_children'][2].name)
+        self.assertEqual(len(result['attachment_units'][0]['lanes']), 4)

@@ -11,8 +11,9 @@ from . import forms as forms_module
 from .forms import *  # noqa: F401,F403
 from .models import AttachmentUnit, CoarseEdge, Fabric, FabricPlane, FineEdge, LaneMap, PlaneMembership, PlantNode, SignalLane, TerminationPoint, TransferMap
 from .object_registry import VIEW_OBJECT_SPECS, get_object_spec
-from .services import compute_blast_radius, resolve_path, run_plane_audit
+from .services import build_lane_drilldown, compute_blast_radius, resolve_path, run_plane_audit
 from .services.graph.resolution import DEFAULT_RESOLUTION
+from .services.netbox.adapters import build_object_reference
 from .services.netbox.lookup import get_registry_label, resolve_registry_object
 from . import tables as tables_module
 from .tables import *  # noqa: F401,F403
@@ -43,6 +44,7 @@ class MetadataDrivenDetailView(generic.ObjectView):
             'detail_spec': detail_spec,
             'detail_fields': [self.build_detail_field(field_spec, instance) for field_spec in detail_spec.fields],
             'object': instance,
+            'supplementary_cards': _build_supplementary_cards(instance),
         }
 
 
@@ -149,6 +151,49 @@ def _finding_counts(findings):
         'by_severity': tuple(sorted(by_severity.items())),
         'by_type': tuple(sorted(by_type.items())),
     }
+
+
+def _build_supplementary_cards(instance):
+    cards = []
+    if isinstance(instance, AttachmentUnit):
+        lane_drilldown = build_lane_drilldown(target=instance)
+        if lane_drilldown['total_signal_lanes'] > 0:
+            cards.append({
+                'title': 'Lane Overview',
+                'lines': (
+                    f"Signal lanes: {lane_drilldown['total_signal_lanes']}",
+                    f"Attachment units with lanes: {lane_drilldown['total_attachment_units']}",
+                ),
+                'links': (
+                    {'label': 'Lane Drilldown', 'url': lane_drilldown['target']['lane_drilldown_url']},
+                    {'label': 'Signal-Lane Path', 'url': lane_drilldown['target']['signal_path_resolver_url']},
+                    {'label': 'Signal-Lane Radius', 'url': lane_drilldown['target']['signal_blast_radius_url']},
+                ),
+            })
+    elif isinstance(instance, SignalLane):
+        lane_ref = build_object_reference(instance)
+        attachment_ref = build_object_reference(instance.attachment_unit)
+        termination_ref = build_object_reference(instance.attachment_unit.termination_point)
+        node_ref = build_object_reference(instance.attachment_unit.termination_point.plant_node)
+        cards.append({
+            'title': 'Lane Context',
+            'lines': (
+                f"Attachment unit: {attachment_ref['display']}",
+                f"Termination point: {termination_ref['display']}",
+                f"Plant node: {node_ref['display']}",
+            ),
+            'linked_lines': (
+                {'label': 'Attachment unit', 'reference': attachment_ref},
+                {'label': 'Termination point', 'reference': termination_ref},
+                {'label': 'Plant node', 'reference': node_ref},
+            ),
+            'links': (
+                {'label': 'Lane Drilldown', 'url': lane_ref['lane_drilldown_url']},
+                {'label': 'Signal-Lane Path', 'url': lane_ref['signal_path_resolver_url']},
+                {'label': 'Signal-Lane Radius', 'url': lane_ref['signal_blast_radius_url']},
+            ),
+        })
+    return tuple(cards)
 
 
 def build_list_view_class(spec):
@@ -279,6 +324,34 @@ class PlaneAuditView(generic.ObjectView):
             'selected_fabric': selected_fabric,
             'result': result,
             'finding_counts': _finding_counts(findings),
+        })
+
+
+class LaneDrilldownView(generic.ObjectView):
+    queryset = Fabric.objects.none()
+
+    def get(self, request):
+        query = {
+            'target_registry_key': request.GET.get('target_registry_key', 'attachmentunit'),
+            'target_id': request.GET.get('target_id', ''),
+            'lane_index': request.GET.get('lane_index', ''),
+        }
+        result = None
+        error = None
+        target = resolve_registry_object(query['target_registry_key'], query['target_id'])
+        lane_index = _parse_int(query['lane_index'])
+        if query['target_id']:
+            if target is None:
+                error = 'Select a valid target object.'
+            else:
+                result = build_lane_drilldown(target=target, lane_index=lane_index)
+
+        return render(request, 'netbox_plant_graph/lane_drilldown.html', {
+            'page_title': 'Lane Drilldown',
+            'registry_choices': _operational_registry_choices(),
+            'query': query,
+            'result': result,
+            'error': error,
         })
 
 

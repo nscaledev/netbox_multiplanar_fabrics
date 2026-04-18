@@ -63,6 +63,7 @@
             <th>Object</th>
             <th>Message</th>
             <th>Metadata</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -89,10 +90,23 @@
                   <span class="text-muted">-</span>
                 {% endif %}
               </td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  {% if finding.object.path_resolver_url %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ finding.object.path_resolver_url }}">Path</a>
+                  {% endif %}
+                  {% if finding.object.blast_radius_url %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ finding.object.blast_radius_url }}">Radius</a>
+                  {% endif %}
+                  {% if finding.object.lane_drilldown_url %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ finding.object.lane_drilldown_url }}">Lanes</a>
+                  {% endif %}
+                </div>
+              </td>
             </tr>
           {% empty %}
             <tr>
-              <td colspan="5">No findings for this fabric.</td>
+              <td colspan="6">No findings for this fabric.</td>
             </tr>
           {% endfor %}
         </tbody>

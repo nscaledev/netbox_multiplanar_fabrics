@@ -11,10 +11,10 @@ As of this repo snapshot:
 
 - **Phase 0 is largely complete**: plugin skeleton, registry metadata, generated standard CRUD surfaces, API surfaces, GraphQL registration, navigation, shared detail template, migrations, and baseline tests are present
 - **Phase 1 is substantially complete**: `Fabric`-scoped graph rebuild, `CablePath` extraction, cable-profile expansion via `get_mapped_position()`, attachment-unit resolver, plane propagation across passive paths, and multiplane integration fixtures/tests are implemented
-- **UI hardening is in progress**: generated list/detail pages now render successfully for the current model set, including populated-row cases and read-only surfaces, the custom operational pages now execute live graph services instead of placeholder text, and object-page badges provide direct shortcuts into resolver/blast-radius workflows
-- **Phase 2 is now partially implemented**: `SignalLane`, `LaneMap`, and signal-lane `FineEdge` materialization are present in sync, resolver coverage includes signal-lane traversal, operational queries now accept core NetBox `Interface`/`FrontPort`/`RearPort` objects directly, and object-page shortcuts can launch those workflows; lane-focused UI is still minimal beyond those shortcuts
+- **UI hardening is in progress**: generated list/detail pages now render successfully for the current model set, including populated-row cases and read-only surfaces, the custom operational pages now execute live graph services instead of placeholder text, object-page badges provide direct shortcuts into resolver/blast-radius/lane-drilldown workflows, and detail pages can expose lane-focused supplementary cards for lane-bearing objects
+- **Phase 2 is now partially implemented**: `SignalLane`, `LaneMap`, and signal-lane `FineEdge` materialization are present in sync, resolver coverage includes signal-lane traversal, operational queries now accept core NetBox `Interface`/`FrontPort`/`RearPort` objects directly, and lane drilldown is now exposed through operational UI, detail-page affordances, badges, and GraphQL; richer lane-first workflows are still ahead
 - **Phase 3 remains partial**: audit and blast-radius services exist, the basic operational pages call them, blank-profile ambiguous fanout cables are surfaced as unresolved audit findings, profile-derived breakouts report missing-child-interface findings when explicit child interfaces are absent, partial child-interface sets report incomplete-child-interface-set findings, disconnected child transport units report orphaned-attachment-unit findings, and cabled passive front/rear ports without `PortMapping` coverage now report missing-port-mapping findings; `AuditFinding` persistence and richer remediation workflows are still ahead
-- **Milestone B work remains**: signal-lane graph semantics now exist, but lane drill-down UI, durable audit surfaces, and deeper lane-first operational workflows are still ahead
+- **Milestone B work remains**: signal-lane graph semantics now exist, but richer lane-first workflows, durable audit surfaces, and deeper remediation/task orchestration are still ahead
 
 ---
 
@@ -1625,8 +1625,9 @@ Repo status for this snapshot:
 - implemented in the current slice: sync materializes `SignalLane`, signal-lane `FineEdge`, and `LaneMap` rows for channelized topologies
 - implemented in the current slice: resolver supports `resolution='signal_lane'` traversal across derived cable segments and `PortMapping`-derived lane maps
 - implemented in the current slice: operational UI and GraphQL surfaces accept both plugin graph objects and core NetBox `Interface`/`FrontPort`/`RearPort` objects for resolver and blast-radius workflows
+- implemented in the current slice: lane drilldown is available through operational UI, GraphQL, badges, and detail-page supplementary cards
 - implemented in the current slice: operational result pages render direct object links and contextual metadata for path, audit, and blast-radius investigation
-- not yet complete: lane drill-down UI, richer lane-first GraphQL/query ergonomics, and production-ready lane-aware operational workflows
+- not yet complete: richer lane-first GraphQL/query ergonomics and production-ready lane-aware operational workflows
 
 ### Phase 3: audits and policy
 Deliver:
@@ -1639,6 +1640,7 @@ Repo status for this snapshot:
 - partial only: on-demand plane audit and blast-radius services/jobs exist
 - partial only: `AuditFinding` model/surfaces exist
 - partial only: unresolved-input coverage now includes missing cable profiles, missing child interfaces, incomplete child-interface sets, orphaned attachment units, and missing passive `PortMapping` coverage
+- partial only: operational audit surfaces now provide linked next actions into resolver, blast-radius, and lane-drilldown workflows
 - not yet complete: durable finding persistence and broader policy/disjointness workflow coverage
 
 ### Phase 4: polish and performance
@@ -2008,8 +2010,8 @@ Milestone A is now substantially complete, with attachment-unit resolution worki
 
 The next implementation step should remain **Milestone B**, but shift to the remaining gaps:
 
-- deepen lane-focused API/GraphQL/UI affordances beyond the current core-object shortcuts and signal-lane operational queries
+- deepen lane-focused API/GraphQL/UI affordances beyond the current drilldown/query surfaces and signal-lane operational queries
 - expand unresolved-input audit coverage beyond the current blank-profile, missing-child-interface, partial-child-interface-set, orphaned-attachment-unit, and missing-port-mapping cases without expanding the persistence model yet
-- deepen the operational pages beyond linked/contextual result rendering into more guided remediation workflows
+- deepen the operational pages beyond linked/contextual result rendering and current next-action affordances into more guided remediation workflows
 
 Do not add aggressive caching or broad incremental-refresh behavior until the remaining Milestone B graph semantics are test-covered.

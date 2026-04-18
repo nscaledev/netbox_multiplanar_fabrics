@@ -1,7 +1,7 @@
 from django.urls import path
 
 from .object_registry import VIEW_OBJECT_SPECS
-from .views import BlastRadiusView, GraphOverviewView, PathResolverView, PlaneAuditView
+from .views import BlastRadiusView, GraphOverviewView, LaneDrilldownView, PathResolverView, PlaneAuditView
 from . import views
 
 
@@ -33,6 +33,7 @@ urlpatterns = [
     path('graph-overview/', GraphOverviewView.as_view(), name='graph_overview'),
     path('path-resolver/', PathResolverView.as_view(), name='path_resolver'),
     path('plane-audit/', PlaneAuditView.as_view(), name='plane_audit'),
+    path('lane-drilldown/', LaneDrilldownView.as_view(), name='lane_drilldown'),
     path('blast-radius/', BlastRadiusView.as_view(), name='blast_radius'),
 ]
 

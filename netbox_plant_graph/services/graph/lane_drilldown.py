@@ -16,6 +16,9 @@ def build_lane_drilldown(*, target, lane_index=None):
     total_signal_lanes = 0
 
     for attachment_unit in attachment_units:
+        available_lane_indexes.update(
+            SignalLane.objects.filter(attachment_unit=attachment_unit).values_list('lane_index', flat=True)
+        )
         lane_queryset = attachment_unit.signal_lanes.order_by('lane_index', 'pk')
         if normalized_lane_index is not None:
             lane_queryset = lane_queryset.filter(lane_index=normalized_lane_index)
@@ -23,9 +26,6 @@ def build_lane_drilldown(*, target, lane_index=None):
         if not lanes:
             continue
 
-        available_lane_indexes.update(
-            SignalLane.objects.filter(attachment_unit=attachment_unit).values_list('lane_index', flat=True)
-        )
         total_signal_lanes += len(lanes)
         attachment_payloads.append({
             'attachment_unit': build_object_reference(attachment_unit),

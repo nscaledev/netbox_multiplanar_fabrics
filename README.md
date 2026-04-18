@@ -18,14 +18,15 @@ The current implementation is centered on **attachment-unit resolution**, with a
 - plane memberships sourced from child interfaces are propagated across passive attachment hops
 - signal lanes, signal-lane `FineEdge`s, and `LaneMap`s are materialized for channelized topologies
 - resolver support includes both attachment-unit and signal-lane path resolution
-- basic operational pages expose graph overview, path resolution, plane audit, and blast-radius results in the plugin UI
+- operational pages expose graph overview, path resolution, plane audit, lane drilldown, and blast-radius results in the plugin UI
 - ambiguous blank-profile fanout cables are left unresolved in sync and surfaced by plane audit as missing-profile findings
 - profile-derived breakout mappings now require explicit child interfaces; when those are missing, sync leaves the path unresolved and plane audit reports a missing-child-interface finding
 - profile-derived breakouts with only a partial child-interface set now materialize only the positions that exist, and plane audit reports an incomplete-child-interface-set finding
 - explicit child-interface attachment units that never participate in any derived path are now surfaced by plane audit as orphaned-attachment-unit findings
 - cabled passive front/rear ports without `PortMapping` coverage are surfaced by plane audit as missing-port-mapping findings
 - operational resolver/blast-radius flows now accept core NetBox `Interface`, `FrontPort`, and `RearPort` objects directly, and object-page badges provide shortcuts into those workflows
-- operational path, audit, and blast-radius pages now render direct object links and contextual metadata for follow-on investigation
+- lane drilldown is available from object badges, operational pages, detail cards, and GraphQL for lane-first inspection of materialized `SignalLane` objects
+- operational path, audit, and blast-radius pages now render direct object links, contextual metadata, and guided next-action links for follow-on investigation
 
 The test suite includes a multiplane shuffle fixture with one 800G host interface, four 200G child interfaces, one shuffle module with `PortMapping` rows, and one leaf switch.
 

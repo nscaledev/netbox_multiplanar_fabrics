@@ -26,4 +26,40 @@
       </table>
     </div>
   </div>
+  {% for card in supplementary_cards %}
+    <div class="card mt-3">
+      <div class="card-header">
+        <strong>{{ card.title }}</strong>
+      </div>
+      <div class="card-body">
+        {% if card.linked_lines %}
+          <ul class="mb-3">
+            {% for line in card.linked_lines %}
+              <li>
+                {{ line.label }}:
+                {% if line.reference.url %}
+                  <a href="{{ line.reference.url }}">{{ line.reference.display }}</a>
+                {% else %}
+                  {{ line.reference.display }}
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% elif card.lines %}
+          <ul class="mb-3">
+            {% for line in card.lines %}
+              <li>{{ line }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if card.links %}
+          <div class="d-flex flex-wrap gap-2">
+            {% for link in card.links %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ link.url }}">{{ link.label }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
 {% endblock %}

@@ -161,3 +161,40 @@ class OperationalViewIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertContains(response, 'missing_port_mapping')
         self.assertContains(response, f'href="{topology["front_port"].get_absolute_url()}"', html=False)
         self.assertContains(response, f'href="{topology["rear_port"].get_absolute_url()}"', html=False)
+        self.assertContains(response, f'target_registry_key=frontport&amp;target_id={topology["front_port"].pk}', html=False)
+        self.assertContains(response, f'source_registry_key=frontport&amp;source_id={topology["front_port"].pk}', html=False)
+
+    def test_lane_drilldown_view_renders_lane_rows(self):
+        topology = self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Lane Drilldown View')
+        rebuild_graph(scope={'fabric': fabric})
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('plugins:netbox_plant_graph:lane_drilldown'), {
+            'target_registry_key': 'interface',
+            'target_id': topology['host_children'][2].pk,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Lane Drilldown')
+        self.assertContains(response, 'nic0/plane2')
+        self.assertContains(response, 'nic0/plane2:l0')
+        self.assertContains(response, 'Signal Path')
+
+    def test_attachment_unit_detail_view_renders_lane_overview_card(self):
+        topology = self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Attachment Detail View')
+        rebuild_graph(scope={'fabric': fabric})
+        self.client.force_login(self.user)
+
+        attachment_unit = AttachmentUnit.objects.get(
+            source_type=ContentType.objects.get_for_model(topology['host_children'][2], for_concrete_model=False),
+            source_id=topology['host_children'][2].pk,
+        )
+
+        response = self.client.get(reverse('plugins:netbox_plant_graph:attachment-unit', args=[attachment_unit.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Lane Overview')
+        self.assertContains(response, 'Signal lanes: 4')
+        self.assertContains(response, 'Lane Drilldown')

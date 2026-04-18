@@ -1,0 +1,112 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Lane Drilldown</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label" for="target_registry_key">Target Type</label>
+        <select class="form-select" id="target_registry_key" name="target_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.target_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="target_id">Target ID</label>
+        <input class="form-control" id="target_id" name="target_id" value="{{ query.target_id }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="lane_index">Lane Index</label>
+        <input class="form-control" id="lane_index" name="lane_index" value="{{ query.lane_index }}">
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Inspect</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+  <div class="card mb-3">
+    <div class="card-header">Summary</div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-3">Target</dt>
+        <dd class="col-sm-9">
+          {% if result.target.url %}
+            <a href="{{ result.target.url }}">{{ result.target.display }}</a>
+          {% else %}
+            {{ result.target.display }}
+          {% endif %}
+        </dd>
+        <dt class="col-sm-3">Attachment Units</dt>
+        <dd class="col-sm-9">{{ result.total_attachment_units }}</dd>
+        <dt class="col-sm-3">Signal Lanes</dt>
+        <dd class="col-sm-9">{{ result.total_signal_lanes }}</dd>
+        {% if result.available_lane_indexes %}
+          <dt class="col-sm-3">Available Lane Indexes</dt>
+          <dd class="col-sm-9">{{ result.available_lane_indexes|join:", " }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Attachment Units And Lanes</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Attachment Unit</th>
+            <th>Lane Count</th>
+            <th>Lanes</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in result.attachment_units %}
+            <tr>
+              <td>
+                {% if item.attachment_unit.url %}
+                  <a href="{{ item.attachment_unit.url }}">{{ item.attachment_unit.display }}</a>
+                {% else %}
+                  {{ item.attachment_unit.display }}
+                {% endif %}
+              </td>
+              <td>{{ item.lane_count }}</td>
+              <td>
+                {% for lane in item.lanes %}
+                  {% if lane.url %}
+                    <a href="{{ lane.url }}">{{ lane.display }}</a>
+                  {% else %}
+                    {{ lane.display }}
+                  {% endif %}
+                  {% if not forloop.last %}<br>{% endif %}
+                {% empty %}
+                  <span class="text-muted">No lanes</span>
+                {% endfor %}
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Signal Path</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_blast_radius_url }}">Signal Radius</a>
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="4">No signal lanes are materialized for this target.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

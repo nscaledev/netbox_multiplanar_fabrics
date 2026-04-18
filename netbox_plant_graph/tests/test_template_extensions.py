@@ -12,6 +12,7 @@ class TemplateExtensionTestCase(PlantGraphTopologyMixin):
         html = PlantGraphObjectBadges({'object': topology['interface_a']}).right_page()
 
         self.assertIn('Resolve Path', html)
+        self.assertIn('Lane Drilldown', html)
         self.assertIn('Blast Radius', html)
         self.assertIn('source_registry_key=interface', html)
         self.assertIn(f'source_id={topology["interface_a"].pk}', html)

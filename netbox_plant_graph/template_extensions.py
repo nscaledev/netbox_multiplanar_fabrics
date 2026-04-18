@@ -47,6 +47,10 @@ class PlantGraphObjectBadges(PluginTemplateExtension):
                 'source_id': obj.pk,
                 'resolution': resolution,
             }),
+            'lane_drilldown': _build_operational_url('plugins:netbox_plant_graph:lane_drilldown', {
+                'target_registry_key': registry_key,
+                'target_id': obj.pk,
+            }),
             'blast_radius': _build_operational_url('plugins:netbox_plant_graph:blast_radius', {
                 'target_registry_key': registry_key,
                 'target_id': obj.pk,
