@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from netbox_plant_graph.models import AttachmentUnit, Fabric, FabricPlane
-from netbox_plant_graph.services import build_lane_drilldown, compute_blast_radius, resolve_path, run_plane_audit
+from netbox_plant_graph.services import build_lane_drilldown, compute_blast_radius, compute_fabric_health, resolve_path, run_plane_audit
 from netbox_plant_graph.services.sync import rebuild_graph
 
 from .topology import PlantGraphTopologyMixin
@@ -222,3 +222,35 @@ class GraphServiceIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertEqual(result['available_lane_indexes'], [0, 1, 2, 3])
         self.assertEqual(result['attachment_units'][0]['attachment_unit']['display'], topology['host_children'][2].name)
         self.assertEqual(len(result['attachment_units'][0]['lanes']), 4)
+
+    def test_plane_audit_reports_partial_profile_mapping(self):
+        topology = self.build_profile_breakout_with_missing_peer_positions_topology()
+        fabric = Fabric.objects.create(name='Fabric Partial Profile Mapping Audit')
+        rebuild_graph(scope={'fabric': fabric})
+
+        result = run_plane_audit(fabric=fabric)
+        findings_by_type = defaultdict(list)
+        for finding in result['findings']:
+            findings_by_type[finding['finding_type']].append(finding)
+
+        self.assertIn('partial_profile_mapping', findings_by_type)
+        self.assertTrue(any(
+            finding['object']['pk'] == topology['host_cable'].pk
+            for finding in findings_by_type['partial_profile_mapping']
+        ))
+        self.assertTrue(any(
+            finding['metadata'].get('unresolved_positions') == 1
+            for finding in findings_by_type['partial_profile_mapping']
+        ))
+
+    def test_compute_fabric_health_summarizes_plane_and_finding_state(self):
+        self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Health Summary')
+        rebuild_graph(scope={'fabric': fabric})
+
+        result = compute_fabric_health(fabric=fabric)
+
+        self.assertEqual(result['fabric']['pk'], fabric.pk)
+        self.assertEqual(result['summary']['planes_total'], 4)
+        self.assertEqual(len(result['planes']), 4)
+        self.assertIn(result['status'], {'warning', 'error'})

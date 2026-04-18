@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from django.shortcuts import render
+from django.urls import reverse
 from netbox.object_actions import AddObject, BulkExport
 from netbox.views import generic
 
@@ -11,7 +12,7 @@ from . import forms as forms_module
 from .forms import *  # noqa: F401,F403
 from .models import AttachmentUnit, CoarseEdge, Fabric, FabricPlane, FineEdge, LaneMap, PlaneMembership, PlantNode, SignalLane, TerminationPoint, TransferMap
 from .object_registry import VIEW_OBJECT_SPECS, get_object_spec
-from .services import build_lane_drilldown, compute_blast_radius, resolve_path, run_plane_audit
+from .services import build_lane_drilldown, compute_blast_radius, compute_fabric_health, resolve_path, run_plane_audit
 from .services.graph.resolution import DEFAULT_RESOLUTION
 from .services.netbox.adapters import build_object_reference
 from .services.netbox.lookup import get_registry_label, resolve_registry_object
@@ -155,7 +156,38 @@ def _finding_counts(findings):
 
 def _build_supplementary_cards(instance):
     cards = []
-    if isinstance(instance, AttachmentUnit):
+    if isinstance(instance, Fabric):
+        health = compute_fabric_health(fabric=instance)
+        cards.append({
+            'title': 'Fabric Health',
+            'lines': (
+                f"Status: {health['status']}",
+                f"Healthy planes: {health['summary']['healthy_planes']} / {health['summary']['planes_total']}",
+                f"Audit findings: {health['findings']['total']}",
+            ),
+            'links': (
+                {'label': 'Health Page', 'url': health['fabric']['health_url']},
+                {'label': 'Plane Audit', 'url': f"{reverse('plugins:netbox_plant_graph:plane_audit')}?fabric_id={instance.pk}"},
+                {'label': 'Graph Overview', 'url': f"{reverse('plugins:netbox_plant_graph:graph_overview')}?fabric_id={instance.pk}"},
+            ),
+        })
+    elif isinstance(instance, FabricPlane):
+        health = compute_fabric_health(fabric=instance.fabric)
+        plane_row = next((row for row in health['planes'] if row['plane']['pk'] == instance.pk), None)
+        if plane_row is not None:
+            cards.append({
+                'title': 'Plane Health',
+                'lines': (
+                    f"Status: {plane_row['status']}",
+                    f"Attachment memberships: {plane_row['attachment_membership_count']}",
+                f"Findings: {plane_row['finding_count']}",
+            ),
+            'links': (
+                {'label': 'Health Page', 'url': health['fabric']['health_url']},
+                {'label': 'Plane Audit', 'url': f"{reverse('plugins:netbox_plant_graph:plane_audit')}?fabric_id={instance.fabric_id}"},
+            ),
+        })
+    elif isinstance(instance, AttachmentUnit):
         lane_drilldown = build_lane_drilldown(target=instance)
         if lane_drilldown['total_signal_lanes'] > 0:
             cards.append({
@@ -259,6 +291,20 @@ class GraphOverviewView(generic.ObjectView):
             'fabrics': _fabric_choices(),
             'selected_fabric': selected_fabric,
             'graph_counts': _graph_counts_for_fabric(selected_fabric),
+        })
+
+
+class HealthView(generic.ObjectView):
+    queryset = Fabric.objects.none()
+
+    def get(self, request):
+        selected_fabric = _selected_fabric(request.GET.get('fabric_id'))
+        health = compute_fabric_health(fabric=selected_fabric) if selected_fabric is not None else None
+        return render(request, 'netbox_plant_graph/health.html', {
+            'page_title': 'Health',
+            'fabrics': _fabric_choices(),
+            'selected_fabric': selected_fabric,
+            'health': health,
         })
 
 

@@ -62,6 +62,77 @@ def _cable_requires_explicit_profile(cable) -> bool:
     return any(len(_iter_path_positions(termination)) != 1 for side in sides for termination in side)
 
 
+def _profile_mapping_diagnostics(cable):
+    if not getattr(cable, 'profile_class', None):
+        return None
+
+    terminations_by_end = defaultdict(list)
+    for cable_termination in cable.terminations.all():
+        terminations_by_end[cable_termination.cable_end].append(cable_termination.termination)
+
+    if len(terminations_by_end) != 2:
+        return {
+            'matched_positions': 0,
+            'unresolved_positions': (),
+        }
+
+    profile = cable.profile_class()
+    position_maps = {}
+    for cable_end, terminations in terminations_by_end.items():
+        position_map = {}
+        for termination in terminations:
+            connector = getattr(termination, 'cable_connector', None)
+            for position in _iter_path_positions(termination):
+                position_map[(connector, position)] = termination
+        position_maps[cable_end] = position_map
+
+    matched_positions = set()
+    unresolved_positions = {}
+    for cable_end, terminations in terminations_by_end.items():
+        peer_end = 'B' if cable_end == 'A' else 'A'
+        peer_position_map = position_maps.get(peer_end, {})
+        for termination in terminations:
+            for position in _iter_path_positions(termination):
+                unresolved_key = (cable_end, termination.pk, position)
+                try:
+                    mapped_position = profile.get_mapped_position(
+                        cable_end,
+                        termination.cable_connector,
+                        position,
+                    )
+                except (TypeError, ValueError) as exc:
+                    unresolved_positions[unresolved_key] = {
+                        'termination': termination,
+                        'position': position,
+                        'reason': 'profile_error',
+                        'detail': str(exc),
+                    }
+                    continue
+                if mapped_position is None:
+                    unresolved_positions[unresolved_key] = {
+                        'termination': termination,
+                        'position': position,
+                        'reason': 'profile_returned_none',
+                        'detail': '',
+                    }
+                    continue
+                mapped_connector, peer_position = mapped_position
+                if (mapped_connector, peer_position) not in peer_position_map:
+                    unresolved_positions[unresolved_key] = {
+                        'termination': termination,
+                        'position': position,
+                        'reason': 'missing_peer_position',
+                        'detail': f'{mapped_connector}:{peer_position}',
+                    }
+                    continue
+                matched_positions.add(unresolved_key)
+
+    return {
+        'matched_positions': len(matched_positions),
+        'unresolved_positions': tuple(unresolved_positions.values()),
+    }
+
+
 def _relevant_cables_for_fabric(fabric):
     device_source_ids = _device_source_ids_for_fabric(fabric)
     if not device_source_ids:
@@ -231,6 +302,31 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
 
     missing_port_mapping_positions = set()
     for cable in _relevant_cables_for_fabric(fabric):
+        profile_diagnostics = _profile_mapping_diagnostics(cable)
+        if profile_diagnostics is not None and profile_diagnostics['unresolved_positions']:
+            finding_type = 'partial_profile_mapping' if profile_diagnostics['matched_positions'] > 0 else 'unresolved_profile_mapping'
+            severity = 'warning' if profile_diagnostics['matched_positions'] > 0 else 'error'
+            first_unresolved = profile_diagnostics['unresolved_positions'][0]
+            findings.append(_make_finding(
+                finding_type=finding_type,
+                severity=severity,
+                obj=cable,
+                message=(
+                    'Cable profile mapping resolved only partially against connected terminations.'
+                    if profile_diagnostics['matched_positions'] > 0
+                    else 'Cable profile mapping could not be resolved against connected terminations.'
+                ),
+                metadata={
+                    'profile': getattr(cable, 'profile', '') or '',
+                    'matched_positions': profile_diagnostics['matched_positions'],
+                    'unresolved_positions': len(profile_diagnostics['unresolved_positions']),
+                    'first_unresolved_termination': str(first_unresolved['termination']),
+                    'first_unresolved_position': first_unresolved['position'],
+                    'first_unresolved_reason': first_unresolved['reason'],
+                    'first_unresolved_detail': first_unresolved['detail'],
+                },
+            ))
+
         for cable_termination in cable.terminations.all():
             termination = cable_termination.termination
             if not isinstance(termination, (FrontPort, RearPort)):

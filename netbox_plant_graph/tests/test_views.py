@@ -198,3 +198,28 @@ class OperationalViewIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertContains(response, 'Lane Overview')
         self.assertContains(response, 'Signal lanes: 4')
         self.assertContains(response, 'Lane Drilldown')
+
+    def test_health_view_renders_fabric_summary(self):
+        self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Health View')
+        rebuild_graph(scope={'fabric': fabric})
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('plugins:netbox_plant_graph:health'), {'fabric_id': fabric.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Health')
+        self.assertContains(response, 'Fabric Health View')
+        self.assertContains(response, 'Plane Health')
+
+    def test_fabric_detail_view_renders_health_card(self):
+        self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric Detail Health Card')
+        rebuild_graph(scope={'fabric': fabric})
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('plugins:netbox_plant_graph:fabric', args=[fabric.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Fabric Health')
+        self.assertContains(response, 'Health Page')

@@ -339,3 +339,47 @@ class PlantGraphTopologyMixin(CablePathTestCase):
             'access_cable': access_cable,
             'peer_cable': peer_cable,
         }
+
+    def build_profile_breakout_with_missing_peer_positions_topology(self, *, site=None):
+        site = site or self.site
+        if site == self.site:
+            host_device = self.device
+            host_device.name = 'GPU Host'
+            host_device.save()
+        else:
+            host_device = self.create_peer_device(name='GPU Host', site=site)
+        shuffle_device = self.create_peer_device(name='Shuffle Module', site=site)
+
+        host_parent = Interface.objects.create(device=host_device, name='nic0', speed=800_000_000)
+        host_children = {}
+        for plane_number in range(1, 5):
+            host_children[plane_number] = Interface.objects.create(
+                device=host_device,
+                parent=host_parent,
+                name=f'nic0/plane{plane_number}',
+                speed=200_000_000,
+                custom_field_data={'fabric_plane': plane_number},
+            )
+
+        shuffle_front_ports = []
+        for port_number in range(1, 4):
+            shuffle_front_ports.append(
+                FrontPort.objects.create(device=shuffle_device, name=f'front{port_number}')
+            )
+
+        host_cable = Cable(
+            a_terminations=[host_parent],
+            b_terminations=shuffle_front_ports,
+            profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
+        )
+        host_cable.clean()
+        host_cable.save()
+
+        return {
+            'host_device': host_device,
+            'shuffle_device': shuffle_device,
+            'host_parent': host_parent,
+            'host_children': host_children,
+            'shuffle_front_ports': shuffle_front_ports,
+            'host_cable': host_cable,
+        }

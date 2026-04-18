@@ -148,3 +148,27 @@ class GraphQLExecutionTestCase(PlantGraphTopologyMixin):
         self.assertEqual(result.data['laneDrilldown']['total_attachment_units'], 1)
         self.assertEqual(result.data['laneDrilldown']['total_signal_lanes'], 1)
         self.assertEqual(result.data['laneDrilldown']['attachment_units'][0]['lanes'][0]['display'], 'nic0/plane2:l2')
+
+    def test_graphql_exposes_fabric_health_summary(self):
+        self.build_multiplane_shuffle_topology()
+        fabric = Fabric.objects.create(name='Fabric GraphQL Health')
+        rebuild_graph(scope={'fabric': fabric})
+        strawberry_schema = strawberry.Schema(query=NetBoxPlantGraphQuery)
+        request = self.request_factory.get('/graphql')
+        request.user = self.graphql_user
+
+        query = '''
+        query ExecuteHealth($fabricId: ID!) {
+          fabricHealth(fabricId: $fabricId)
+        }
+        '''
+
+        result = strawberry_schema.execute_sync(
+            query,
+            variable_values={'fabricId': fabric.pk},
+            context_value=SimpleNamespace(request=request),
+        )
+
+        self.assertIsNone(result.errors)
+        self.assertEqual(result.data['fabricHealth']['fabric']['pk'], fabric.pk)
+        self.assertEqual(result.data['fabricHealth']['summary']['planes_total'], 4)

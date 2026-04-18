@@ -1,0 +1,104 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Health</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Refresh</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if health %}
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Summary</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Status</dt>
+            <dd class="col-sm-7">{{ health.status }}</dd>
+            <dt class="col-sm-5">Planes</dt>
+            <dd class="col-sm-7">{{ health.summary.healthy_planes }} / {{ health.summary.planes_total }}</dd>
+            <dt class="col-sm-5">Attachment Units</dt>
+            <dd class="col-sm-7">{{ health.summary.attachment_units }}</dd>
+            <dt class="col-sm-5">Signal Lanes</dt>
+            <dd class="col-sm-7">{{ health.summary.signal_lanes }}</dd>
+            <dt class="col-sm-5">Fine Edges</dt>
+            <dd class="col-sm-7">{{ health.summary.fine_edges }}</dd>
+            <dt class="col-sm-5">Findings</dt>
+            <dd class="col-sm-7">{{ health.findings.total }}</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Finding Counts</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for severity, count in health.findings.counts.items %}
+              <li>{{ severity }}: {{ count }}</li>
+            {% empty %}
+              <li>No findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Plane Health</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Plane</th>
+            <th>Status</th>
+            <th>Attachment Memberships</th>
+            <th>Findings</th>
+            <th>Errors</th>
+            <th>Warnings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plane in health.planes %}
+            <tr>
+              <td>
+                {% if plane.plane.url %}
+                  <a href="{{ plane.plane.url }}">{{ plane.plane.display }}</a>
+                {% else %}
+                  {{ plane.plane.display }}
+                {% endif %}
+              </td>
+              <td>{{ plane.status }}</td>
+              <td>{{ plane.attachment_membership_count }}</td>
+              <td>{{ plane.finding_count }}</td>
+              <td>{{ plane.error_count }}</td>
+              <td>{{ plane.warning_count }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="6">No planes found for this fabric.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% else %}
+  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
+{% endif %}
+{% endblock %}

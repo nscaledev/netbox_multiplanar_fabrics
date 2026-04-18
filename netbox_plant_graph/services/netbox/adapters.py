@@ -55,4 +55,14 @@ def build_object_reference(obj):
             'plugins:netbox_plant_graph:blast_radius',
             {'target_registry_key': registry_key, 'target_id': obj.pk, 'resolution': 'signal_lane'},
         )
+    if registry_key == 'fabric':
+        reference['health_url'] = _build_operational_url(
+            'plugins:netbox_plant_graph:health',
+            {'fabric_id': obj.pk},
+        )
+    elif registry_key == 'fabricplane':
+        reference['health_url'] = _build_operational_url(
+            'plugins:netbox_plant_graph:health',
+            {'fabric_id': obj.fabric_id},
+        )
     return reference

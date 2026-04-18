@@ -5,7 +5,7 @@ from strawberry.types import Info
 
 from netbox_plant_graph.models import Fabric, FabricPlane
 from netbox_plant_graph.object_registry import GRAPHQL_OBJECT_SPECS
-from netbox_plant_graph.services import build_lane_drilldown, compute_blast_radius, resolve_path, run_plane_audit
+from netbox_plant_graph.services import build_lane_drilldown, compute_blast_radius, compute_fabric_health, resolve_path, run_plane_audit
 from netbox_plant_graph.services.netbox.lookup import resolve_registry_object
 
 from .types import GRAPHQL_TYPE_CLASS_MAP
@@ -63,6 +63,14 @@ def _lane_drilldown_query(
     return build_lane_drilldown(target=target, lane_index=lane_index)
 
 
+def _fabric_health_query(
+    info: Info,
+    fabric_id: strawberry.ID | None = None,
+) -> JSON:
+    fabric = Fabric.objects.filter(pk=int(fabric_id)).first() if fabric_id is not None else None
+    return compute_fabric_health(fabric=fabric)
+
+
 def build_query_type() -> type:
     annotations = {}
     namespace = {
@@ -71,11 +79,13 @@ def build_query_type() -> type:
         'plane_audit': strawberry.field(resolver=_plane_audit_query),
         'blast_radius': strawberry.field(resolver=_blast_radius_query),
         'lane_drilldown': strawberry.field(resolver=_lane_drilldown_query),
+        'fabric_health': strawberry.field(resolver=_fabric_health_query),
     }
     annotations['resolve_path'] = JSON
     annotations['plane_audit'] = JSON
     annotations['blast_radius'] = JSON
     annotations['lane_drilldown'] = JSON
+    annotations['fabric_health'] = JSON
     for spec in GRAPHQL_OBJECT_SPECS:
         type_class = GRAPHQL_TYPE_CLASS_MAP[spec.registry_key]
         annotations[spec.graphql.detail_field_name] = type_class | None

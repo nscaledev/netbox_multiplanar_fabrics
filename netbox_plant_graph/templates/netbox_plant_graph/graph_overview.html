@@ -47,6 +47,7 @@
 
   <div class="card">
     <div class="card-body">
+      <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:health' %}?fabric_id={{ selected_fabric.pk }}">Open Health</a>
       <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Open Plane Audit</a>
       <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:path_resolver' %}">Open Path Resolver</a>
       <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_drilldown' %}">Open Lane Drilldown</a>
