@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+
+[tool.setuptools.packages.find]
+exclude = [".venv*", "tests*", "docs*", ".github*", ".gitignore"]
+
+[tool.black]
+line-length = 120
+target_version = ['py39', 'py310', 'py311', 'py312']
+
+[tool.setuptools.package-data]
+netbox_plant_graph = ["templates/**"]
+
+[project]
+name = "netbox_plant_graph"
+dynamic = ["version"]
+authors = [
+    {name = "Mencken Davidson", email = "mencken@gmail.com"},
+]
+maintainers = [
+    {name = "Mencken Davidson", email = "mencken@gmail.com"},
+]
+license = {file = "LICENSE"}
+
+description = "NetBox plugin for lane-aware, plane-aware topology in multi-plane RoCE fabrics."
+readme = "README.md"
+
+classifiers = [
+    'Development Status :: 2 - Pre-Alpha',
+    'Intended Audience :: Developers',
+    'Natural Language :: English',
+    "Programming Language :: Python :: 3 :: Only",
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
+]
+
+dependencies = []
+keywords = ["netbox", "plugin", "roce", "fabric", "topology", "plant-graph"]
+requires-python = ">=3.12"
+
+[project.urls]
+Source = "https://github.com/menckend/netbox_plant_graph"
+Tracker = "https://github.com/menckend/netbox_plant_graph/issues"
+
+[project.optional-dependencies]
+test = [
+    "black==24.3.0",
+    "flake8",
+    "pre-commit==3.7.0",
+]

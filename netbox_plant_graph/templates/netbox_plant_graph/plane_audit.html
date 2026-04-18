@@ -1,0 +1,105 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Plane Audit</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Run Audit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Severity Counts</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for severity, count in finding_counts.by_severity %}
+              <li>{{ severity }}: {{ count }}</li>
+            {% empty %}
+              <li>No findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Finding Types</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for finding_type, count in finding_counts.by_type %}
+              <li>{{ finding_type }}: {{ count }}</li>
+            {% empty %}
+              <li>No findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Findings</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Type</th>
+            <th>Object</th>
+            <th>Message</th>
+            <th>Metadata</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for finding in result.findings %}
+            <tr>
+              <td>{{ finding.severity }}</td>
+              <td>{{ finding.finding_type }}</td>
+              <td>
+                {% if finding.object.url %}
+                  <a href="{{ finding.object.url }}">{{ finding.object.display }}</a>
+                {% else %}
+                  {{ finding.object.display }}
+                {% endif %}
+              </td>
+              <td>{{ finding.message }}</td>
+              <td>
+                {% if finding.metadata %}
+                  <ul class="mb-0 ps-3">
+                    {% for key, value in finding.metadata.items %}
+                      <li><code>{{ key }}</code>: {{ value }}</li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="5">No findings for this fabric.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% else %}
+  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
+{% endif %}
+{% endblock %}

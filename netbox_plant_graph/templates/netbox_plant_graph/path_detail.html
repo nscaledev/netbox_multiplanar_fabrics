@@ -1,0 +1,191 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Path Resolver</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label" for="source_registry_key">Source Type</label>
+        <select class="form-select" id="source_registry_key" name="source_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.source_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="source_id">Source ID</label>
+        <input class="form-control" id="source_id" name="source_id" value="{{ query.source_id }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="destination_registry_key">Destination Type</label>
+        <select class="form-select" id="destination_registry_key" name="destination_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.destination_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="destination_id">Destination ID</label>
+        <input class="form-control" id="destination_id" name="destination_id" value="{{ query.destination_id }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="plane_id">Plane Filter</label>
+        <select class="form-select" id="plane_id" name="plane_id">
+          <option value="">Any plane</option>
+          {% for plane in plane_choices %}
+            <option value="{{ plane.pk }}"{% if query.plane_id and plane.pk|stringformat:'s' == query.plane_id %} selected{% endif %}>{{ plane.fabric.name }} / Plane {{ plane.plane_number }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="resolution">Resolution</label>
+        <select class="form-select" id="resolution" name="resolution">
+          {% for choice in resolution_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.resolution %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="max_depth">Max Depth</label>
+        <input class="form-control" id="max_depth" name="max_depth" value="{{ query.max_depth }}">
+      </div>
+      <div class="col-md-3 align-self-end">
+        <button type="submit" class="btn btn-primary">Resolve</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+  <div class="card mb-3">
+    <div class="card-header">Result</div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-3">Resolution</dt>
+        <dd class="col-sm-9">{{ result.resolution }}</dd>
+        <dt class="col-sm-3">Path Found</dt>
+        <dd class="col-sm-9">{{ result.path_found|yesno:"Yes,No" }}</dd>
+        <dt class="col-sm-3">Coarse Edges Crossed</dt>
+        <dd class="col-sm-9">{{ result.summary.coarse_edges_crossed|default:"" }}</dd>
+        <dt class="col-sm-3">Transfer Maps Crossed</dt>
+        <dd class="col-sm-9">{{ result.summary.transfer_maps_crossed|default:"" }}</dd>
+        <dt class="col-sm-3">Shuffle Modules Crossed</dt>
+        <dd class="col-sm-9">{{ result.summary.shuffle_modules_crossed|default:"" }}</dd>
+        {% if result.summary.planes_touched %}
+          <dt class="col-sm-3">Planes Touched</dt>
+          <dd class="col-sm-9">{{ result.summary.planes_touched|join:", " }}</dd>
+        {% endif %}
+        {% if result.summary.reachable_count %}
+          <dt class="col-sm-3">Reachable Objects</dt>
+          <dd class="col-sm-9">{{ result.summary.reachable_count }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Path Steps</div>
+    <div class="card-body">
+      {% if result.path %}
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Display</th>
+              <th>Kind</th>
+              <th>Type</th>
+              <th>Context</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for step in result.path %}
+              <tr>
+                <td>
+                  {% if step.display %}
+                    {% if step.url %}
+                      <a href="{{ step.url }}">{{ step.display }}</a>
+                    {% else %}
+                      {{ step.display }}
+                    {% endif %}
+                  {% else %}
+                    {{ step.kind }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if step.kind %}
+                    {{ step.kind }}
+                  {% else %}
+                    object
+                  {% endif %}
+                </td>
+                <td>
+                  {% if step.edge_type %}
+                    {{ step.edge_type }}
+                  {% else %}
+                    {{ step.model }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if step.attachment_unit %}
+                    Attachment:
+                    {% if step.attachment_unit.url %}
+                      <a href="{{ step.attachment_unit.url }}">{{ step.attachment_unit.display }}</a>
+                    {% else %}
+                      {{ step.attachment_unit.display }}
+                    {% endif %}
+                  {% elif step.termination_point %}
+                    Termination:
+                    {% if step.termination_point.url %}
+                      <a href="{{ step.termination_point.url }}">{{ step.termination_point.display }}</a>
+                    {% else %}
+                      {{ step.termination_point.display }}
+                    {% endif %}
+                    {% if step.plant_node %}
+                      <br>
+                      Node:
+                      {% if step.plant_node.url %}
+                        <a href="{{ step.plant_node.url }}">{{ step.plant_node.display }}</a>
+                      {% else %}
+                        {{ step.plant_node.display }}
+                      {% endif %}
+                    {% endif %}
+                  {% elif step.parent_coarse_edge %}
+                    Parent Edge:
+                    {% if step.parent_coarse_edge.url %}
+                      <a href="{{ step.parent_coarse_edge.url }}">{{ step.parent_coarse_edge.display }}</a>
+                    {% else %}
+                      {{ step.parent_coarse_edge.display }}
+                    {% endif %}
+                  {% elif step.owner_node %}
+                    Owner Node:
+                    {% if step.owner_node.url %}
+                      <a href="{{ step.owner_node.url }}">{{ step.owner_node.display }}</a>
+                    {% else %}
+                      {{ step.owner_node.display }}
+                    {% endif %}
+                  {% elif step.owner_edge %}
+                    Owner Edge:
+                    {% if step.owner_edge.url %}
+                      <a href="{{ step.owner_edge.url }}">{{ step.owner_edge.display }}</a>
+                    {% else %}
+                      {{ step.owner_edge.display }}
+                    {% endif %}
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="alert alert-warning mb-0">No path was found for the requested inputs.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

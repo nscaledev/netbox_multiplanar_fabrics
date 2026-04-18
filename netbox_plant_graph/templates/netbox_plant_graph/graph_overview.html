@@ -1,0 +1,58 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Graph Overview</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Refresh</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if selected_fabric %}
+  <div class="card mb-3">
+    <div class="card-header">
+      {{ selected_fabric.name }}
+    </div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in graph_counts %}
+            <tr>
+              <td>{{ item.label }}</td>
+              <td>{{ item.value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Open Plane Audit</a>
+      <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:path_resolver' %}">Open Path Resolver</a>
+      <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:blast_radius' %}">Open Blast Radius</a>
+    </div>
+  </div>
+{% else %}
+  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
+{% endif %}
+{% endblock %}

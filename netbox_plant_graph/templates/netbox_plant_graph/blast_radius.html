@@ -1,0 +1,74 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Blast Radius</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label" for="target_registry_key">Target Type</label>
+        <select class="form-select" id="target_registry_key" name="target_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.target_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="target_id">Target ID</label>
+        <input class="form-control" id="target_id" name="target_id" value="{{ query.target_id }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="resolution">Resolution</label>
+        <select class="form-select" id="resolution" name="resolution">
+          {% for choice in resolution_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.resolution %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Compute</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+  <div class="card">
+    <div class="card-header">Impacted Objects</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Distance</th>
+            <th>Object</th>
+            <th>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in result.impacted_paths %}
+            <tr>
+              <td>{{ item.distance }}</td>
+              <td>
+                {% if item.object.url %}
+                  <a href="{{ item.object.url }}">{{ item.object.display }}</a>
+                {% else %}
+                  {{ item.object.display }}
+                {% endif %}
+              </td>
+              <td>{{ item.object.model }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="3">No impacted objects were found.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
