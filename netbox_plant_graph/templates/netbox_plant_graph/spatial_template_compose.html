@@ -1,0 +1,134 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1>{{ page_title }}</h1>
+    {% if spatial_template.description %}
+      <p class="text-muted mb-0">{{ spatial_template.description }}</p>
+    {% endif %}
+    <small class="text-muted">Root node type: <strong>{{ spatial_template.get_root_node_type_display }}</strong></small>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'plugins:netbox_plant_graph:connection_template_builder' pk=spatial_template.pk %}" class="btn btn-outline-secondary">
+      Connections
+    </a>
+    <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary">
+      &larr; Back to Detail
+    </a>
+  </div>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row">
+  <div class="col-md-8">
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Node Hierarchy</strong>
+        <span class="badge bg-secondary">{{ flat_nodes|length }} node{{ flat_nodes|length|pluralize }}</span>
+      </div>
+      <div class="card-body p-0">
+        {% if flat_nodes %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Name Pattern</th>
+                <th>Type</th>
+                <th>Quantity</th>
+                <th>Parent</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in flat_nodes %}
+                <tr>
+                  <td>
+                    {% for i in entry.depth|rjust:entry.depth %}{% endfor %}
+                    {% if entry.depth %}
+                      <span style="display:inline-block; width:{{ entry.depth }}rem; color:#aaa;">
+                        {% for i in "x"|rjust:entry.depth %}&nbsp;&nbsp;{% endfor %}
+                      </span>
+                      &#x2514;&#xFE0E;
+                    {% endif %}
+                    <strong>{{ entry.node.name_pattern }}</strong>
+                  </td>
+                  <td>{{ entry.node.get_node_type_display }}</td>
+                  <td>{{ entry.node.quantity }}</td>
+                  <td>{% if entry.node.parent %}{{ entry.node.parent.name_pattern }}{% else %}&mdash;{% endif %}</td>
+                  <td>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Remove node and all its children?');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="remove_node">
+                      <input type="hidden" name="node_pk" value="{{ entry.node.pk }}">
+                      <button type="submit" class="btn btn-sm btn-danger" title="Remove node">
+                        &times;
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No nodes defined yet. Add the first node below.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card mb-4">
+      <div class="card-header"><strong>Add Node</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add_node">
+
+          <div class="mb-3">
+            <label class="form-label">Name Pattern <span class="text-danger">*</span></label>
+            <input type="text" name="name_pattern" class="form-control" placeholder="e.g. Rack-{n}" required>
+            <small class="form-text text-muted">Used to name generated nodes (e.g. <code>Row-{n}</code>).</small>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Node Type <span class="text-danger">*</span></label>
+            <select name="node_type" class="form-select" required>
+              <option value="">-- Select type --</option>
+              {% for value, label in node_type_choices %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Quantity</label>
+            <input type="number" name="quantity" class="form-control" value="1" min="1">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Parent Node</label>
+            <select name="parent_pk" class="form-select">
+              <option value="">(none — root node)</option>
+              {% for entry in flat_nodes %}
+                <option value="{{ entry.node.pk }}">
+                  {% for i in "x"|rjust:entry.depth %}&nbsp;{% endfor %}
+                  {{ entry.node.name_pattern }} ({{ entry.node.get_node_type_display }})
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Add Node</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -19,11 +19,17 @@ def compute_blast_radius(*, target, resolution='attachment_unit'):
     resolution = _normalize_resolution(resolution)
     if resolution == 'signal_lane':
         start_nodes = _normalize_signal_targets(target)
-        adjacency = _build_signal_adjacency()
+        adjacency = _build_signal_adjacency(
+            source_nodes=start_nodes,
+            destination_nodes=start_nodes,
+        )
         model = SignalLane
     else:
         start_nodes = _normalize_attachment_targets(target)
-        adjacency = _build_attachment_adjacency()
+        adjacency = _build_attachment_adjacency(
+            source_nodes=start_nodes,
+            destination_nodes=start_nodes,
+        )
         model = AttachmentUnit
 
     start_ids = {node.pk for node in start_nodes}

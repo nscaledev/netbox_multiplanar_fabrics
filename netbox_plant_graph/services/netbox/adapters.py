@@ -35,6 +35,14 @@ def build_object_reference(obj):
     if registry_key:
         reference['registry_key'] = registry_key
     if registry_key in OPERATIONAL_REGISTRY_KEYS:
+        lane_workspace_params = {'target_registry_key': registry_key, 'target_id': obj.pk}
+        if registry_key == 'plantnode':
+            lane_workspace_params['group_by'] = 'node'
+        elif registry_key == 'coarseedge':
+            lane_workspace_params['group_by'] = 'path'
+        elif registry_key == 'signallane':
+            lane_workspace_params['mode'] = 'lane'
+            lane_workspace_params['lane_index'] = obj.lane_index
         reference['path_resolver_url'] = _build_operational_url(
             'plugins:netbox_plant_graph:path_resolver',
             {'source_registry_key': registry_key, 'source_id': obj.pk},
@@ -46,6 +54,10 @@ def build_object_reference(obj):
         reference['lane_drilldown_url'] = _build_operational_url(
             'plugins:netbox_plant_graph:lane_drilldown',
             {'target_registry_key': registry_key, 'target_id': obj.pk},
+        )
+        reference['lane_workspace_url'] = _build_operational_url(
+            'plugins:netbox_plant_graph:lane_workspace',
+            lane_workspace_params,
         )
         reference['signal_path_resolver_url'] = _build_operational_url(
             'plugins:netbox_plant_graph:path_resolver',
@@ -64,5 +76,9 @@ def build_object_reference(obj):
         reference['health_url'] = _build_operational_url(
             'plugins:netbox_plant_graph:health',
             {'fabric_id': obj.fabric_id},
+        )
+        reference['lane_workspace_url'] = _build_operational_url(
+            'plugins:netbox_plant_graph:lane_workspace',
+            {'target_registry_key': registry_key, 'target_id': obj.pk, 'group_by': 'plane', 'plane_id': obj.plane_number},
         )
     return reference

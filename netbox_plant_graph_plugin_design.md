@@ -9,12 +9,17 @@
 
 As of this repo snapshot:
 
-- **Phase 0 is largely complete**: plugin skeleton, registry metadata, generated standard CRUD surfaces, API surfaces, GraphQL registration, navigation, shared detail template, migrations, and baseline tests are present
+- **Phase 0 is largely complete**: plugin skeleton, registry metadata, generated standard CRUD/read-only surfaces, API surfaces, GraphQL registration, navigation, shared detail template, migrations, and baseline tests are present
 - **Phase 1 is substantially complete**: `Fabric`-scoped graph rebuild, `CablePath` extraction, cable-profile expansion via `get_mapped_position()`, attachment-unit resolver, plane propagation across passive paths, and multiplane integration fixtures/tests are implemented
 - **UI hardening is in progress**: generated list/detail pages now render successfully for the current model set, including populated-row cases and read-only surfaces, the custom operational pages now execute live graph services instead of placeholder text, the plugin menu now exposes those operational pages directly, object-page badges provide direct shortcuts into resolver/blast-radius/lane-drilldown workflows, detail pages can expose lane-focused supplementary cards for lane-bearing objects, and the dedicated health page is now implemented
-- **Phase 2 is now partially implemented**: `SignalLane`, `LaneMap`, and signal-lane `FineEdge` materialization are present in sync, resolver coverage includes signal-lane traversal, operational queries now accept core NetBox `Interface`/`FrontPort`/`RearPort` objects directly, and lane drilldown is now exposed through operational UI, detail-page affordances, badges, and GraphQL; richer lane-first workflows are still ahead
-- **Phase 3 remains partial**: audit and blast-radius services exist, the basic operational pages call them, blank-profile ambiguous fanout cables are surfaced as unresolved audit findings, profile-derived breakouts report missing-child-interface findings when explicit child interfaces are absent, partial child-interface sets report incomplete-child-interface-set findings, profile-derived peer-position mismatches now report partial-profile-mapping findings, disconnected child transport units report orphaned-attachment-unit findings, and cabled passive front/rear ports without `PortMapping` coverage now report missing-port-mapping findings; `AuditFinding` persistence and richer remediation workflows are still ahead
-- **Milestone B work remains**: signal-lane graph semantics now exist, but richer lane-first workflows, durable audit surfaces, and deeper remediation/task orchestration are still ahead
+- **Phase 2/3/4/5 are now implemented**: `SignalLane`, `LaneMap`, and signal-lane `FineEdge` materialization are present in sync, resolver coverage includes signal-lane traversal, operational queries now accept core NetBox `Interface`/`FrontPort`/`RearPort` objects directly, lane drilldown is exposed through operational UI, detail-page affordances, badges, and GraphQL, grouped lane-set/allocation summaries now exist as reusable services with typed GraphQL exposure, the UI now includes a lane workspace plus grouped lane coverage cards on key passive/plane detail pages, plane-audit findings now render lane-aware impact/remediation guidance for the highest-value unresolved cases, compare-mode lane review now exists through both operational UI and typed GraphQL, and the richer lane-workspace Phase 0/1/2/3/4/5 slice now centralizes workspace composition in `services/graph/lane_workspace.py` with normalized `mode`/`group_by`/`focus`/`group_key`/`lane_index`/`path_lane_index`/`plane_id`/compare/backlink/export state, a composed shell layout, exact-lane mode inside the page, direct `SignalLane`/drilldown handoffs into lane mode, grouped representative-path inspection with deterministic path signatures, a text-first SVG path-canvas enhancement, co-located findings/actions/compare/export panels, narrowed finding-aware workspace links, and mobile/accessibility hardening for the shell and grouped-path views
+- **Audit/remediation durability is now broadly implemented**: audit and blast-radius services exist, the basic operational pages call them, blank-profile ambiguous fanout cables are surfaced as unresolved audit findings, profile-derived breakouts report missing-child-interface findings when explicit child interfaces are absent, partial child-interface sets report incomplete-child-interface-set findings, profile-derived peer-position mismatches now report partial-profile-mapping findings, disconnected child transport units report orphaned-attachment-unit findings, cabled passive front/rear ports without `PortMapping` coverage now report missing-port-mapping findings, and the repo now includes durable `AuditRun` records plus fingerprinted `AuditFinding` upsert/resolve behavior for full-fabric persistent audits; operator workflow state, event history, suppressions, retention, reporting/dashboard surfaces, explicit REST audit-finding workflow actions, explicit REST durability reporting endpoints, typed GraphQL durable finding/run query surfaces, list filtering for suppression/age, linked audit run/suppression workflow cards, explicit recent-churn reporting, live plane-audit to durable-workflow bridging, and filtered workflow-history drill-in from the dashboard are now implemented
+- **Unresolved-lane durability Phase A is now implemented**: rebuild orchestration now emits durable `GraphBuildRun` records with scope identity, trigger mode, completion state, graph stats, graph revision metadata, failure metadata, generated standard list/detail/API/GraphQL surfaces, and retention pruning
+- **Unresolved-lane durability Phase A/B/C/D/E are now implemented**: the repo now includes durable `GraphBuildRun`, `UnresolvedStateSummary`, and append-only `UnresolvedStateObservation` models; rebuild-time unresolved candidate extraction and stable unresolved fingerprinting based on source-object identity plus selectors; rebuild-driven create/update/resolve/reopen behavior for missing cable profiles, missing/incomplete child-interface sets, missing passive `PortMapping` coverage, normalized profile-mapping failures, and orphaned attachment units; generated read-only list/detail/API/GraphQL surfaces; health-page and lane-workspace unresolved sections; fabric/fabric-plane/unresolved-summary detail-card integrations; explicit live-audit and durable-audit links back to matching unresolved summaries; unresolved-topology reporting widgets on the audit dashboard for active backlog, aging, recurrence, and reopen counts; plus explicit partial-refresh non-resolution guards and optional deterministic unresolved-reporting cache keys based on rebuild revision and summary mutation timestamps
+- **Policy/disjointness work is now underway**: current cross-plane checks have been extracted into dedicated policy-evidence services, contamination domains are now built deterministically from passive artifact shares and cross-plane bridges, audit findings now carry stable `rule_id` plus plane-pair/domain metadata for policy-shaped cases, the UI now exposes Policy Review with exception coverage/drift reporting, and explicit `DisjointnessException` lifecycle surfaces now exist for reviewed topology exceptions
+- **Policy/disjointness operator/query surfaces have expanded**: typed GraphQL `policySummary`, `policyDashboard`, and `contaminationDomains` queries now expose the derived policy layer, the audit dashboard now includes policy widgets for domain/plane-pair risk and oldest active durable policy findings, `Fabric`, `FabricPlane`, and passive `PlantNode` detail pages now show policy summary cards that deep-link back into Policy Review and existing operational workflows, compare-mode now reports contamination-domain deltas plus policy regression summaries through both the operational UI and typed `laneCompare`, and optional policy-evaluation caching now exists behind rebuild-stamped graph revision tokens rather than raw object-save invalidation
+- **Floorplan integration/handoff is now implemented**: operator-facing site/location layout is delegated to `netbox-floorplan-plugin`, the old `coordinate-layout/` page is a handoff surface only, spatial stamps can push managed rack positions into floorplans, `SpatialPlacement` is now a read-only planning-metadata surface, and an explicit reconciliation endpoint can pull managed floorplan rack moves back into placement `x`/`y`/orientation without clobbering `z` or arbitrary metadata
+- **Milestone B is functionally complete in the current repo snapshot**: signal-lane graph semantics and lane-first operational/query ergonomics now exist, and durable audit/remediation lifecycle support now includes workflow state, event history, suppressions, retention, and reporting/dashboard summaries
 
 ---
 
@@ -1380,17 +1385,28 @@ Do not try to implement every graph operation as GraphQL first. Use REST for com
 The first UI should be practical, not cinematic.
 
 ### 16.1 Navigation
-Navigation menu entries are **registry-driven** — generated by iterating `get_navigation_groups()` from `object_registry.py`. Each object family's `NavigationSpec` defines its group, label, sort order, and whether to show an add button. Groups appear in `MENU_GROUP_ORDER`: Fabrics, Topology, Mappings, Policy, Audit.
+Navigation remains **registry-driven** for standard CRUD/table surfaces — generated by iterating `get_navigation_groups()` from `object_registry.py`. Each object family's `NavigationSpec` defines its table-topic group, label, sort order, and whether to show an add button.
 
-Custom pages (graph overview, path resolver, blast radius, plane audit) are added as explicit `PluginMenuItem` entries alongside the generated ones.
+Custom workflow pages stay explicit in `navigation.py` and are grouped separately from registry-backed list pages.
 
-Resulting menu:
-- **Fabrics**: Fabrics, Fabric Planes
-- **Topology**: Plant Nodes, Termination Points, Attachment Units, Signal Lanes, Coarse Edges, Fine Edges
-- **Mappings**: Transfer Maps, Lane Maps
-- **Policy**: Plane Memberships
-- **Audit**: Audit Findings
-- *(custom)* Graph Overview, Path Resolver, Plane Audits, Blast Radius, Rebuild Jobs, Settings/Health
+Default resulting menus (`top_level_menu = True`):
+- **Plant Graph Workflows**
+- Fabric Visibility: Graph Overview, Health, Onboard Fabric
+- Lane Analysis: Path Resolver, Lane Workspace, Lane Drilldown, Lane Compare, Blast Radius
+- Policy & Audit: Policy Review, Plane Audit, Audit Dashboard, Audit Triage, Exception Request
+- **Plant Graph Tables**
+- Fabric Model: Fabrics, Fabric Planes
+- Physical Topology: Plant Nodes, Termination Points, Attachment Units, Signal Lanes, Coarse Edges, Fine Edges
+- Connectivity Mapping: Transfer Maps, Lane Maps
+- Policy Control: Plane Memberships, Disjointness Exceptions
+- Audit Records: Graph Build Runs, Unresolved State Summaries, Unresolved State Observations, Audit Runs, Audit Findings, Audit Finding Events, Audit Suppressions
+- Assembly Templates: Assembly Templates, Assembly Connectors, Assembly Mappings
+- Spatial Planning: Spatial Placements, Spatial Templates, Spatial Template Nodes
+- Deployment Planning: Deployment Plans, Stamp Records
+- Rack Population: Rack Population Templates, Rack Population Slots
+
+Fallback menu (`top_level_menu = False`):
+- a single **Plant Graph** menu with prefixed groups such as `Workflows / Lane Analysis` and `Tables / Audit Records`
 
 ### 16.2 Standard list / detail / edit / delete views
 All CRUD views for registry objects are **generated from the registry** using the same `type()` metaclass builder pattern as `netbox_rpki` (see section 8.4). The module-level loop in `views.py` iterates `VIEW_OBJECT_SPECS`, generates classes, and injects them into `globals()` so Django URL routing can reference them by name.
@@ -1625,8 +1641,15 @@ Repo status for this snapshot:
 - implemented in the current slice: resolver supports `resolution='signal_lane'` traversal across derived cable segments and `PortMapping`-derived lane maps
 - implemented in the current slice: operational UI and GraphQL surfaces accept both plugin graph objects and core NetBox `Interface`/`FrontPort`/`RearPort` objects for resolver and blast-radius workflows
 - implemented in the current slice: lane drilldown is available through operational UI, GraphQL, badges, and detail-page supplementary cards
+- implemented in the current slice: typed service payload wrappers and typed GraphQL queries now exist for lane drilldown, lane path, fabric health, lane sets, and lane-allocation summaries alongside the legacy JSON operational fields
+- implemented in the current slice: a dedicated lane workspace page now provides grouped views by attachment, node/passive artifact, and plane, and detail pages for coarse edges, plant nodes, termination points, and planes now surface lane coverage cards
+- implemented in the current slice: plane-audit findings now expose lane-aware impact summaries, remediation hints, and guided action links for partial/unresolved profile mappings, missing child-interface sets, missing port mappings, shared passive artifacts, and cross-plane fine edges
 - implemented in the current slice: operational result pages render direct object links and contextual metadata for path, audit, and blast-radius investigation
-- not yet complete: richer lane-first GraphQL/query ergonomics and production-ready lane-aware operational workflows
+- implemented in the current slice: compare-mode lane review now exists through a dedicated operational page, lane-workspace deep links, and the typed GraphQL `laneCompare` query
+- implemented in the current slice: full-fabric persistent audits now create durable `AuditRun` rows and fingerprinted `AuditFinding` records without changing the live on-demand audit page
+- implemented in the current slice: audit findings now support acknowledged/in-progress workflow states, append-only `AuditFindingEvent` history, and explicit detail-page actions for acknowledge/start-remediation/resolve/reopen
+- implemented in the current slice: audit findings now support `AuditSuppression`, suppress/unsuppress actions, suppression expiration handling, and a retention job for stale inactive runs/events
+- implemented in the current slice: richer reporting-oriented durable workflow surfaces now exist through the audit dashboard and typed GraphQL workflow summary
 
 ### Phase 3: audits and policy
 Deliver:
@@ -1931,7 +1954,9 @@ Status in this repo snapshot:
 - complete in the current slice: signal-lane objects are materialized during rebuild and lane maps are persisted from `TransferMap` relationships
 - complete in the current slice: resolver supports signal-lane traversal
 - already present from earlier slices: blast-radius and plane-audit jobs/services exist in basic form
-- still pending: richer GraphQL and UI experiences for lane-first exploration
+- complete in the current slice: richer GraphQL and UI experiences for lane-first exploration now include typed lane-first queries, a grouped lane workspace, guided audit remediation links, and compare-mode review
+- partially complete in the current slice: optional durable finding/remediation lifecycle support now has a first persistence foundation with `AuditRun` plus fingerprinted `AuditFinding` lifecycle tracking
+- complete in the current slice: optional durable finding/remediation lifecycle support now includes operator state, suppressions, retention, and reporting layers
 
 Do not begin with:
 - lane-level visualization
@@ -2005,12 +2030,12 @@ If the implementation preserves that hierarchy cleanly, the plugin will remain b
 
 ## 30. Immediate next step
 
-Milestone A is now substantially complete, with attachment-unit resolution working as the operational default.
+Milestone A is substantially complete, and the planned Milestone B lane-first ergonomics are now largely in place.
 
-The next implementation step should remain **Milestone B**, but shift to the remaining gaps:
+The next implementation step is no longer "more lane-first UI." It is an explicit product decision about whether to begin **Phase 6**:
 
-- deepen lane-focused API/GraphQL/UI affordances beyond the current drilldown/query surfaces and signal-lane operational queries
-- expand unresolved-input audit coverage beyond the current blank-profile, missing-child-interface, partial-child-interface-set, partial-profile-mapping, orphaned-attachment-unit, and missing-port-mapping cases without expanding the persistence model yet
-- deepen the operational pages beyond the current health/result rendering and next-action affordances into more guided remediation workflows
+- add durable `AuditFinding` persistence and retention semantics
+- add retained remediation state/assignment only if operators need it
+- otherwise keep the current on-demand audit/remediation model and move future work to Wave 2 concerns
 
-Do not add aggressive caching or broad incremental-refresh behavior until the remaining Milestone B graph semantics are test-covered.
+Do not add aggressive caching or broad incremental-refresh behavior until any Phase 6 durability work is test-covered and justified by an operator workflow need.

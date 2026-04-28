@@ -12,6 +12,8 @@ FAST_TEST_LABELS=(
     netbox_plant_graph.tests.test_filtersets.FilterSetRegistrySmokeTestCase
     netbox_plant_graph.tests.test_forms.FormStructureSmokeTestCase
     netbox_plant_graph.tests.test_tables.TableRegistrySmokeTestCase
+    netbox_plant_graph.tests.test_planning
+    netbox_plant_graph.tests.test_floorplan_bridge
 )
 
 CONTRACT_TEST_LABELS=(
@@ -20,6 +22,7 @@ CONTRACT_TEST_LABELS=(
     netbox_plant_graph.tests.test_forms
     netbox_plant_graph.tests.test_filtersets
     netbox_plant_graph.tests.test_tables
+    netbox_plant_graph.tests.test_floorplan_bridge
     netbox_plant_graph.tests.test_urls
     netbox_plant_graph.tests.test_navigation
     netbox_plant_graph.tests.test_graphql

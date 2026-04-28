@@ -1,0 +1,289 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Audit Triage</h1>
+
+{# Filter form + queue stats #}
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          <option value="">— All Fabrics —</option>
+          {% for fab in fabrics %}
+            <option value="{{ fab.pk }}"{% if fabric_id and fab.pk == fabric_id %} selected{% endif %}>{{ fab.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="severity">Severity</label>
+        <input type="text" class="form-control" id="severity" name="severity" value="{{ severity }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="finding_type">Finding Type</label>
+        <input type="text" class="form-control" id="finding_type" name="finding_type" value="{{ finding_type }}">
+      </div>
+      <div class="col-md-2 d-flex align-items-end gap-2">
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <a href="{% url 'plugins:netbox_plant_graph:audit_triage' %}" class="btn btn-outline-secondary">Reset</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if total_count > 0 %}
+  {# Queue stats badge #}
+  <div class="mb-3 d-flex align-items-center gap-3">
+    <span class="badge bg-secondary fs-6">Finding {{ index|add:"1" }} of {{ total_count }}</span>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ audit_dashboard_url }}">Audit Dashboard</a>
+  </div>
+
+  {# Main finding detail card #}
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>
+        <strong>{{ finding.finding_type }}</strong>
+        &nbsp;
+        <span class="badge
+          {% if finding.severity == 'critical' %}bg-danger
+          {% elif finding.severity == 'error' %}bg-warning text-dark
+          {% elif finding.severity == 'warning' %}bg-info text-dark
+          {% else %}bg-secondary{% endif %}">{{ finding.severity }}</span>
+      </span>
+      <span class="text-muted small">Status: {{ finding.status }}</span>
+    </div>
+    <div class="card-body">
+      <p class="mb-2"><strong>Message:</strong> {{ finding.message }}</p>
+      <dl class="row mb-0">
+        <dt class="col-sm-3">Fabric</dt>
+        <dd class="col-sm-9">
+          {% if finding.fabric %}
+            <a href="{{ finding.fabric.get_absolute_url }}">{{ finding.fabric }}</a>
+          {% else %}—{% endif %}
+        </dd>
+        <dt class="col-sm-3">Tenant</dt>
+        <dd class="col-sm-9">
+          {% if finding.resolved_tenant %}
+            <a href="{{ finding.resolved_tenant.get_absolute_url }}">{{ finding.resolved_tenant }}</a>
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+        <dt class="col-sm-3">Affected Object</dt>
+        <dd class="col-sm-9">
+          {% if finding.object %}
+            {% with obj=finding.object %}
+              {% if obj.get_absolute_url %}
+                <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+              {% else %}
+                {{ obj }}
+              {% endif %}
+            {% endwith %}
+          {% else %}—{% endif %}
+        </dd>
+        <dt class="col-sm-3">First Seen</dt>
+        <dd class="col-sm-9">{{ finding.first_seen_at|default:"Unknown" }}</dd>
+        <dt class="col-sm-3">Last Seen</dt>
+        <dd class="col-sm-9">{{ finding.last_seen_at|default:"Unknown" }}</dd>
+        <dt class="col-sm-3">Assigned To</dt>
+        <dd class="col-sm-9">{{ finding.assigned_to|default:"—" }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  {# Action buttons #}
+  <div class="card mb-3">
+    <div class="card-header">Actions</div>
+    <div class="card-body d-flex flex-wrap gap-2">
+
+      {# Acknowledge #}
+      {% if finding.status == 'open' %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="acknowledge">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <button type="submit" class="btn btn-outline-primary btn-sm">Acknowledge</button>
+        </form>
+      {% endif %}
+
+      {# Start Remediation #}
+      {% if finding.status == 'acknowledged' %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="start_remediation">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <button type="submit" class="btn btn-outline-info btn-sm">Start Remediation</button>
+        </form>
+      {% endif %}
+
+      {# Resolve (with resolution_summary) #}
+      {% if finding.status in 'open,acknowledged,in_progress' %}
+        <form method="post" class="d-flex gap-1 align-items-center">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="resolve">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <input type="text" name="resolution_summary" class="form-control form-control-sm" placeholder="Resolution summary (optional)" style="width:220px;">
+          <button type="submit" class="btn btn-success btn-sm">Resolve</button>
+        </form>
+      {% endif %}
+
+      {# Suppress (with reason + expires_at) #}
+      {% if finding.status != 'suppressed' %}
+        <form method="post" class="d-flex gap-1 align-items-center">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="suppress">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason (optional)" style="width:180px;">
+          <input type="date" name="expires_at" class="form-control form-control-sm" style="width:150px;" title="Expires at (optional)">
+          <button type="submit" class="btn btn-warning btn-sm">Suppress</button>
+        </form>
+      {% endif %}
+
+      {# Unsuppress #}
+      {% if finding.status == 'suppressed' %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="unsuppress">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">Unsuppress</button>
+        </form>
+      {% endif %}
+
+      {# Reopen #}
+      {% if finding.status == 'resolved' or finding.status == 'suppressed' %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="reopen">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <button type="submit" class="btn btn-outline-warning btn-sm">Reopen</button>
+        </form>
+      {% endif %}
+
+      {# Skip #}
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="skip">
+        <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+        <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+        <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+        <input type="hidden" name="severity" value="{{ severity }}">
+        <input type="hidden" name="finding_type" value="{{ finding_type }}">
+        <button type="submit" class="btn btn-outline-secondary btn-sm">Skip</button>
+      </form>
+
+    </div>
+  </div>
+
+  {# Event history card #}
+  {% if recent_events %}
+    <div class="card mb-3">
+      <div class="card-header">Recent Events</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Transition</th>
+              <th>Actor</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for event in recent_events %}
+              <tr>
+                <td>{{ event.event_type }}</td>
+                <td>{{ event.old_status|default:"—" }} → {{ event.new_status|default:"—" }}</td>
+                <td>{{ event.actor|default:"System" }}</td>
+                <td>{{ event.created }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
+  {# Active suppression card #}
+  {% if active_suppression %}
+    <div class="card mb-3 border-warning">
+      <div class="card-header bg-warning text-dark">Active Suppression</div>
+      <div class="card-body">
+        <dl class="row mb-2">
+          <dt class="col-sm-3">Reason</dt>
+          <dd class="col-sm-9">{{ active_suppression.reason|default:"—" }}</dd>
+          <dt class="col-sm-3">Created by</dt>
+          <dd class="col-sm-9">{{ active_suppression.created_by|default:"Unknown" }}</dd>
+          <dt class="col-sm-3">Expires at</dt>
+          <dd class="col-sm-9">{{ active_suppression.expires_at|default:"Never" }}</dd>
+        </dl>
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="unsuppress">
+          <input type="hidden" name="finding_pk" value="{{ finding.pk }}">
+          <input type="hidden" name="next_index" value="{{ next_index|default:index }}">
+          <input type="hidden" name="fabric_id" value="{{ fabric_id|default:'' }}">
+          <input type="hidden" name="severity" value="{{ severity }}">
+          <input type="hidden" name="finding_type" value="{{ finding_type }}">
+          <button type="submit" class="btn btn-sm btn-warning">Unsuppress</button>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+
+  {# Prev / Next navigation #}
+  <div class="d-flex gap-3 mb-4">
+    {% if prev_index is not None %}
+      <a class="btn btn-outline-secondary"
+         href="{% url 'plugins:netbox_plant_graph:audit_triage' %}?index={{ prev_index }}{% if fabric_id %}&fabric_id={{ fabric_id }}{% endif %}{% if severity %}&severity={{ severity }}{% endif %}{% if finding_type %}&finding_type={{ finding_type }}{% endif %}">
+        &laquo; Previous
+      </a>
+    {% else %}
+      <button class="btn btn-outline-secondary" disabled>&laquo; Previous</button>
+    {% endif %}
+
+    {% if next_index is not None %}
+      <a class="btn btn-outline-primary"
+         href="{% url 'plugins:netbox_plant_graph:audit_triage' %}?index={{ next_index }}{% if fabric_id %}&fabric_id={{ fabric_id }}{% endif %}{% if severity %}&severity={{ severity }}{% endif %}{% if finding_type %}&finding_type={{ finding_type }}{% endif %}">
+        Next &raquo;
+      </a>
+    {% else %}
+      <button class="btn btn-outline-primary" disabled>Next &raquo;</button>
+    {% endif %}
+  </div>
+
+{% else %}
+  {# Empty state #}
+  <div class="card mb-3">
+    <div class="card-body text-center py-5">
+      <p class="text-muted mb-3">No active findings matching your filters.</p>
+      <a class="btn btn-outline-primary" href="{{ audit_dashboard_url }}">Go to Audit Dashboard</a>
+    </div>
+  </div>
+{% endif %}
+
+{% endblock %}

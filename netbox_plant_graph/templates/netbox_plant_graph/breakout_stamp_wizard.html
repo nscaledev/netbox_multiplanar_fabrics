@@ -1,0 +1,95 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Apply Breakout Template — {{ template.name }}</h1>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Template Summary</strong></div>
+      <div class="card-body">
+        <table class="table table-sm">
+          {% if template.device_type %}<tr><th>Device Type</th><td>{{ template.device_type }}</td></tr>{% endif %}
+          <tr><th>Interface Specs</th><td>{{ specs|length }}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    {% if specs %}
+      <div class="card">
+        <div class="card-header"><strong>Child Interface Specs</strong></div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0" style="font-size:0.8rem">
+            <thead><tr><th>Parent Interface</th><th>Count</th><th>Pattern</th><th>Plane Start</th></tr></thead>
+            <tbody>
+              {% for spec in specs %}
+                <tr>
+                  <td>{{ spec.parent_interface_name }}</td>
+                  <td>{{ spec.child_count }}</td>
+                  <td><code>{{ spec.child_name_pattern }}</code></td>
+                  <td>{{ spec.fabric_plane_start }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-md-8">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if result %}
+      <div class="alert alert-success">
+        <strong>Stamp successful!</strong>
+        Created {{ result.created|length }} child interface(s);
+        {{ result.skipped|length }} skipped (already existed).
+      </div>
+      {% if result.created %}
+        <table class="table table-sm">
+          <thead><tr><th>Created Interface</th><th>Parent</th></tr></thead>
+          <tbody>
+            {% for iface in result.created %}
+              <tr>
+                <td>{{ iface.name }}</td>
+                <td>{{ iface.parent_id|default:"-" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+      <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
+    {% else %}
+      <div class="card">
+        <div class="card-header"><strong>Stamp Parameters</strong></div>
+        <div class="card-body">
+          <form method="post">
+            {% csrf_token %}
+            {% for field in form %}
+              <div class="mb-3">
+                <label class="form-label fw-bold" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}
+                  <div class="form-text text-muted">{{ field.help_text }}</div>
+                {% endif %}
+                {% for error in field.errors %}
+                  <div class="text-danger">{{ error }}</div>
+                {% endfor %}
+              </div>
+            {% endfor %}
+            <button type="submit" class="btn btn-primary">Apply Template</button>
+            <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary ms-2">Cancel</a>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

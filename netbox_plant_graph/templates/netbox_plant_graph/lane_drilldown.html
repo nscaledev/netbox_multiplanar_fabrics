@@ -94,6 +94,9 @@
               </td>
               <td>
                 <div class="d-flex flex-wrap gap-2">
+                  {% if item.attachment_unit.lane_workspace_url %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.lane_workspace_url }}{% if result.lane_index or result.lane_index == 0 %}&mode=lane&lane_index={{ result.lane_index }}{% endif %}">Open In Workspace</a>
+                  {% endif %}
                   <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Signal Path</a>
                   <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_blast_radius_url }}">Signal Radius</a>
                 </div>

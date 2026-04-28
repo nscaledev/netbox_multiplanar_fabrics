@@ -1,0 +1,73 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Stamp Spatial Template — {{ template.name }}</h1>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Spatial Template</strong></div>
+      <div class="card-body">
+        <table class="table table-sm">
+          <tr><th>Root Node Type</th><td>{{ template.get_root_node_type_display }}</td></tr>
+          <tr><th>Nodes</th><td>{{ template.nodes.count }}</td></tr>
+          {% if template.description %}<tr><th>Description</th><td>{{ template.description }}</td></tr>{% endif %}
+        </table>
+      </div>
+    </div>
+
+    <div class="alert alert-info">
+      2D site/location layout now lives in <code>netbox-floorplan-plugin</code>.
+      Spatial stamping here still owns hierarchy and rack creation, but operators should use floorplan pages for layout editing and inspection.
+    </div>
+
+    {% if node_tree %}
+      <div class="card">
+        <div class="card-header"><strong>Node Tree Preview</strong></div>
+        <div class="card-body">
+          <ul class="list-unstyled mb-0" style="font-size:0.85rem">
+            {% include "netbox_plant_graph/includes/node_tree.html" with nodes=node_tree %}
+          </ul>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-md-8">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if result %}
+      <div class="alert alert-success">
+        <strong>Stamp successful!</strong>
+        Created {{ result.locations|length }} location(s), {{ result.racks|length }} rack(s), {{ result.placements|length }} spatial placement(s).
+      </div>
+      <div class="d-flex gap-2">
+        {% if floorplan_urls %}
+          <a href="{{ floorplan_urls.object_url|default:floorplan_urls.add_url }}" class="btn btn-primary">Open Floorplan</a>
+        {% endif %}
+        <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
+      </div>
+    {% else %}
+      <div class="card">
+        <div class="card-header"><strong>Stamp Parameters</strong></div>
+        <div class="card-body">
+          <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <div class="d-flex gap-2 mt-3">
+              <button type="submit" class="btn btn-primary">Stamp Spatial Template</button>
+              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

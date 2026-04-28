@@ -1,0 +1,55 @@
+<div class="card mb-3 lane-workspace-panel" id="lane-workspace-lane-view" tabindex="-1">
+  <div class="card-header">Lane Mode</div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <span class="badge text-bg-primary">Current Focus: {{ workspace.focus_label }}</span>
+      <span class="badge text-bg-light">Lane {{ workspace.active_lane_index }}</span>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}&focus={{ query.focus }}#lane-workspace-main">Return To Grouped View</a>
+    </div>
+    <div class="table-responsive lane-workspace-table-wrap" aria-label="Lane mode attachment rows">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Attachment Unit</th>
+          <th>Lane Count</th>
+          <th>Exact Lanes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in workspace.lane_view.attachment_units %}
+          <tr>
+            <td>
+              {% if item.attachment_unit.url %}
+                <a href="{{ item.attachment_unit.url }}">{{ item.attachment_unit.display }}</a>
+              {% else %}
+                {{ item.attachment_unit.display }}
+              {% endif %}
+            </td>
+            <td>{{ item.lane_count }}</td>
+            <td>
+              {% for lane in item.lanes %}
+                {% if lane.url %}
+                  <a href="{{ lane.url }}">{{ lane.display }}</a>
+                {% else %}
+                  {{ lane.display }}
+                {% endif %}
+                {% if not forloop.last %}<br>{% endif %}
+              {% endfor %}
+            </td>
+            <td>
+              {% if item.attachment_unit.signal_path_resolver_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Signal Path</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="4">No lane rows match the current workspace scope.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>

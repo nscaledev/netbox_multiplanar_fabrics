@@ -1,0 +1,221 @@
+{% extends 'generic/object.html' %}
+
+{% block content %}
+{# --- Basic fields card --- #}
+<div class="card mb-3">
+  <div class="card-header">
+    <strong>Assembly Template</strong>
+  </div>
+  <div class="card-body">
+    <table class="table table-hover">
+      <tbody>
+        {% for field in detail_fields %}
+          <tr>
+            <th>{{ field.label }}</th>
+            <td>
+              {% if field.url %}<a href="{{ field.url }}">{{ field.value }}</a>
+              {% elif field.is_empty %}&mdash;
+              {% else %}{{ field.value }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# --- Tabs for connectors and mapping --- #}
+<ul class="nav nav-tabs mb-3" id="assemblyTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="a-side-tab" data-bs-toggle="tab" data-bs-target="#a-side" type="button" role="tab">
+      A-Side Connectors <span class="badge bg-secondary">{{ a_connectors|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="b-side-tab" data-bs-toggle="tab" data-bs-target="#b-side" type="button" role="tab">
+      B-Side Connectors <span class="badge bg-secondary">{{ b_connectors|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="mappings-tab" data-bs-toggle="tab" data-bs-target="#mappings" type="button" role="tab">
+      Mappings <span class="badge bg-secondary">{{ mappings|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="matrix-tab" data-bs-toggle="tab" data-bs-target="#matrix" type="button" role="tab">
+      Mapping Matrix
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content" id="assemblyTabsContent">
+
+  {# A-Side Connectors #}
+  <div class="tab-pane fade show active" id="a-side" role="tabpanel">
+    <div class="card">
+      <div class="card-body p-0">
+        {% if a_connectors %}
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Label</th>
+                <th>Tenant</th>
+                <th>Connector Type</th>
+                <th>Position Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for conn in a_connectors %}
+                <tr>
+                  <td>{{ conn.connector_number }}</td>
+                  <td>{% if conn.label %}{{ conn.label }}{% else %}&mdash;{% endif %}</td>
+                  <td>
+                    {% if conn.resolved_tenant %}
+                      <a href="{{ conn.resolved_tenant.get_absolute_url }}">{{ conn.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>{{ conn.get_connector_type_display }}</td>
+                  <td>{{ conn.position_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No A-side connectors defined.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# B-Side Connectors #}
+  <div class="tab-pane fade" id="b-side" role="tabpanel">
+    <div class="card">
+      <div class="card-body p-0">
+        {% if b_connectors %}
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Label</th>
+                <th>Tenant</th>
+                <th>Connector Type</th>
+                <th>Position Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for conn in b_connectors %}
+                <tr>
+                  <td>{{ conn.connector_number }}</td>
+                  <td>{% if conn.label %}{{ conn.label }}{% else %}&mdash;{% endif %}</td>
+                  <td>
+                    {% if conn.resolved_tenant %}
+                      <a href="{{ conn.resolved_tenant.get_absolute_url }}">{{ conn.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>{{ conn.get_connector_type_display }}</td>
+                  <td>{{ conn.position_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No B-side connectors defined.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Full Mapping Table #}
+  <div class="tab-pane fade" id="mappings" role="tabpanel">
+    <div class="card">
+      <div class="card-body p-0">
+        {% if mappings %}
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>A Connector</th>
+                <th>A Position</th>
+                <th>B Connector</th>
+                <th>B Position</th>
+                <th>Tenant</th>
+                <th>Mapping Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in mappings %}
+                <tr>
+                  <td>{{ m.a_connector }}</td>
+                  <td>{{ m.a_position }}</td>
+                  <td>{{ m.b_connector }}</td>
+                  <td>{{ m.b_position }}</td>
+                  <td>
+                    {% if m.resolved_tenant %}
+                      <a href="{{ m.resolved_tenant.get_absolute_url }}">{{ m.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>{{ m.get_mapping_type_display }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No mappings defined.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Mapping Matrix #}
+  <div class="tab-pane fade" id="matrix" role="tabpanel">
+    <div class="card">
+      <div class="card-body">
+        {% if matrix_rows %}
+          <p class="text-muted small">Rows = A-side connectors × positions. Columns = B-side connectors × positions. Cell shows the target B position that each A position maps to.</p>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm text-center" style="font-size:0.8rem">
+              <thead>
+                <tr>
+                  <th>A\B</th>
+                  {% for b_header in matrix_b_headers %}
+                    <th>{{ b_header }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in matrix_rows %}
+                  <tr>
+                    <th>{{ row.label }}</th>
+                    {% for cell in row.cells %}
+                      <td {% if cell.mapped %}class="table-success"{% endif %}>
+                        {% if cell.mapped %}&bull;{% else %}&mdash;{% endif %}
+                      </td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-muted mb-0">No mapping matrix available (define A-side and B-side connectors with mappings to generate the matrix).</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# --- Action buttons --- #}
+<div class="mt-3">
+  <a href="{% url 'plugins:netbox_plant_graph:assembly_stamp_wizard' pk=object.pk %}" class="btn btn-primary">
+    Stamp Passive Device
+  </a>
+</div>
+
+{% endblock %}

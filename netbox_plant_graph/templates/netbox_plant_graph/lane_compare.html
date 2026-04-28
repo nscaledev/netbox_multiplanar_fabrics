@@ -1,0 +1,329 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Lane Compare</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label" for="baseline_registry_key">Baseline Type</label>
+        <select class="form-select" id="baseline_registry_key" name="baseline_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.baseline_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="baseline_id">Baseline ID</label>
+        <input class="form-control" id="baseline_id" name="baseline_id" value="{{ query.baseline_id }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="candidate_registry_key">Candidate Type</label>
+        <select class="form-select" id="candidate_registry_key" name="candidate_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.candidate_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="candidate_id">Candidate ID</label>
+        <input class="form-control" id="candidate_id" name="candidate_id" value="{{ query.candidate_id }}">
+      </div>
+      <div class="col-md-12">
+        <button type="submit" class="btn btn-primary">Compare</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if compare_result %}
+  <div class="row">
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Baseline</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Target</dt>
+            <dd class="col-sm-7">
+              {% if compare_result.baseline_target.url %}
+                <a href="{{ compare_result.baseline_target.url }}">{{ compare_result.baseline_target.display }}</a>
+              {% else %}
+                {{ compare_result.baseline_target.display }}
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Lanes</dt>
+            <dd class="col-sm-7">{{ compare_result.baseline_summary.present_lane_total }} / {{ compare_result.baseline_summary.expected_lane_total }}</dd>
+            <dt class="col-sm-5">Mapped</dt>
+            <dd class="col-sm-7">{{ compare_result.baseline_summary.mapped_lane_total }}</dd>
+            <dt class="col-sm-5">Consistency</dt>
+            <dd class="col-sm-7">{{ compare_result.baseline_summary.lane_map_consistency }} / {{ compare_result.baseline_summary.plane_consistency }}</dd>
+            {% if durable_finding_links.baseline %}
+              <dt class="col-sm-5">Durable Findings</dt>
+              <dd class="col-sm-7"><a href="{{ durable_finding_links.baseline }}">Open Active Findings</a></dd>
+            {% endif %}
+          </dl>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Candidate</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Target</dt>
+            <dd class="col-sm-7">
+              {% if compare_result.candidate_target.url %}
+                <a href="{{ compare_result.candidate_target.url }}">{{ compare_result.candidate_target.display }}</a>
+              {% else %}
+                {{ compare_result.candidate_target.display }}
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Lanes</dt>
+            <dd class="col-sm-7">{{ compare_result.candidate_summary.present_lane_total }} / {{ compare_result.candidate_summary.expected_lane_total }}</dd>
+            <dt class="col-sm-5">Mapped</dt>
+            <dd class="col-sm-7">{{ compare_result.candidate_summary.mapped_lane_total }}</dd>
+            <dt class="col-sm-5">Consistency</dt>
+            <dd class="col-sm-7">{{ compare_result.candidate_summary.lane_map_consistency }} / {{ compare_result.candidate_summary.plane_consistency }}</dd>
+            {% if durable_finding_links.candidate %}
+              <dt class="col-sm-5">Durable Findings</dt>
+              <dd class="col-sm-7"><a href="{{ durable_finding_links.candidate }}">Open Active Findings</a></dd>
+            {% endif %}
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Metric Deltas</div>
+        <div class="card-body">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Baseline</th>
+                <th>Candidate</th>
+                <th>Delta</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for metric in compare_result.metrics %}
+                <tr>
+                  <td>{{ metric.name }}</td>
+                  <td>{{ metric.baseline_value }}</td>
+                  <td>{{ metric.candidate_value }}</td>
+                  <td>{{ metric.delta }}</td>
+                  <td>{{ metric.status }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Regression Summary</div>
+        <div class="card-body">
+          <ul class="mb-3">
+            {% for regression in compare_result.regressions %}
+              <li>{{ regression }}</li>
+            {% empty %}
+              <li>No regressions detected in completeness, mapping symmetry, or plane isolation.</li>
+            {% endfor %}
+          </ul>
+          <ul class="mb-0">
+            <li>Plane IDs added: {% if compare_result.plane_ids_added %}{{ compare_result.plane_ids_added|join:", " }}{% else %}None{% endif %}</li>
+            <li>Plane IDs removed: {% if compare_result.plane_ids_removed %}{{ compare_result.plane_ids_removed|join:", " }}{% else %}None{% endif %}</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Policy Regression Summary</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for regression in compare_result.policy_regressions %}
+              <li>{{ regression }}</li>
+            {% empty %}
+              <li>No policy regressions detected for contamination domains in the compared scopes.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Policy Domain Deltas</div>
+        <div class="card-body">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Planes</th>
+                <th>Artifacts</th>
+                <th>Scope</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in compare_result.policy_domain_deltas %}
+                <tr>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.plane_ids|join:", " }}</td>
+                  <td>
+                    {% for artifact in item.artifacts %}
+                      {% if not forloop.first %}, {% endif %}
+                      {% if artifact.url %}<a href="{{ artifact.url }}">{{ artifact.display }}</a>{% else %}{{ artifact.display }}{% endif %}
+                    {% endfor %}
+                  </td>
+                  <td>{{ item.attachment_unit_count }} AUs / {{ item.signal_lane_count }} lanes</td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="4">No policy domain deltas.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Lane Group Changes</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Group</th>
+            <th>Baseline</th>
+            <th>Candidate</th>
+            <th>Plane Change</th>
+            <th>Changed Fields</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in compare_result.attachment_diffs %}
+            <tr>
+              <td>{{ item.compare_key }}</td>
+              <td>
+                {% if item.baseline_attachment %}
+                  {% if item.baseline_attachment.url %}<a href="{{ item.baseline_attachment.url }}">{{ item.baseline_attachment.display }}</a>{% else %}{{ item.baseline_attachment.display }}{% endif %}
+                  <br>{{ item.baseline_present_lane_count }} lanes, {{ item.baseline_mapped_lane_count }} mapped
+                  {% if item.baseline_status %}<br>Status: {{ item.baseline_status }}{% endif %}
+                {% else %}
+                  <span class="text-muted">Not present</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.candidate_attachment %}
+                  {% if item.candidate_attachment.url %}<a href="{{ item.candidate_attachment.url }}">{{ item.candidate_attachment.display }}</a>{% else %}{{ item.candidate_attachment.display }}{% endif %}
+                  <br>{{ item.candidate_present_lane_count }} lanes, {{ item.candidate_mapped_lane_count }} mapped
+                  {% if item.candidate_status %}<br>Status: {{ item.candidate_status }}{% endif %}
+                {% else %}
+                  <span class="text-muted">Not present</span>
+                {% endif %}
+              </td>
+              <td>{{ item.baseline_plane_ids|join:", " }} -> {{ item.candidate_plane_ids|join:", " }}</td>
+              <td>{% if item.changed_fields %}{{ item.changed_fields|join:", " }}{% else %}<span class="text-muted">None</span>{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="5">No lane-group changes.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Passive Crossing / Node Changes</div>
+        <div class="card-body">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>Baseline</th>
+                <th>Candidate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in compare_result.node_diffs %}
+                {% if item.changed %}
+                  <tr>
+                    <td>{{ item.node_label }}</td>
+                    <td>{{ item.baseline_attachment_units }} AUs, {{ item.baseline_present_lane_total }} lanes, {{ item.baseline_mapped_lane_total }} mapped</td>
+                    <td>{{ item.candidate_attachment_units }} AUs, {{ item.candidate_present_lane_total }} lanes, {{ item.candidate_mapped_lane_total }} mapped</td>
+                  </tr>
+                {% endif %}
+              {% empty %}
+                <tr>
+                  <td colspan="3">No passive crossing changes.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Representative Review Pairs</div>
+        <div class="card-body">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Reason</th>
+                <th>Baseline Review</th>
+                <th>Candidate Review</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in compare_result.representative_reviews %}
+                <tr>
+                  <td>{{ item.compare_key }}{% if item.lane_index is not None %}<br>lane {{ item.lane_index }}{% endif %}</td>
+                  <td>{{ item.reason }}</td>
+                  <td>
+                    {% if item.baseline_action %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ item.baseline_action.url }}">{{ item.baseline_action.label }}</a>
+                    {% else %}
+                      <span class="text-muted">N/A</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if item.candidate_action %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ item.candidate_action.url }}">{{ item.candidate_action.label }}</a>
+                    {% else %}
+                      <span class="text-muted">N/A</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="4">No representative review pairs.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

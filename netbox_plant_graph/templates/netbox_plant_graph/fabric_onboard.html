@@ -1,0 +1,68 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Onboard Fabric</h1>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row">
+  <div class="col-md-8">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Fabric Details</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <div class="alert alert-info mt-3" id="onboard-summary">
+            This will create <strong>1 Fabric</strong> and
+            <strong id="plane-count-label">4 Fabric Planes</strong>.
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Onboard Fabric</button>
+            <a href="{% url 'plugins:netbox_plant_graph:fabric_list' %}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><strong>What will be created</strong></div>
+      <div class="card-body">
+        <ul class="mb-0">
+          <li>1 Fabric record</li>
+          <li id="planes-summary-item">N Fabric Planes (one per expected plane count)</li>
+        </ul>
+        <p class="text-muted mt-2 mb-0">
+          If "Trigger Initial Graph Rebuild" is checked, a graph rebuild will run immediately after creation.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function() {
+    var countInput = document.querySelector('[name="expected_plane_count"]');
+    var label = document.getElementById('plane-count-label');
+    var item = document.getElementById('planes-summary-item');
+    function update() {
+      var n = parseInt(countInput.value, 10) || 0;
+      var text = n + ' Fabric Plane' + (n === 1 ? '' : 's');
+      if (label) label.textContent = text;
+      if (item) item.textContent = text + ' (one per expected plane count)';
+    }
+    if (countInput) {
+      countInput.addEventListener('input', update);
+      update();
+    }
+  })();
+</script>
+{% endblock %}

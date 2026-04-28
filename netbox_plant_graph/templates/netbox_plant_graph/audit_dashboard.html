@@ -1,0 +1,682 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Audit Dashboard</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6 align-self-end">
+        <div class="d-flex flex-wrap gap-2">
+          <button type="submit" class="btn btn-primary">Refresh</button>
+          {% if selected_fabric %}
+            <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:health' %}?fabric_id={{ selected_fabric.pk }}">Health</a>
+            <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+            <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:policy_review' %}?fabric_id={{ selected_fabric.pk }}">Policy Review</a>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if workflow_summary %}
+  <div class="row">
+    <div class="col-lg-3 col-md-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Active</div>
+        <div class="card-body">
+          <div class="display-6">{{ workflow_summary.active_findings }}</div>
+          <div class="text-muted">Open, acknowledged, in progress, and suppressed findings.</div>
+          {% if finding_links.active %}
+            <div class="mt-3">
+              <a class="btn btn-sm btn-outline-primary" href="{{ finding_links.active }}">View Active Findings</a>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Resolved</div>
+        <div class="card-body">
+          <div class="display-6">{{ workflow_summary.resolved_findings }}</div>
+          <div class="text-muted">Durably closed findings retained for history.</div>
+          {% if finding_links.resolved %}
+            <div class="mt-3">
+              <a class="btn btn-sm btn-outline-primary" href="{{ finding_links.resolved }}">View Resolved Findings</a>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Suppressed</div>
+        <div class="card-body">
+          <div class="display-6">{{ workflow_summary.suppressed_findings }}</div>
+          <div class="text-muted">Active findings currently hidden by suppression.</div>
+          {% if finding_links.suppressed %}
+            <div class="mt-3">
+              <a class="btn btn-sm btn-outline-primary" href="{{ finding_links.suppressed }}">View Suppressed Findings</a>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Stale</div>
+        <div class="card-body">
+          <div class="display-6">{{ workflow_summary.stale_findings_7d }}</div>
+          <div class="text-muted">Active findings older than 7 days. Older than 30 days: {{ workflow_summary.stale_findings_30d }}</div>
+          <div class="mt-3 d-flex flex-wrap gap-2">
+            {% if finding_links.stale_7d %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ finding_links.stale_7d }}">Age 7d+</a>
+            {% endif %}
+            {% if finding_links.stale_30d %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ finding_links.stale_30d }}">Age 30d+</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if unresolved_dashboard %}
+    <div class="row">
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Unresolved Active</div>
+          <div class="card-body">
+            <div class="display-6">{{ unresolved_dashboard.active_total }}</div>
+            <div class="text-muted">Canonical unresolved topology summaries currently active.</div>
+            {% if unresolved_links.active %}
+              <div class="mt-3">
+                <a class="btn btn-sm btn-outline-primary" href="{{ unresolved_links.active }}">View Unresolved Summaries</a>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Unresolved Aging</div>
+          <div class="card-body">
+            <div class="display-6">{{ unresolved_dashboard.stale_active_7d }}</div>
+            <div class="text-muted">Active unresolved summaries older than 7 days.</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Seen In 2+ Builds</div>
+          <div class="card-body">
+            <div class="display-6">{{ unresolved_dashboard.recurring_total }}</div>
+            <div class="text-muted">Active unresolved summaries observed across multiple rebuilds.</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Reopened Summaries</div>
+          <div class="card-body">
+            <div class="display-6">{{ unresolved_dashboard.reopened_total }}</div>
+            <div class="text-muted">Currently active summaries that have resolved and recurred before.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-xl-5 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Active Unresolved By Cause</div>
+          <div class="card-body">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Cause</th>
+                  <th>Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in unresolved_cause_rows %}
+                  <tr>
+                    <td><a href="{{ row.url }}">{{ row.name }}</a></td>
+                    <td>{{ row.value }}</td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="2">No active unresolved summaries for this fabric.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-7 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Oldest Active Unresolved Summaries</div>
+          <div class="card-body">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Summary</th>
+                  <th>Owner</th>
+                  <th>Age</th>
+                  <th>Builds</th>
+                  <th>Reopens</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in unresolved_oldest_rows %}
+                  <tr>
+                    <td>
+                      <a href="{{ row.summary.summary.url }}">{{ row.summary.cause_code }}</a>
+                      <div class="text-muted">{{ row.summary.scope_label|default:row.summary.summary.display }}</div>
+                    </td>
+                    <td>
+                      {% if row.summary.owner_object %}
+                        {% if row.summary.owner_object.url %}
+                          <a href="{{ row.summary.owner_object.url }}">{{ row.summary.owner_object.display }}</a>
+                        {% else %}
+                          {{ row.summary.owner_object.display }}
+                        {% endif %}
+                      {% elif row.summary.representative_object %}
+                        {% if row.summary.representative_object.url %}
+                          <a href="{{ row.summary.representative_object.url }}">{{ row.summary.representative_object.display }}</a>
+                        {% else %}
+                          {{ row.summary.representative_object.display }}
+                        {% endif %}
+                      {% else %}
+                        -
+                      {% endif %}
+                    </td>
+                    <td>{% if row.summary.age_days is not None %}{{ row.summary.age_days }}d{% else %}-{% endif %}</td>
+                    <td>{{ row.summary.build_count }}</td>
+                    <td>{{ row.summary.reopen_count }}</td>
+                    <td>
+                      <div class="d-flex flex-wrap gap-2">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ row.summary.summary.url }}">Summary</a>
+                        {% if row.workspace_url %}
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ row.workspace_url }}">Lane Workspace</a>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="6">No active unresolved summaries are currently aging.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if policy_dashboard %}
+    <div class="row">
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Policy Domains</div>
+          <div class="card-body">
+            <div class="display-6">{{ policy_dashboard.contamination_domain_count }}</div>
+            <div class="text-muted">
+              Uncovered: {{ policy_dashboard.uncovered_domain_count }}
+            </div>
+            <div class="mt-3">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:policy_review' %}?fabric_id={{ selected_fabric.pk }}">Open Policy Review</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Cross-Plane Bridges</div>
+          <div class="card-body">
+            <div class="display-6">{{ policy_dashboard.uncovered_edge_bridge_count }}</div>
+            <div class="text-muted">Uncovered bridge findings across current contamination domains.</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Artifact Shares</div>
+          <div class="card-body">
+            <div class="display-6">{{ policy_dashboard.uncovered_artifact_share_count }}</div>
+            <div class="text-muted">Uncovered passive artifact overlaps still requiring review.</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Exceptions</div>
+          <div class="card-body">
+            <div class="display-6">{{ policy_dashboard.active_exception_count }}</div>
+            <div class="text-muted">
+              Covered: {{ policy_dashboard.covered_exception_count }}. Drifted: {{ policy_dashboard.drifted_exception_count }}.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-xl-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Plane Pair Risk</div>
+          <div class="card-body">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Plane Pair</th>
+                  <th>Domains</th>
+                  <th>Uncovered</th>
+                  <th>Bridges</th>
+                  <th>Artifact Shares</th>
+                  <th>Exceptions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in policy_plane_pair_rows %}
+                  <tr>
+                    <td><a href="{{ row.policy_review_url }}">{{ row.plane_pair_label }}</a></td>
+                    <td>{{ row.row.domain_count }}</td>
+                    <td>{{ row.row.uncovered_domain_count }}</td>
+                    <td>{{ row.row.uncovered_edge_bridge_count }} / {{ row.row.edge_bridge_count }}</td>
+                    <td>{{ row.row.uncovered_artifact_share_count }} / {{ row.row.artifact_share_count }}</td>
+                    <td>{{ row.row.covered_exception_count }} / {{ row.row.active_exception_count }}</td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="6">No plane-pair contamination is active for this fabric.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header">Highest-Risk Domains</div>
+          <div class="card-body">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Domain</th>
+                  <th>Planes</th>
+                  <th>Risk</th>
+                  <th>Lanes</th>
+                  <th>Coverage</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in policy_domain_rows %}
+                  <tr>
+                    <td><code>{{ row.domain.domain_key|slice:":12" }}</code></td>
+                    <td>{{ row.domain.plane_ids|join:", " }}</td>
+                    <td>{{ row.domain.highest_risk_severity }}</td>
+                    <td>{{ row.domain.signal_lane_count }}</td>
+                    <td>{{ row.domain.coverage_status }}{% if row.domain.matched_exception_count %} ({{ row.domain.matched_exception_count }}){% endif %}</td>
+                    <td>
+                      <div class="d-flex flex-wrap gap-2">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ row.policy_review_url }}">Policy Review</a>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ row.workspace_url }}">Lane Workspace</a>
+                      </div>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="6">No contamination domains are active for this fabric.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">Oldest Active Policy Findings</div>
+      <div class="card-body">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Finding</th>
+              <th>Affected Object</th>
+              <th>Plane</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Age</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for finding in policy_dashboard.oldest_active_findings %}
+              <tr>
+                <td>
+                  {% if finding.finding.url %}
+                    <a href="{{ finding.finding.url }}">{{ finding.finding.display }}</a>
+                  {% else %}
+                    {{ finding.finding.display }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if finding.affected_object %}
+                    {% if finding.affected_object.url %}
+                      <a href="{{ finding.affected_object.url }}">{{ finding.affected_object.display }}</a>
+                    {% else %}
+                      {{ finding.affected_object.display }}
+                    {% endif %}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>
+                  {% if finding.plane %}
+                    {% if finding.plane.url %}
+                      <a href="{{ finding.plane.url }}">{{ finding.plane.display }}</a>
+                    {% else %}
+                      {{ finding.plane.display }}
+                    {% endif %}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>{{ finding.severity }}</td>
+                <td>{{ finding.status }}</td>
+                <td>{% if finding.age_days != None %}{{ finding.age_days }}d{% else %}-{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="6">No active durable policy findings are recorded for this fabric.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Status Counts</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for metric in status_count_rows %}
+              <li>
+                <a href="{{ metric.url }}">{{ metric.name }}: {{ metric.value }}</a>
+              </li>
+            {% empty %}
+              <li>No active findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Severity Counts</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for metric in severity_count_rows %}
+              <li>
+                <a href="{{ metric.url }}">{{ metric.name }}: {{ metric.value }}</a>
+              </li>
+            {% empty %}
+              <li>No active findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Finding Types</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            {% for metric in type_count_rows %}
+              <li>
+                <a href="{{ metric.url }}">{{ metric.name }}: {{ metric.value }}</a>
+              </li>
+            {% empty %}
+              <li>No active findings.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Recent Churn</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Window</th>
+            <th>Opened</th>
+            <th>Reopened</th>
+            <th>Resolved</th>
+            <th>Auto-Resolved</th>
+            <th>Suppressed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for window in churn_window_rows %}
+            <tr>
+              <td>{{ window.label }}</td>
+              <td><a href="{{ window.opened.url }}">{{ window.opened.count }}</a></td>
+              <td><a href="{{ window.reopened.url }}">{{ window.reopened.count }}</a></td>
+              <td><a href="{{ window.resolved.url }}">{{ window.resolved.count }}</a></td>
+              <td><a href="{{ window.auto_resolved.url }}">{{ window.auto_resolved.count }}</a></td>
+              <td><a href="{{ window.suppressed.url }}">{{ window.suppressed.count }}</a></td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="6">No recent workflow churn recorded for this fabric.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Recent Runs</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Status</th>
+            <th>Trigger</th>
+            <th>Started</th>
+            <th>Completed</th>
+            <th>Findings</th>
+            <th>New / Reopened / Resolved</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in workflow_summary.recent_runs %}
+            <tr>
+              <td>
+                {% if run.run.url %}
+                  <a href="{{ run.run.url }}">{{ run.run.display }}</a>
+                {% else %}
+                  {{ run.run.display }}
+                {% endif %}
+              </td>
+              <td>{{ run.status }}</td>
+              <td>{{ run.trigger_mode }}</td>
+              <td>{{ run.started_at|default:"-" }}</td>
+              <td>{{ run.completed_at|default:"-" }}</td>
+              <td>{{ run.finding_count }}</td>
+              <td>{{ run.new_count }} / {{ run.reopened_count }} / {{ run.resolved_count }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7">No durable audit runs recorded for this fabric.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-xl-7 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Recent Events</div>
+        <div class="card-body">
+          {% if all_events_url %}
+            <div class="mb-3">
+              <a class="btn btn-sm btn-outline-primary" href="{{ all_events_url }}">All Fabric Events</a>
+            </div>
+          {% endif %}
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Finding</th>
+                <th>Event</th>
+                <th>Actor</th>
+                <th>Created</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for event in workflow_summary.recent_events %}
+                <tr>
+                  <td>
+                    {% if event.finding.url %}
+                      <a href="{{ event.finding.url }}">{{ event.finding.display }}</a>
+                    {% else %}
+                      {{ event.finding.display }}
+                    {% endif %}
+                  </td>
+                  <td>{{ event.event_type }}</td>
+                  <td>{{ event.actor_display|default:"System" }}</td>
+                  <td>{{ event.created_at|default:"-" }}</td>
+                  <td>{{ event.message|default:"-" }}</td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="5">No audit-finding events recorded for this fabric.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-5 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Expiring Suppressions</div>
+        <div class="card-body">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Finding</th>
+                <th>Expires</th>
+                <th>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for suppression in workflow_summary.expiring_suppressions %}
+                <tr>
+                  <td>
+                    {% if suppression.finding.url %}
+                      <a href="{{ suppression.finding.url }}">{{ suppression.finding.display }}</a>
+                    {% else %}
+                      {{ suppression.finding.display }}
+                    {% endif %}
+                    {% if suppression.reason %}
+                      <div class="text-muted small">{{ suppression.reason }}</div>
+                    {% endif %}
+                  </td>
+                  <td>{{ suppression.expires_at }}</td>
+                  <td>{{ suppression.remaining_days }} day{{ suppression.remaining_days|pluralize }}</td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="3">No expiring suppressions for this fabric.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Oldest Active Findings</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Finding</th>
+            <th>Affected Object</th>
+            <th>Status</th>
+            <th>Severity</th>
+            <th>Age</th>
+            <th>First Seen</th>
+            <th>Last Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for finding in workflow_summary.oldest_active_findings %}
+            <tr>
+              <td>
+                {% if finding.finding.url %}
+                  <a href="{{ finding.finding.url }}">{{ finding.finding.display }}</a>
+                {% else %}
+                  {{ finding.finding.display }}
+                {% endif %}
+              </td>
+              <td>
+                {% if finding.affected_object %}
+                  {% if finding.affected_object.url %}
+                    <a href="{{ finding.affected_object.url }}">{{ finding.affected_object.display }}</a>
+                  {% else %}
+                    {{ finding.affected_object.display }}
+                  {% endif %}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+              <td>{{ finding.status }}</td>
+              <td>{{ finding.severity }}</td>
+              <td>{{ finding.age_days|default:"-" }}{% if finding.age_days is not None %} day{{ finding.age_days|pluralize }}{% endif %}</td>
+              <td>{{ finding.first_seen_at|default:"-" }}</td>
+              <td>{{ finding.last_seen_at|default:"-" }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7">No active durable findings for this fabric.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% else %}
+  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
+{% endif %}
+{% endblock %}

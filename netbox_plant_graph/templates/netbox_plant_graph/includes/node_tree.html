@@ -1,0 +1,12 @@
+{% for node in nodes %}
+  <li>
+    <span class="text-muted small">{{ node.node_type }}</span>
+    {{ node.name_pattern }}
+    {% if node.quantity > 1 %}<span class="badge bg-light text-dark">×{{ node.quantity }}</span>{% endif %}
+    {% if node.children %}
+      <ul class="list-unstyled ms-3 mt-1">
+        {% include "netbox_plant_graph/includes/node_tree.html" with nodes=node.children %}
+      </ul>
+    {% endif %}
+  </li>
+{% endfor %}

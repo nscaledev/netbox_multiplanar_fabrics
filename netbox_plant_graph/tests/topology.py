@@ -2,8 +2,24 @@ from dcim.choices import CableProfileChoices
 from dcim.models import Cable, Device, FrontPort, Interface, PortMapping, RearPort
 from dcim.tests.utils import CablePathTestCase
 
+from netbox_plant_graph.breakout_profiles import set_plugin_breakout_profile_for_cable
+from netbox_plant_graph.models import BreakoutProfile
+
 
 class PlantGraphTopologyMixin(CablePathTestCase):
+    def make_plugin_breakout_profile(self, slug='breakout-800g-4x200g'):
+        return BreakoutProfile.objects.get_or_create(
+            slug=slug,
+            defaults={
+                'name': '800G-4x200G',
+                'description': 'Plugin-managed cable breakout profile',
+                'parent_speed_gbps': 800,
+                'child_count': 4,
+                'child_speed_gbps': 200,
+                'mapping_mode': 'sequential',
+            },
+        )[0]
+
     def create_peer_device(self, name='Peer Device', site=None):
         return Device.objects.create(
             site=site or self.site,
@@ -233,10 +249,11 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         host_cable = Cable(
             a_terminations=[host_parent],
             b_terminations=shuffle_front_ports,
-            profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
         )
         host_cable.clean()
         host_cable.save()
+        breakout_profile = self.make_plugin_breakout_profile()
+        set_plugin_breakout_profile_for_cable(host_cable, breakout_profile)
 
         return {
             'host_device': host_device,
@@ -244,6 +261,7 @@ class PlantGraphTopologyMixin(CablePathTestCase):
             'host_parent': host_parent,
             'shuffle_front_ports': shuffle_front_ports,
             'host_cable': host_cable,
+            'breakout_profile': breakout_profile,
         }
 
     def build_profile_breakout_with_partial_child_interfaces_topology(self, *, site=None, child_count=2):
@@ -276,10 +294,11 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         host_cable = Cable(
             a_terminations=[host_parent],
             b_terminations=shuffle_front_ports,
-            profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
         )
         host_cable.clean()
         host_cable.save()
+        breakout_profile = self.make_plugin_breakout_profile()
+        set_plugin_breakout_profile_for_cable(host_cable, breakout_profile)
 
         return {
             'host_device': host_device,
@@ -288,6 +307,7 @@ class PlantGraphTopologyMixin(CablePathTestCase):
             'host_children': host_children,
             'shuffle_front_ports': shuffle_front_ports,
             'host_cable': host_cable,
+            'breakout_profile': breakout_profile,
         }
 
     def build_orphaned_child_interface_topology(self, *, site=None):
@@ -370,10 +390,11 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         host_cable = Cable(
             a_terminations=[host_parent],
             b_terminations=shuffle_front_ports,
-            profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
         )
         host_cable.clean()
         host_cable.save()
+        breakout_profile = self.make_plugin_breakout_profile()
+        set_plugin_breakout_profile_for_cable(host_cable, breakout_profile)
 
         return {
             'host_device': host_device,
@@ -382,4 +403,5 @@ class PlantGraphTopologyMixin(CablePathTestCase):
             'host_children': host_children,
             'shuffle_front_ports': shuffle_front_ports,
             'host_cable': host_cable,
+            'breakout_profile': breakout_profile,
         }

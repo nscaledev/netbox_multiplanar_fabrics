@@ -1,7 +1,26 @@
 from netbox_plant_graph.models import SignalLane
 
 from ..netbox.adapters import build_object_reference
+from .payloads import LaneAttachmentGroupPayload, LaneDrilldownPayload, ObjectReferencePayload
 from .resolver import _normalize_attachment_targets
+
+
+def _object_reference_payload(reference):
+    return ObjectReferencePayload(
+        app_label=reference['app_label'],
+        model=reference['model'],
+        pk=reference['pk'],
+        display=reference['display'],
+        registry_key=reference.get('registry_key'),
+        url=reference.get('url'),
+        path_resolver_url=reference.get('path_resolver_url'),
+        blast_radius_url=reference.get('blast_radius_url'),
+        lane_drilldown_url=reference.get('lane_drilldown_url'),
+        lane_workspace_url=reference.get('lane_workspace_url'),
+        signal_path_resolver_url=reference.get('signal_path_resolver_url'),
+        signal_blast_radius_url=reference.get('signal_blast_radius_url'),
+        health_url=reference.get('health_url'),
+    )
 
 
 def build_lane_drilldown(*, target, lane_index=None):
@@ -41,3 +60,22 @@ def build_lane_drilldown(*, target, lane_index=None):
         'total_signal_lanes': total_signal_lanes,
         'available_lane_indexes': sorted(available_lane_indexes),
     }
+
+
+def build_typed_lane_drilldown(*, target, lane_index=None) -> LaneDrilldownPayload:
+    payload = build_lane_drilldown(target=target, lane_index=lane_index)
+    return LaneDrilldownPayload(
+        target=_object_reference_payload(payload['target']),
+        lane_index=payload['lane_index'],
+        attachment_units=tuple(
+            LaneAttachmentGroupPayload(
+                attachment_unit=_object_reference_payload(group['attachment_unit']),
+                lane_count=group['lane_count'],
+                lanes=tuple(_object_reference_payload(lane) for lane in group['lanes']),
+            )
+            for group in payload['attachment_units']
+        ),
+        total_attachment_units=payload['total_attachment_units'],
+        total_signal_lanes=payload['total_signal_lanes'],
+        available_lane_indexes=tuple(payload['available_lane_indexes']),
+    )

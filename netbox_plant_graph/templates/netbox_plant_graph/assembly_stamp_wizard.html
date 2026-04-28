@@ -1,0 +1,57 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Stamp Passive Device — {{ template.name }}</h1>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Assembly Template</strong></div>
+      <div class="card-body">
+        <table class="table table-sm">
+          <tr><th>Type</th><td>{{ template.get_assembly_type_display }}</td></tr>
+          <tr><th>Manufacturer</th><td>{{ template.manufacturer|default:"&mdash;" }}</td></tr>
+          <tr><th>Part Number</th><td>{{ template.part_number|default:"&mdash;" }}</td></tr>
+          <tr><th>Device Type</th><td>{{ template.device_type|default:"&mdash;" }}</td></tr>
+          <tr><th>A-Side Connectors</th><td>{{ template.a_connectors.count }}</td></tr>
+          <tr><th>B-Side Connectors</th><td>{{ template.b_connectors.count }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-8">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if result %}
+      <div class="alert alert-success">
+        <strong>Stamp successful!</strong>
+        Created device: <a href="{{ result.device.get_absolute_url }}">{{ result.device }}</a>
+        {% if result.rear_ports %}({{ result.rear_ports|length }} rear ports, {{ result.front_ports|length }} front ports, {{ result.port_mappings|length }} mappings){% endif %}
+      </div>
+      <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
+      <a href="{{ result.device.get_absolute_url }}" class="btn btn-primary">View Device</a>
+    {% else %}
+      <div class="card">
+        <div class="card-header"><strong>Stamp Parameters</strong></div>
+        <div class="card-body">
+          <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <div class="d-flex gap-2 mt-3">
+              <button type="submit" class="btn btn-primary">Stamp Passive Device</button>
+              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

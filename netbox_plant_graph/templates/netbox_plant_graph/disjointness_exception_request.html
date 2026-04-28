@@ -1,0 +1,75 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Request Disjointness Exception</h1>
+
+<p class="text-muted">
+  A disjointness exception records a known, sanctioned crossing between two fabric planes.
+  Use this form to document an exception where two planes intentionally share a passive artifact,
+  fine edge, or contamination domain. Submitted exceptions start in <strong>Draft</strong> status
+  and must be approved before they suppress audit findings.
+</p>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row">
+  <div class="col-md-8">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Exception Details</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger">
+              {% for error in form.non_field_errors %}
+                <div>{{ error }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% for field in form %}
+            <div class="mb-3">
+              <label for="{{ field.id_for_label }}" class="form-label">
+                {{ field.label }}{% if field.field.required %} <span class="text-danger">*</span>{% endif %}
+              </label>
+              {{ field }}
+              {% if field.help_text %}
+                <div class="form-text text-muted">{{ field.help_text }}</div>
+              {% endif %}
+              {% for error in field.errors %}
+                <div class="text-danger small">{{ error }}</div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+          <div class="d-flex gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Submit Exception Request</button>
+            <a href="{% url 'plugins:netbox_plant_graph:disjointness-exception_list' %}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><strong>When to use this</strong></div>
+      <div class="card-body">
+        <ul class="mb-0">
+          <li><strong>Shared Passive Artifact</strong> — a patch panel or passive device that is physically wired into more than one plane.</li>
+          <li><strong>Cross-Plane Fine Edge</strong> — a direct lane-level connection that intentionally bridges two planes.</li>
+          <li><strong>Contamination Domain</strong> — a broader topology region where plane isolation is knowingly relaxed.</li>
+        </ul>
+        <p class="text-muted mt-2 mb-0">
+          Exceptions in <em>Draft</em> status do not suppress audit findings.
+          An operator with approval rights must approve the exception after review.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

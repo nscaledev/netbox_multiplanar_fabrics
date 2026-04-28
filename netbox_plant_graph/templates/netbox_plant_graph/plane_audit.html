@@ -62,51 +62,133 @@
             <th>Type</th>
             <th>Object</th>
             <th>Message</th>
-            <th>Metadata</th>
-            <th>Actions</th>
+            <th>Durable State</th>
+            <th>Impact</th>
+            <th>Guidance</th>
           </tr>
         </thead>
         <tbody>
-          {% for finding in result.findings %}
+          {% for row in finding_rows %}
             <tr>
-              <td>{{ finding.severity }}</td>
-              <td>{{ finding.finding_type }}</td>
+              <td>{{ row.finding.severity }}</td>
+              <td>{{ row.finding.finding_type }}</td>
               <td>
-                {% if finding.object.url %}
-                  <a href="{{ finding.object.url }}">{{ finding.object.display }}</a>
+                {% if row.finding.object.url %}
+                  <a href="{{ row.finding.object.url }}">{{ row.finding.object.display }}</a>
                 {% else %}
-                  {{ finding.object.display }}
+                  {{ row.finding.object.display }}
                 {% endif %}
               </td>
-              <td>{{ finding.message }}</td>
+              <td>{{ row.finding.message }}</td>
               <td>
-                {% if finding.metadata %}
-                  <ul class="mb-0 ps-3">
-                    {% for key, value in finding.metadata.items %}
+                {% if row.durable_finding %}
+                  <div class="mb-2">
+                    <strong>Status:</strong>
+                    <a href="{{ row.durable_finding.get_absolute_url }}">{{ row.durable_finding.status }}</a>
+                  </div>
+                  <ul class="mb-3 ps-3">
+                    <li>Active: {{ row.durable_finding.active|yesno:"Yes,No" }}</li>
+                    <li>Assigned: {{ row.durable_finding.assigned_to|default:"None" }}</li>
+                    <li>Acknowledged: {{ row.durable_finding.acknowledged_by|default:"None" }}</li>
+                    {% if row.active_suppression %}
+                      <li>Suppressed until: {{ row.active_suppression.expires_at|default:"Never" }}</li>
+                      <li>Suppression reason: {{ row.active_suppression.reason|default:"None" }}</li>
+                    {% endif %}
+                  </ul>
+                  <div class="d-flex flex-wrap gap-2">
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ row.durable_finding.get_absolute_url }}">Durable Detail</a>
+                    {% for action in row.durable_actions %}
+                      <form method="post" action="{{ action.url }}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary">{{ action.label }}</button>
+                      </form>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <div class="text-muted mb-2">No durable finding recorded yet.</div>
+                  {% if selected_fabric %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
+                  {% endif %}
+                {% endif %}
+                {% if row.related_unresolved_summaries %}
+                  <div class="mt-3">
+                    <strong>Related Unresolved Summaries</strong>
+                    <ul class="mb-2 ps-3">
+                      {% for summary in row.related_unresolved_summaries %}
+                        <li>
+                          <a href="{{ summary.summary.url }}">{{ summary.cause_code }}</a>
+                          {% if summary.scope_label %}({{ summary.scope_label }}){% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </td>
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% if row.detail.impact.plane_ids %}
+                    <li>Planes: {{ row.detail.impact.plane_ids|join:", " }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.affected_attachment_units is not None %}
+                    <li>Attachment units: {{ row.detail.impact.affected_attachment_units }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.present_lane_total is not None %}
+                    <li>Lanes: {{ row.detail.impact.present_lane_total }} / {{ row.detail.impact.expected_lane_total }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.mapped_lane_total is not None %}
+                    <li>Mapped lanes: {{ row.detail.impact.mapped_lane_total }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.unmatched_peer_positions %}
+                    <li>Unmatched positions: {{ row.detail.impact.unmatched_peer_positions|join:", " }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.lane_map_consistency %}
+                    <li>Lane consistency: {{ row.detail.impact.lane_map_consistency }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.plane_consistency %}
+                    <li>Plane consistency: {{ row.detail.impact.plane_consistency }}</li>
+                  {% endif %}
+                  {% if row.detail.impact.related_targets %}
+                    <li>
+                      Related targets:
+                      {% for target in row.detail.impact.related_targets %}
+                        {% if target.url %}
+                          <a href="{{ target.url }}">{{ target.display }}</a>
+                        {% else %}
+                          {{ target.display }}
+                        {% endif %}
+                        {% if not forloop.last %}, {% endif %}
+                      {% endfor %}
+                    </li>
+                  {% endif %}
+                  {% if row.detail.metadata %}
+                    {% for key, value in row.detail.metadata.items %}
                       <li><code>{{ key }}</code>: {{ value }}</li>
                     {% endfor %}
-                  </ul>
-                {% else %}
-                  <span class="text-muted">-</span>
-                {% endif %}
+                  {% endif %}
+                </ul>
               </td>
               <td>
-                <div class="d-flex flex-wrap gap-2">
-                  {% if finding.object.path_resolver_url %}
-                    <a class="btn btn-sm btn-outline-primary" href="{{ finding.object.path_resolver_url }}">Path</a>
-                  {% endif %}
-                  {% if finding.object.blast_radius_url %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ finding.object.blast_radius_url }}">Radius</a>
-                  {% endif %}
-                  {% if finding.object.lane_drilldown_url %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ finding.object.lane_drilldown_url }}">Lanes</a>
-                  {% endif %}
-                </div>
+                <div class="mb-2">{{ row.detail.summary }}</div>
+                {% if row.detail.remediation_hints %}
+                  <ul class="mb-3 ps-3">
+                    {% for hint in row.detail.remediation_hints %}
+                      <li>{{ hint }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+                {% if row.detail.action_links %}
+                  <div class="d-flex flex-wrap gap-2">
+                    {% for action in row.detail.action_links %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ action.url }}">{{ action.label }}</a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
               </td>
             </tr>
           {% empty %}
             <tr>
-              <td colspan="6">No findings for this fabric.</td>
+              <td colspan="7">No findings for this fabric.</td>
             </tr>
           {% endfor %}
         </tbody>

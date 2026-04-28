@@ -1,0 +1,27 @@
+const { chromium } = require('../.tmp/playwright-run/node_modules/playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1200 } });
+  const dismiss = async () => { const hide = page.locator('#djHideToolBarButton'); if (await hide.count()) { try { await hide.first().click({ timeout: 1500 }); await page.waitForTimeout(250); } catch {} } };
+  await page.goto('http://127.0.0.1:8000/login/?next=/', { waitUntil: 'networkidle' });
+  await dismiss();
+  await page.getByLabel('Username').fill('admin');
+  await page.getByLabel('Password').fill('Ig49XIWlQIzmzYYSaYEGKOvc');
+  await page.locator('form button[type="submit"]').first().click();
+  await page.waitForLoadState('networkidle');
+  await dismiss();
+  await page.goto('http://127.0.0.1:8000/tenancy/tenants/add/', { waitUntil: 'networkidle' });
+  await dismiss();
+  await page.getByLabel('Name').fill('Operator');
+  await page.locator('button.reslug').click();
+  await page.waitForFunction(() => document.querySelector('#id_slug')?.value === 'operator');
+  await page.getByLabel('Description').fill('Infrastructure owner for shared resources');
+  await page.locator('form button[name="_create"]').click();
+  await page.waitForLoadState('networkidle');
+  await dismiss();
+  console.log('url', page.url());
+  console.log('alerts', await page.locator('.alert').allTextContents());
+  console.log('h1', await page.locator('h1').first().textContent().catch(()=>null));
+  await page.screenshot({ path: 'docs/images/runbook-roce-phase1-ui/probe-create-after-fix.png', fullPage: true });
+  await browser.close();
+})();

@@ -1,0 +1,72 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 gap-3">
+  <h1 class="mb-0">{{ page_title }}</h1>
+  <a href="{{ fabric.get_absolute_url }}" class="btn btn-sm btn-outline-secondary">← Back to Fabric</a>
+</div>
+
+{% if not attachment_units %}
+  <div class="alert alert-info">No attachment units are associated with this fabric.</div>
+{% else %}
+  <div class="card">
+    <div class="card-header"><strong>Plane Assignment Matrix</strong></div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Attachment Unit</th>
+              {% for plane in planes %}
+                <th class="text-center">Plane {{ plane.plane_number }}</th>
+              {% endfor %}
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in matrix_rows %}
+              <tr>
+                <td>
+                  <a href="{{ row.unit.get_absolute_url }}">{{ row.unit.name }}</a>
+                  {% with tp=row.unit.termination_point %}
+                    <small class="text-muted d-block">{{ tp.plant_node.name }} / {{ tp.name }}</small>
+                  {% endwith %}
+                </td>
+                {% for cell in row.cells %}
+                  <td class="text-center">
+                    <form method="post" class="mb-0 d-inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="toggle">
+                      <input type="hidden" name="unit_pk" value="{{ row.unit.pk }}">
+                      <input type="hidden" name="plane_pk" value="{{ cell.plane.pk }}">
+                      <button type="submit"
+                              class="btn btn-sm {% if cell.assigned %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                              title="{% if cell.assigned %}Assigned — click to remove{% else %}Not assigned — click to add{% endif %}">
+                        {% if cell.assigned %}✓{% else %}—{% endif %}
+                      </button>
+                    </form>
+                  </td>
+                {% endfor %}
+                <td class="text-nowrap">
+                  <form method="post" class="d-inline me-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="assign_all">
+                    <input type="hidden" name="unit_pk" value="{{ row.unit.pk }}">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Assign All</button>
+                  </form>
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="remove_all">
+                    <input type="hidden" name="unit_pk" value="{{ row.unit.pk }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Remove All</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

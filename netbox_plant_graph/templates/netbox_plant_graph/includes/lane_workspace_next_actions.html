@@ -1,0 +1,12 @@
+<div class="card mb-3">
+  <div class="card-header">Next Actions</div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-2">
+      {% for action in workspace.next_actions %}
+        <a class="btn btn-sm btn-outline-primary" href="{{ action.url }}">{{ action.label }}</a>
+      {% empty %}
+        <span class="text-muted">No scoped next actions are available.</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>

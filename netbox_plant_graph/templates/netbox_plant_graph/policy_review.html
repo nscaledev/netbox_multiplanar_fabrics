@@ -1,0 +1,204 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Policy Review</h1>
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label" for="fabric_id">Fabric</label>
+        <select class="form-select" id="fabric_id" name="fabric_id">
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="plane_id">Plane</label>
+        <select class="form-select" id="plane_id" name="plane_id">
+          <option value="">All planes</option>
+          {% for plane in plane_choices %}
+            <option value="{{ plane.pk }}"{% if selected_plane and plane.pk == selected_plane.pk %} selected{% endif %}>{{ plane.fabric.name }} / Plane {{ plane.plane_number }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Review</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if evaluation %}
+  <div class="row">
+    <div class="col-lg-5 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Policy Summary</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Fabric</dt>
+            <dd class="col-sm-7">
+              {% if evaluation.fabric.url %}
+                <a href="{{ evaluation.fabric.url }}">{{ evaluation.fabric.display }}</a>
+              {% else %}
+                {{ evaluation.fabric.display }}
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Policy Mode</dt>
+            <dd class="col-sm-7">{{ evaluation.policy_mode }}</dd>
+            <dt class="col-sm-5">Artifact Shares</dt>
+            <dd class="col-sm-7">{{ evaluation.artifact_shares|length }}</dd>
+            <dt class="col-sm-5">Edge Bridges</dt>
+            <dd class="col-sm-7">{{ evaluation.edge_bridges|length }}</dd>
+            <dt class="col-sm-5">Domains</dt>
+            <dd class="col-sm-7">{{ domain_rows|length }}</dd>
+            <dt class="col-sm-5">Active Exceptions</dt>
+            <dd class="col-sm-7">{{ exception_review.active_exceptions|length }}</dd>
+            <dt class="col-sm-5">Covered Exceptions</dt>
+            <dd class="col-sm-7">{{ exception_review.covered_exception_ids|length }}</dd>
+            <dt class="col-sm-5">Drifted Exceptions</dt>
+            <dd class="col-sm-7">{{ exception_review.drifted_exceptions|length }}</dd>
+          </dl>
+          {% if plane_filter_note %}
+            <div class="alert alert-info mb-0 mt-3">{{ plane_filter_note }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Evidence Surface</div>
+        <div class="card-body">
+          <ul class="mb-3">
+            <li>Policy findings still surface the evidence even when an active exception downgrades severity.</li>
+            <li>Contamination domains are grouped deterministically from artifact shares and cross-plane bridges.</li>
+            <li>Active exceptions are topology intent; suppressions remain audit-workflow presentation state.</li>
+          </ul>
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_compare' %}">Lane Compare</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:disjointness-exception_list' %}">Exception List</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:disjointness-exception_add' %}">Add Exception</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Contamination Domains</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Planes</th>
+            <th>Artifacts</th>
+            <th>Attachment Units</th>
+            <th>Signal Lanes</th>
+            <th>Exception Coverage</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in domain_rows %}
+            <tr>
+              <td><code>{{ row.domain.domain_key|slice:":12" }}</code></td>
+              <td>{{ row.domain.plane_ids|join:", " }}</td>
+              <td>
+                {% for artifact in row.domain.artifacts %}
+                  {% if not forloop.first %}, {% endif %}
+                  {% if artifact.url %}<a href="{{ artifact.url }}">{{ artifact.display }}</a>{% else %}{{ artifact.display }}{% endif %}
+                {% endfor %}
+              </td>
+              <td>{{ row.domain.attachment_units|length }}</td>
+              <td>{{ row.domain.signal_lane_count }}</td>
+              <td>
+                {% if row.matched_exceptions %}
+                  {% for exception in row.matched_exceptions %}
+                    {% if not forloop.first %}, {% endif %}
+                    <a href="{{ exception.get_absolute_url }}">{{ exception.exception_type }}</a>
+                  {% endfor %}
+                {% else %}
+                  <span class="text-muted">None</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  <a class="btn btn-sm btn-outline-primary" href="{{ row.workspace_url }}">Lane Workspace</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ row.finding_url }}">Policy Findings</a>
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7">No contamination domains are active for the selected scope.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Active Exceptions</div>
+    <div class="card-body">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Exception</th>
+            <th>Target</th>
+            <th>Plane Pair</th>
+            <th>Coverage</th>
+            <th>Expires</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in exception_rows %}
+            <tr>
+              <td><a href="{{ row.exception.get_absolute_url }}">{{ row.exception.exception_type }}</a></td>
+              <td>
+                {% if row.target_reference %}
+                  {% if row.target_reference.url %}
+                    <a href="{{ row.target_reference.url }}">{{ row.target_reference.display }}</a>
+                  {% else %}
+                    {{ row.target_reference.display }}
+                  {% endif %}
+                {% else %}
+                  <span class="text-muted">None</span>
+                {% endif %}
+              </td>
+              <td>{{ row.exception.plane_a }} / {{ row.exception.plane_b }}</td>
+              <td>
+                {% if row.covered %}
+                  Covered
+                {% else %}
+                  <span class="text-warning">Drifted</span>
+                {% endif %}
+              </td>
+              <td>{{ row.exception.expires_at|default:'Never' }}</td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  {% for action in row.actions %}
+                    <form method="post" action="{{ action.url }}">
+                      {% csrf_token %}
+                      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                      <button type="submit" class="btn btn-sm btn-outline-secondary">{{ action.label }}</button>
+                    </form>
+                  {% endfor %}
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="6">No active disjointness exceptions are defined for the selected scope.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

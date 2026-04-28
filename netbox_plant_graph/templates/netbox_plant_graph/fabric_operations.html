@@ -1,0 +1,165 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>Fabric Operations — {{ object.name }}</h1>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="card mb-3">
+  <div class="card-header"><strong>Fabric Info</strong></div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-4">Name</dt>
+      <dd class="col-sm-8">{{ object.name }}</dd>
+      <dt class="col-sm-4">Description</dt>
+      <dd class="col-sm-8">{{ object.description|default:"&mdash;" }}</dd>
+      <dt class="col-sm-4">Tenant</dt>
+      <dd class="col-sm-8">
+        {% if object.resolved_tenant %}
+          <a href="{{ object.resolved_tenant.get_absolute_url }}">{{ object.resolved_tenant }}</a>
+        {% else %}
+          &mdash;
+        {% endif %}
+      </dd>
+      <dt class="col-sm-4">Expected Planes</dt>
+      <dd class="col-sm-8">{{ object.expected_plane_count }}</dd>
+      <dt class="col-sm-4">Tier Depth</dt>
+      <dd class="col-sm-8">{{ object.tier_depth }}</dd>
+      <dt class="col-sm-4">Disjointness Policy</dt>
+      <dd class="col-sm-8">{{ object.get_disjointness_policy_display }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Graph Builds card -->
+  <div class="col-lg-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Graph Builds</strong>
+        <form method="post" class="mb-0">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="rebuild">
+          <button type="submit" class="btn btn-sm btn-primary">Trigger Graph Rebuild</button>
+        </form>
+      </div>
+      <div class="card-body p-0">
+        {% if recent_builds %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Tenant</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for run in recent_builds %}
+                <tr>
+                  <td><a href="{{ run.get_absolute_url }}">{{ run }}</a></td>
+                  <td>
+                    {% if run.resolved_tenant %}
+                      <a href="{{ run.resolved_tenant.get_absolute_url }}">{{ run.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if run.status == 'completed' %}
+                      <span class="badge bg-success">{{ run.status }}</span>
+                    {% elif run.status == 'failed' %}
+                      <span class="badge bg-danger">{{ run.status }}</span>
+                    {% elif run.status == 'running' or run.status == 'pending' %}
+                      <span class="badge bg-warning text-dark">{{ run.status }}</span>
+                    {% else %}
+                      <span class="badge bg-secondary">{{ run.status }}</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ run.started_at|default:"&mdash;" }}</td>
+                  <td>{{ run.completed_at|default:"&mdash;" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="p-3 text-muted">No graph build runs yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Audit Runs card -->
+  <div class="col-lg-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Audit Runs</strong>
+        <form method="post" class="mb-0">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="audit">
+          <button type="submit" class="btn btn-sm btn-primary">Trigger Audit</button>
+        </form>
+      </div>
+      <div class="card-body p-0">
+        {% if recent_audits %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Tenant</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Findings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for run in recent_audits %}
+                <tr>
+                  <td><a href="{{ run.get_absolute_url }}">{{ run }}</a></td>
+                  <td>
+                    {% if run.resolved_tenant %}
+                      <a href="{{ run.resolved_tenant.get_absolute_url }}">{{ run.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if run.status == 'completed' %}
+                      <span class="badge bg-success">{{ run.status }}</span>
+                    {% elif run.status == 'failed' %}
+                      <span class="badge bg-danger">{{ run.status }}</span>
+                    {% elif run.status == 'running' or run.status == 'pending' %}
+                      <span class="badge bg-warning text-dark">{{ run.status }}</span>
+                    {% else %}
+                      <span class="badge bg-secondary">{{ run.status }}</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ run.started_at|default:"&mdash;" }}</td>
+                  <td>{{ run.finding_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="p-3 text-muted">No audit runs yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">Back to Fabric</a>
+    <a href="{% url 'plugins:netbox_plant_graph:graph-build-run_list' %}?fabric={{ object.pk }}" class="btn btn-outline-primary">All Build Runs</a>
+    <a href="{% url 'plugins:netbox_plant_graph:audit-run_list' %}?fabric={{ object.pk }}" class="btn btn-outline-primary">All Audit Runs</a>
+  </div>
+</div>
+{% endblock %}

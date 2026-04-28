@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 
-from dcim.models import Cable, CablePath, Device, FrontPort, Interface, PortMapping, RearPort
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import Q
+
+from dcim.models import Cable, CablePath, CableTermination, Device, FrontPort, Interface, PortMapping, RearPort
 
 from netbox_plant_graph.models import Fabric
 
@@ -26,33 +29,25 @@ def _scope_value(scope, name):
     return getattr(scope, name, None)
 
 
-def _relevant_device_id(obj):
-    if obj is None:
-        return None
-    if isinstance(obj, Device):
-        return obj.pk
-    return getattr(obj, 'device_id', None)
+def _resolve_scope(scope):
+    fabric = _scope_value(scope, 'fabric')
+    if fabric is None and isinstance(scope, Fabric):
+        fabric = scope
 
+    # Explicit scope parameters win over the fabric's stored scope defaults.
+    site = _scope_value(scope, 'site')
+    if site is None:
+        site = getattr(fabric, 'scope_site', None)
 
-def _path_is_relevant(path, device_ids: set[int]) -> bool:
-    for step in path.path_objects:
-        for obj in step:
-            if _relevant_device_id(obj) in device_ids:
-                return True
-    return False
+    location = _scope_value(scope, 'location')
+    if location is None:
+        location = getattr(fabric, 'scope_location', None)
 
-
-def _cable_is_relevant(cable, device_ids: set[int]) -> bool:
-    for cable_termination in cable.terminations.all():
-        if _relevant_device_id(cable_termination.termination) in device_ids:
-            return True
-    return False
+    return fabric, site, location
 
 
 def extract_source_bundle(*, scope=None) -> SourceBundle:
-    fabric = _scope_value(scope, 'fabric')
-    site = _scope_value(scope, 'site') or getattr(fabric, 'scope_site', None)
-    location = _scope_value(scope, 'location') or getattr(fabric, 'scope_location', None)
+    fabric, site, location = _resolve_scope(scope)
 
     device_queryset = Device.objects.all().select_related('site', 'location', 'device_type', 'role')
     if site is not None:
@@ -70,12 +65,51 @@ def extract_source_bundle(*, scope=None) -> SourceBundle:
     rear_ports = tuple(RearPort.objects.filter(device_id__in=device_ids).select_related('device'))
     port_mappings = tuple(PortMapping.objects.filter(device_id__in=device_ids).select_related('device', 'front_port', 'rear_port'))
 
-    cable_paths = tuple(CablePath.objects.all())
-    cables = tuple(Cable.objects.all().prefetch_related('terminations__termination'))
-
     if device_ids:
-        cable_paths = tuple(path for path in cable_paths if _path_is_relevant(path, device_ids))
-        cables = tuple(cable for cable in cables if _cable_is_relevant(cable, device_ids))
+        # Filter cables at the DB level — avoid loading the entire cable table into memory.
+        iface_ct = ContentType.objects.get_for_model(Interface)
+        fp_ct = ContentType.objects.get_for_model(FrontPort)
+        rp_ct = ContentType.objects.get_for_model(RearPort)
+
+        all_iface_ids = set(interface_queryset.values_list('pk', flat=True))
+        all_fp_ids = set(FrontPort.objects.filter(device_id__in=device_ids).values_list('pk', flat=True))
+        all_rp_ids = set(RearPort.objects.filter(device_id__in=device_ids).values_list('pk', flat=True))
+
+        ct_conditions = Q(termination_type=iface_ct, termination_id__in=all_iface_ids)
+        if all_fp_ids:
+            ct_conditions |= Q(termination_type=fp_ct, termination_id__in=all_fp_ids)
+        if all_rp_ids:
+            ct_conditions |= Q(termination_type=rp_ct, termination_id__in=all_rp_ids)
+
+        relevant_cable_ids = set(
+            CableTermination.objects.filter(ct_conditions).values_list('cable_id', flat=True)
+        )
+        cables = tuple(
+            Cable.objects.filter(pk__in=relevant_cable_ids)
+            .prefetch_related('terminations__termination')
+        )
+
+        # CablePath endpoints: use Interface._path_id FK (direct, indexed).
+        # FrontPort/_path and RearPort/_path are only present in some NetBox versions;
+        # guard with hasattr to avoid FieldError on versions that lack them.
+        path_ids = set(
+            Interface.objects.filter(pk__in=all_iface_ids, _path__isnull=False)
+            .values_list('_path_id', flat=True)
+        )
+        if all_fp_ids and hasattr(FrontPort, '_path'):
+            path_ids |= set(
+                FrontPort.objects.filter(pk__in=all_fp_ids, _path__isnull=False)
+                .values_list('_path_id', flat=True)
+            )
+        if all_rp_ids and hasattr(RearPort, '_path'):
+            path_ids |= set(
+                RearPort.objects.filter(pk__in=all_rp_ids, _path__isnull=False)
+                .values_list('_path_id', flat=True)
+            )
+        cable_paths = tuple(CablePath.objects.filter(pk__in=path_ids)) if path_ids else ()
+    else:
+        cables = ()
+        cable_paths = ()
 
     return SourceBundle(
         fabric=fabric,

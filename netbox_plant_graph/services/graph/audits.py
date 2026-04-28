@@ -4,9 +4,15 @@ from django.contrib.contenttypes.models import ContentType
 
 from dcim.models import Cable, FrontPort, Interface, PortMapping, RearPort
 
-from netbox_plant_graph.models import AttachmentUnit, AuditFinding, Fabric, FineEdge, PlaneMembership, PlantNode, TransferMap
+from netbox_plant_graph.models import AttachmentUnit, Fabric, FineEdge, PlaneMembership, PlantNode, TransferMap
 
+from ...breakout_profiles import (
+    get_breakout_profile_for_cable,
+    get_breakout_profile_name_for_cable,
+    get_plugin_breakout_profile_for_cable,
+)
 from ..netbox.adapters import build_object_reference
+from .policy_evaluator import build_policy_evaluation
 
 
 def _scope_value(scope, name):
@@ -44,8 +50,20 @@ def _iter_path_positions(termination) -> tuple:
     return (None,)
 
 
+def _expected_profile_positions(termination) -> tuple:
+    positions = _iter_path_positions(termination)
+    if positions != (None,) or not isinstance(termination, Interface):
+        return positions
+
+    cable = getattr(termination, 'cable', None)
+    breakout_profile = get_plugin_breakout_profile_for_cable(cable) if cable is not None else None
+    if breakout_profile is not None and breakout_profile.child_count > 1:
+        return tuple(range(1, breakout_profile.child_count + 1))
+    return positions
+
+
 def _cable_requires_explicit_profile(cable) -> bool:
-    if getattr(cable, 'profile', ''):
+    if get_breakout_profile_for_cable(cable) is not None:
         return False
 
     terminations_by_end = defaultdict(list)
@@ -59,11 +77,12 @@ def _cable_requires_explicit_profile(cable) -> bool:
     if any(len(side) != 1 for side in sides):
         return True
 
-    return any(len(_iter_path_positions(termination)) != 1 for side in sides for termination in side)
+    return any(len(_expected_profile_positions(termination)) != 1 for side in sides for termination in side)
 
 
 def _profile_mapping_diagnostics(cable):
-    if not getattr(cable, 'profile_class', None):
+    profile = get_breakout_profile_for_cable(cable)
+    if profile is None:
         return None
 
     terminations_by_end = defaultdict(list)
@@ -76,60 +95,131 @@ def _profile_mapping_diagnostics(cable):
             'unresolved_positions': (),
         }
 
-    profile = cable.profile_class()
-    position_maps = {}
-    for cable_end, terminations in terminations_by_end.items():
-        position_map = {}
-        for termination in terminations:
-            connector = getattr(termination, 'cable_connector', None)
-            for position in _iter_path_positions(termination):
-                position_map[(connector, position)] = termination
-        position_maps[cable_end] = position_map
+    if hasattr(profile, 'get_mapped_position'):
+        position_maps = {}
+        for cable_end, terminations in terminations_by_end.items():
+            position_map = {}
+            for termination in terminations:
+                connector = getattr(termination, 'cable_connector', None)
+                for position in _iter_path_positions(termination):
+                    position_map[(connector, position)] = termination
+            position_maps[cable_end] = position_map
+
+        matched_positions = set()
+        unresolved_positions = {}
+        for cable_end, terminations in terminations_by_end.items():
+            peer_end = 'B' if cable_end == 'A' else 'A'
+            peer_position_map = position_maps.get(peer_end, {})
+            for termination in terminations:
+                for position in _iter_path_positions(termination):
+                    unresolved_key = (cable_end, termination.pk, position)
+                    try:
+                        mapped_position = profile.get_mapped_position(
+                            cable_end,
+                            termination.cable_connector,
+                            position,
+                        )
+                    except (TypeError, ValueError) as exc:
+                        unresolved_positions[unresolved_key] = {
+                            'cable_end': cable_end,
+                            'termination': termination,
+                            'position': position,
+                            'reason': 'profile_error',
+                            'detail': str(exc),
+                        }
+                        continue
+                    if mapped_position is None:
+                        unresolved_positions[unresolved_key] = {
+                            'cable_end': cable_end,
+                            'termination': termination,
+                            'position': position,
+                            'reason': 'profile_returned_none',
+                            'detail': '',
+                        }
+                        continue
+                    mapped_connector, peer_position = mapped_position
+                    if (mapped_connector, peer_position) not in peer_position_map:
+                        unresolved_positions[unresolved_key] = {
+                            'cable_end': cable_end,
+                            'termination': termination,
+                            'position': position,
+                            'reason': 'missing_peer_position',
+                            'detail': f'{mapped_connector}:{peer_position}',
+                        }
+                        continue
+                    matched_positions.add(unresolved_key)
+
+        return {
+            'matched_positions': len(matched_positions),
+            'unresolved_positions': tuple(unresolved_positions.values()),
+        }
+
+    breakout_profile = get_plugin_breakout_profile_for_cable(cable)
+    if breakout_profile is None:
+        return None
 
     matched_positions = set()
-    unresolved_positions = {}
+    unresolved_positions = []
     for cable_end, terminations in terminations_by_end.items():
         peer_end = 'B' if cable_end == 'A' else 'A'
-        peer_position_map = position_maps.get(peer_end, {})
+        peer_terminations = sorted(
+            terminations_by_end.get(peer_end, ()),
+            key=lambda item: (getattr(item, 'name', ''), item.pk),
+        )
         for termination in terminations:
-            for position in _iter_path_positions(termination):
-                unresolved_key = (cable_end, termination.pk, position)
-                try:
-                    mapped_position = profile.get_mapped_position(
-                        cable_end,
-                        termination.cable_connector,
-                        position,
-                    )
-                except (TypeError, ValueError) as exc:
-                    unresolved_positions[unresolved_key] = {
-                        'termination': termination,
-                        'position': position,
-                        'reason': 'profile_error',
-                        'detail': str(exc),
-                    }
-                    continue
-                if mapped_position is None:
-                    unresolved_positions[unresolved_key] = {
+            raw_positions = _expected_profile_positions(termination)
+            if len(peer_terminations) == 1:
+                peer_termination = peer_terminations[0]
+                peer_positions = set(_iter_path_positions(peer_termination))
+                for position in raw_positions:
+                    child_ordinal = breakout_profile.get_child_ordinal(position if position is not None else 1)
+                    if child_ordinal is None:
+                        unresolved_positions.append({
+                            'cable_end': cable_end,
+                            'termination': termination,
+                            'position': position,
+                            'reason': 'profile_returned_none',
+                            'detail': '',
+                        })
+                        continue
+                    peer_position = child_ordinal + 1
+                    if peer_positions != {None} and peer_position not in peer_positions:
+                        unresolved_positions.append({
+                            'cable_end': cable_end,
+                            'termination': termination,
+                            'position': position,
+                            'reason': 'missing_peer_position',
+                            'detail': f'{getattr(peer_termination, "cable_connector", None)}:{peer_position}',
+                        })
+                        continue
+                    matched_positions.add((cable_end, termination.pk, position))
+                continue
+
+            for position in raw_positions:
+                child_ordinal = breakout_profile.get_child_ordinal(position if position is not None else 1)
+                if child_ordinal is None:
+                    unresolved_positions.append({
+                        'cable_end': cable_end,
                         'termination': termination,
                         'position': position,
                         'reason': 'profile_returned_none',
                         'detail': '',
-                    }
+                    })
                     continue
-                mapped_connector, peer_position = mapped_position
-                if (mapped_connector, peer_position) not in peer_position_map:
-                    unresolved_positions[unresolved_key] = {
+                if not (0 <= child_ordinal < len(peer_terminations)):
+                    unresolved_positions.append({
+                        'cable_end': cable_end,
                         'termination': termination,
                         'position': position,
                         'reason': 'missing_peer_position',
-                        'detail': f'{mapped_connector}:{peer_position}',
-                    }
+                        'detail': f'ordinal:{child_ordinal}',
+                    })
                     continue
-                matched_positions.add(unresolved_key)
+                matched_positions.add((cable_end, termination.pk, position))
 
     return {
         'matched_positions': len(matched_positions),
-        'unresolved_positions': tuple(unresolved_positions.values()),
+        'unresolved_positions': tuple(unresolved_positions),
     }
 
 
@@ -156,7 +246,7 @@ def _device_source_ids_for_fabric(fabric):
 
 
 def _profile_requires_child_interfaces(interface) -> bool:
-    return len(_iter_path_positions(interface)) > 1
+    return len(_expected_profile_positions(interface)) > 1
 
 
 def _interface_has_explicit_child_interfaces(interface) -> bool:
@@ -237,19 +327,14 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
             continue
         connected_attachment_ids.add(fine_edge.a_au_id)
         connected_attachment_ids.add(fine_edge.b_au_id)
-        left_planes = plane_sets_by_attachment.get(fine_edge.a_au_id, set())
-        right_planes = plane_sets_by_attachment.get(fine_edge.b_au_id, set())
-        if left_planes and right_planes and left_planes.isdisjoint(right_planes):
-            findings.append(_make_finding(
-                finding_type='cross_plane_fine_edge',
-                severity='error',
-                obj=fine_edge,
-                message='Fine edge bridges two disjoint planes.',
-                metadata={
-                    'left_plane_ids': sorted(left_planes),
-                    'right_plane_ids': sorted(right_planes),
-                },
-            ))
+
+    policy_evaluation = build_policy_evaluation(
+        fabric=fabric,
+        attachment_units=attachment_units,
+        plane_sets_by_attachment=plane_sets_by_attachment,
+        plane_ids=plane_ids,
+    )
+    findings.extend(policy_evaluation.findings)
 
     for transfer_map in TransferMap.objects.filter(owner_node__fabric=fabric):
         connected_attachment_ids.add(transfer_map.src_attachment_unit_id)
@@ -266,22 +351,6 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
             obj=attachment_unit,
             message='Child-interface attachment unit is not connected to any derived graph path.',
         ))
-
-    passive_types = {'patch_panel', 'shuffle_module', 'cassette', 'passive_device'}
-    passive_nodes = PlantNode.objects.filter(fabric=fabric, node_type__in=passive_types)
-    for plant_node in passive_nodes:
-        node_attachment_ids = list(plant_node.termination_points.values_list('attachment_units__pk', flat=True))
-        node_plane_ids = set()
-        for attachment_id in node_attachment_ids:
-            node_plane_ids.update(plane_sets_by_attachment.get(attachment_id, set()))
-        if len(node_plane_ids) > 1:
-            findings.append(_make_finding(
-                finding_type='shared_passive_artifact',
-                severity='warning',
-                obj=plant_node,
-                message='Passive plant node is shared across multiple planes.',
-                metadata={'plane_ids': sorted(node_plane_ids)},
-            ))
 
     for plane in planes:
         if membership_count_by_plane.get(plane.pk, 0) == 0:
@@ -317,7 +386,7 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
                     else 'Cable profile mapping could not be resolved against connected terminations.'
                 ),
                 metadata={
-                    'profile': getattr(cable, 'profile', '') or '',
+                    'profile': get_breakout_profile_name_for_cable(cable),
                     'matched_positions': profile_diagnostics['matched_positions'],
                     'unresolved_positions': len(profile_diagnostics['unresolved_positions']),
                     'first_unresolved_termination': str(first_unresolved['termination']),
@@ -380,7 +449,7 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
                     continue
                 if not _profile_requires_child_interfaces(termination):
                     continue
-                expected_child_count = len(_iter_path_positions(termination))
+                expected_child_count = len(_expected_profile_positions(termination))
                 actual_child_count = _child_interface_count(termination)
                 if actual_child_count == 0:
                     findings.append(_make_finding(
@@ -390,7 +459,7 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
                         message='Channelized interface requires explicit child interfaces for profile-derived mapping.',
                         metadata={
                             'cable_id': cable.pk,
-                            'profile': getattr(cable, 'profile', '') or '',
+                            'profile': get_breakout_profile_name_for_cable(cable),
                             'position_count': expected_child_count,
                         },
                     ))
@@ -403,7 +472,7 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
                         message='Channelized interface exposes only part of the required child-interface set for profile-derived mapping.',
                         metadata={
                             'cable_id': cable.pk,
-                            'profile': getattr(cable, 'profile', '') or '',
+                            'profile': get_breakout_profile_name_for_cable(cable),
                             'expected_child_count': expected_child_count,
                             'actual_child_count': actual_child_count,
                         },
@@ -414,17 +483,95 @@ def run_plane_audit(*, fabric=None, plane_set=None, scope=None):
             severity='error',
             obj=cable,
             message='Cable requires an explicit profile for unambiguous derived mapping.',
-            metadata={'profile': getattr(cable, 'profile', '') or ''},
+            metadata={'profile': get_breakout_profile_name_for_cable(cable)},
         ))
-
-    AuditFinding.objects.filter(
-        object_type__in=ContentType.objects.get_for_models(FineEdge, AttachmentUnit, PlantNode).values(),
-        object_id__in=[attachment.pk for attachment in attachment_units],
-    ).delete()
 
     return {
         'fabric': fabric.pk,
         'plane_set': tuple(plane.pk for plane in planes),
         'scope': scope,
+        'findings': findings,
+    }
+
+
+def run_tier_depth_audit(*, fabric=None, scope=None):
+    """
+    Verify that each PlantNode's recorded tier_level matches the fabric's
+    tier_role_map, and that every expected tier level has at least one node.
+
+    Findings produced:
+    - ``tier_depth_mismatch`` (severity=warning) — a PlantNode whose
+      ``metadata['tier_level']`` disagrees with ``tier_role_map[node.role]``.
+      This typically means the map was changed after the last graph rebuild.
+    - ``tier_level_missing_nodes`` (severity=warning) — a tier level defined
+      in ``tier_role_map`` has no PlantNodes assigned to it in the current
+      graph, indicating the fabric may be partially populated.
+
+    Returns a dict with keys ``fabric``, ``tier_role_map``, and ``findings``.
+    """
+    fabric = _normalize_fabric(fabric=fabric, scope=scope)
+    if fabric is None:
+        return {'fabric': None, 'tier_role_map': {}, 'findings': []}
+
+    tier_role_map = getattr(fabric, 'tier_role_map', None) or {}
+    if not tier_role_map:
+        # No map configured — tier-depth auditing is not applicable.
+        return {'fabric': fabric.pk, 'tier_role_map': {}, 'findings': []}
+
+    expected_levels = set(tier_role_map.values())
+    nodes = list(PlantNode.objects.filter(fabric=fabric))
+
+    findings = []
+    levels_with_nodes = set()
+
+    for node in nodes:
+        node_role = node.role or ''
+        if node_role not in tier_role_map:
+            continue
+
+        expected_level = tier_role_map[node_role]
+        actual_level = (node.metadata or {}).get('tier_level')
+        levels_with_nodes.add(actual_level)
+
+        if actual_level != expected_level:
+            findings.append(_make_finding(
+                finding_type='tier_depth_mismatch',
+                severity='warning',
+                obj=node,
+                message=(
+                    f'PlantNode role {node_role!r} expects tier_level={expected_level} '
+                    f'per fabric tier_role_map, but node.metadata["tier_level"]={actual_level!r}. '
+                    'Re-run a full graph rebuild to refresh tier assignments.'
+                ),
+                metadata={
+                    'role': node_role,
+                    'expected_tier_level': expected_level,
+                    'actual_tier_level': actual_level,
+                },
+            ))
+
+    # Coverage check: every expected tier level should have at least one node.
+    for level in sorted(expected_levels):
+        if level not in levels_with_nodes:
+            # Find which roles map to this level for a helpful message.
+            roles_for_level = [r for r, v in tier_role_map.items() if v == level]
+            findings.append(_make_finding(
+                finding_type='tier_level_missing_nodes',
+                severity='warning',
+                obj=fabric,
+                message=(
+                    f'Tier level {level} (role(s): {roles_for_level}) has no PlantNodes in the '
+                    'current graph. The fabric may be incompletely populated or the tier_role_map '
+                    'references roles not present in the fabric scope.'
+                ),
+                metadata={
+                    'missing_tier_level': level,
+                    'roles': roles_for_level,
+                },
+            ))
+
+    return {
+        'fabric': fabric.pk,
+        'tier_role_map': tier_role_map,
         'findings': findings,
     }

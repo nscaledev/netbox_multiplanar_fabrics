@@ -1,0 +1,25 @@
+const fs = require('fs');
+const { chromium } = require('../.tmp/playwright-run/node_modules/playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1200 } });
+  const dismiss = async () => { const hide = page.locator('#djHideToolBarButton'); if (await hide.count()) { try { await hide.first().click({ timeout: 1500 }); await page.waitForTimeout(250); } catch {} } };
+  await page.goto('http://127.0.0.1:8000/login/?next=/', { waitUntil: 'networkidle' });
+  await dismiss();
+  await page.getByLabel('Username').fill('admin');
+  await page.getByLabel('Password').fill('Ig49XIWlQIzmzYYSaYEGKOvc');
+  await page.locator('form button[type="submit"]').first().click();
+  await page.waitForLoadState('networkidle');
+  await dismiss();
+  await page.goto('http://127.0.0.1:8000/tenancy/tenants/15/edit/', { waitUntil: 'networkidle' });
+  await dismiss();
+  console.log('url', page.url());
+  console.log('title', await page.title());
+  console.log('group label count', await page.getByLabel('Group').count());
+  console.log('id_group count', await page.locator('#id_group').count());
+  console.log('api-select count', await page.locator('.api-select').count());
+  const html = await page.content();
+  fs.writeFileSync('docs/images/runbook-roce-phase1-ui/tenant-edit-dom.html', html);
+  await page.screenshot({ path: 'docs/images/runbook-roce-phase1-ui/tenant-edit-dom.png', fullPage: true });
+  await browser.close();
+})();

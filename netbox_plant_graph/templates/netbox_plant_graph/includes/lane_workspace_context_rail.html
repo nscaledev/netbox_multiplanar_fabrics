@@ -1,0 +1,60 @@
+<div class="card mb-3 lane-workspace-panel" id="lane-workspace-context" tabindex="-1">
+  <div class="card-header">Context Rail</div>
+  <div class="card-body">
+    <div class="mb-3">
+      <div class="small text-muted mb-1">Focus Navigation</div>
+      <div class="d-flex flex-wrap gap-2" role="navigation" aria-label="Workspace focus navigation">
+        <a class="btn btn-sm {% if query.focus == 'summary' %}btn-primary{% else %}btn-outline-primary{% endif %}"{% if query.focus == 'summary' %} aria-current="page"{% endif %} aria-controls="lane-workspace-main" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode={{ query.mode }}&focus=summary{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.lane_index or query.lane_index == 0 %}&lane_index={{ query.lane_index }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Summary</a>
+        <a class="btn btn-sm {% if query.focus == 'paths' %}btn-primary{% else %}btn-outline-primary{% endif %}"{% if query.focus == 'paths' %} aria-current="page"{% endif %} aria-controls="lane-workspace-main" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode={{ query.mode }}&focus=paths{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.lane_index or query.lane_index == 0 %}&lane_index={{ query.lane_index }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Paths</a>
+        <a class="btn btn-sm {% if query.focus == 'findings' %}btn-primary{% else %}btn-outline-primary{% endif %}"{% if query.focus == 'findings' %} aria-current="page"{% endif %} aria-controls="lane-workspace-main" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode={{ query.mode }}&focus=findings{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.lane_index or query.lane_index == 0 %}&lane_index={{ query.lane_index }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Findings</a>
+        <a class="btn btn-sm {% if query.focus == 'actions' %}btn-primary{% else %}btn-outline-primary{% endif %}"{% if query.focus == 'actions' %} aria-current="page"{% endif %} aria-controls="lane-workspace-main" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode={{ query.mode }}&focus=actions{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.lane_index or query.lane_index == 0 %}&lane_index={{ query.lane_index }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Actions</a>
+        <a class="btn btn-sm {% if query.focus == 'compare' %}btn-primary{% else %}btn-outline-primary{% endif %}"{% if query.focus == 'compare' %} aria-current="page"{% endif %} aria-controls="lane-workspace-main" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode={{ query.mode }}&focus=compare{% if query.group_key %}&group_key={{ query.group_key }}{% endif %}{% if query.lane_index or query.lane_index == 0 %}&lane_index={{ query.lane_index }}{% endif %}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Compare</a>
+      </div>
+    </div>
+
+    {% if workspace.source_finding_backlink %}
+      <div class="mb-3">
+        <div class="small text-muted mb-1">Origin</div>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.source_finding_backlink.url }}">{{ workspace.source_finding_backlink.label }}</a>
+      </div>
+    {% endif %}
+
+    <dl class="row mb-3">
+      <dt class="col-sm-6">Lane Consistency</dt>
+      <dd class="col-sm-6">{{ allocation_summary.lane_map_consistency }}</dd>
+      <dt class="col-sm-6">Plane Consistency</dt>
+      <dd class="col-sm-6">{{ allocation_summary.plane_consistency }}</dd>
+      <dt class="col-sm-6">Incomplete Units</dt>
+      <dd class="col-sm-6">{{ allocation_summary.incomplete_attachment_units }}</dd>
+      <dt class="col-sm-6">Available Lanes</dt>
+      <dd class="col-sm-6">{% if workspace.available_lane_indexes %}{{ workspace.available_lane_indexes|join:", " }}{% else %}<span class="text-muted">None</span>{% endif %}</dd>
+      {% if workspace.group_by == 'path' and workspace.selected_path_group %}
+        <dt class="col-sm-6">Path Lanes</dt>
+        <dd class="col-sm-6">{{ workspace.selected_path_group.lane_indexes|join:", " }}</dd>
+      {% endif %}
+    </dl>
+
+    {% if unresolved_overview %}
+      <div class="fw-semibold mb-1">Active Unresolved Summaries</div>
+      <div class="small text-muted mb-1">Durable Unresolved State</div>
+      <ul class="mb-3">
+        <li>Active summaries: {{ unresolved_overview.active_total }}</li>
+        <li>Resolved summaries: {{ unresolved_overview.resolved_total }}</li>
+        {% for summary in unresolved_overview.summaries %}
+          <li>
+            {% if summary.summary.url %}
+              <a href="{{ summary.summary.url }}">{{ summary.cause_code }}</a>
+            {% else %}
+              {{ summary.cause_code }}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      {% if unresolved_summaries_url %}
+        <a class="btn btn-sm btn-outline-secondary" href="{{ unresolved_summaries_url }}">Unresolved Summaries</a>
+      {% endif %}
+    {% else %}
+      <p class="mb-0">No durable unresolved summaries are scoped to this target.</p>
+    {% endif %}
+  </div>
+</div>

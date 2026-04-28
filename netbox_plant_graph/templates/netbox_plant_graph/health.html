@@ -14,7 +14,12 @@
         </select>
       </div>
       <div class="col-md-2 align-self-end">
-        <button type="submit" class="btn btn-primary">Refresh</button>
+        <div class="d-flex flex-wrap gap-2">
+          <button type="submit" class="btn btn-primary">Refresh</button>
+          {% if selected_fabric %}
+            <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
+          {% endif %}
+        </div>
       </div>
     </form>
   </div>
@@ -43,7 +48,7 @@
         </div>
       </div>
     </div>
-    <div class="col-lg-8 mb-3">
+    <div class="col-lg-4 mb-3">
       <div class="card h-100">
         <div class="card-header">Finding Counts</div>
         <div class="card-body">
@@ -54,6 +59,36 @@
               <li>No findings.</li>
             {% endfor %}
           </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Durable Unresolved State</div>
+        <div class="card-body">
+          {% if unresolved_overview %}
+            <dl class="row mb-3">
+              <dt class="col-sm-6">Active Summaries</dt>
+              <dd class="col-sm-6">{{ unresolved_overview.active_total }}</dd>
+              <dt class="col-sm-6">Resolved Summaries</dt>
+              <dd class="col-sm-6">{{ unresolved_overview.resolved_total }}</dd>
+            </dl>
+            <ul class="mb-3">
+              {% for metric in unresolved_overview.cause_counts %}
+                <li>{{ metric.name }}: {{ metric.value }}</li>
+              {% empty %}
+                <li>No active unresolved summaries.</li>
+              {% endfor %}
+            </ul>
+            <div class="d-flex flex-wrap gap-2">
+              {% if unresolved_summaries_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ unresolved_summaries_url }}">Unresolved Summaries</a>
+              {% endif %}
+              <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:graph-build-run_list' %}">Graph Build Runs</a>
+            </div>
+          {% else %}
+            <p class="mb-0">No durable unresolved data is available.</p>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -71,6 +106,7 @@
             <th>Findings</th>
             <th>Errors</th>
             <th>Warnings</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -88,10 +124,21 @@
               <td>{{ plane.finding_count }}</td>
               <td>{{ plane.error_count }}</td>
               <td>{{ plane.warning_count }}</td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  {% if plane.plane.lane_workspace_url %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ plane.plane.lane_workspace_url }}">Lane Workspace</a>
+                  {% endif %}
+                  {% if plane.durable_findings_url %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ plane.durable_findings_url }}">Durable Findings</a>
+                  {% endif %}
+                  <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+                </div>
+              </td>
             </tr>
           {% empty %}
             <tr>
-              <td colspan="6">No planes found for this fabric.</td>
+              <td colspan="7">No planes found for this fabric.</td>
             </tr>
           {% endfor %}
         </tbody>

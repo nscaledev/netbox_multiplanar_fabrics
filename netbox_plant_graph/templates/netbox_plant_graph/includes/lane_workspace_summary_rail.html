@@ -1,0 +1,71 @@
+<div class="card mb-3 lane-workspace-panel" id="lane-workspace-summary" tabindex="-1">
+  <div class="card-header">Summary Rail</div>
+  <div class="card-body">
+    <dl class="row mb-3">
+      <dt class="col-sm-5">Target</dt>
+      <dd class="col-sm-7">
+        {% if workspace.target.url %}
+          <a href="{{ workspace.target.url }}">{{ workspace.target.display }}</a>
+        {% else %}
+          {{ workspace.target.display }}
+        {% endif %}
+      </dd>
+      <dt class="col-sm-5">Scope</dt>
+      <dd class="col-sm-7">{{ lane_set.scope_kind }}</dd>
+      <dt class="col-sm-5">Mode</dt>
+      <dd class="col-sm-7">{{ workspace.mode_label }}</dd>
+      <dt class="col-sm-5">Grouping</dt>
+      <dd class="col-sm-7">{{ workspace.group_by_label }}</dd>
+      <dt class="col-sm-5">Focus</dt>
+      <dd class="col-sm-7">{{ workspace.focus_label }}</dd>
+      <dt class="col-sm-5">Attachment Units</dt>
+      <dd class="col-sm-7">{{ lane_set.total_attachment_units }}</dd>
+      <dt class="col-sm-5">Lanes Present</dt>
+      <dd class="col-sm-7">{{ lane_set.present_lane_total }} / {{ lane_set.expected_lane_total }}</dd>
+      <dt class="col-sm-5">Mapped Lanes</dt>
+      <dd class="col-sm-7">{{ lane_set.mapped_lane_total }}</dd>
+      <dt class="col-sm-5">Missing Lanes</dt>
+      <dd class="col-sm-7">{{ lane_set.missing_lane_total }}</dd>
+    </dl>
+
+    <div class="mb-3">
+      <div class="small text-muted mb-1">Visible Filters</div>
+      {% if workspace.filter_chips %}
+        <div class="d-flex flex-wrap gap-2">
+          {% for chip in workspace.filter_chips %}
+            {% if chip.clear_url %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ chip.clear_url }}">{{ chip.label }}</a>
+            {% else %}
+              <span class="badge text-bg-light">{{ chip.label }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="mb-0 text-muted">No active narrowing filters.</p>
+      {% endif %}
+    </div>
+
+    {% if workspace.query.notes %}
+      <div class="alert alert-warning mb-3">
+        <ul class="mb-0">
+          {% for note in workspace.query.notes %}
+            <li>{{ note }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="d-flex flex-wrap gap-2">
+      {% if workspace.target.lane_drilldown_url %}
+        <a class="btn btn-sm btn-outline-primary" href="{{ workspace.target.lane_drilldown_url }}">Lane Drilldown</a>
+      {% endif %}
+      <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:lane_compare' %}?baseline_registry_key={{ query.target_registry_key }}&baseline_id={{ query.target_id }}">Compare Mode</a>
+      {% if workspace.target.signal_path_resolver_url %}
+        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_path_resolver_url }}">Signal Path</a>
+      {% endif %}
+      {% if workspace.target.signal_blast_radius_url %}
+        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_blast_radius_url }}">Signal Radius</a>
+      {% endif %}
+    </div>
+  </div>
+</div>

@@ -1,0 +1,92 @@
+<div class="card mb-3 lane-workspace-panel" id="lane-workspace-main" tabindex="-1">
+  <div class="card-header">Main Workspace Pane</div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-2">
+      <span class="badge text-bg-light">Current Focus: {{ workspace.focus_label }}</span>
+      <span class="badge text-bg-light">Mode: {{ workspace.mode_label }}</span>
+      <span class="badge text-bg-light">Grouping: {{ workspace.group_by_label }}</span>
+      {% if workspace.selected_group %}
+        <span class="badge text-bg-primary">Selected Group: {{ workspace.selected_group.label }}</span>
+      {% elif workspace.selected_path_group %}
+        <span class="badge text-bg-primary">Selected Path: {{ workspace.selected_path_group.label }}</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if workspace.mode == 'lane' and workspace.lane_view %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_lane_view.html' %}
+{% else %}
+  {% if workspace.selected_group %}
+    {% include 'netbox_plant_graph/includes/lane_workspace_attachment_rows.html' with title='Selected Group Coverage' rows=workspace.selected_group_rows empty_message='No attachment rows match the selected group.' %}
+  {% elif workspace.selected_path_group %}
+    {% include 'netbox_plant_graph/includes/lane_workspace_attachment_rows.html' with title='Selected Path Coverage' rows=workspace.selected_group_rows empty_message='No attachment rows match the selected path group.' %}
+  {% endif %}
+
+  {% if workspace.group_by == 'attachment' %}
+    {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Primary Grouping: By Attachment' label_column='Attachment' groups=workspace.attachment_groups empty_message='No attachment groupings are available.' %}
+    <div class="row">
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Passive Artifact / Node' label_column='Node' groups=workspace.node_groups empty_message='No node groupings are available.' %}
+      </div>
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Plane' label_column='Plane' groups=workspace.plane_groups empty_message='No plane groupings are available.' %}
+      </div>
+    </div>
+  {% elif workspace.group_by == 'node' %}
+    <div class="row">
+      <div class="col-12 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Primary Grouping: By Passive Artifact / Node' label_column='Node' groups=workspace.node_groups empty_message='No node groupings are available.' %}
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Attachment' label_column='Attachment' groups=workspace.attachment_groups empty_message='No attachment groupings are available.' %}
+      </div>
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Plane' label_column='Plane' groups=workspace.plane_groups empty_message='No plane groupings are available.' %}
+      </div>
+    </div>
+  {% elif workspace.group_by == 'path' %}
+    <div class="row">
+      <div class="col-12 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_path_group.html' with title='Primary Grouping: By Path' groups=workspace.path_groups empty_message='No representative path groups are available.' %}
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-lg-7 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_path_detail.html' with title='Representative Path Details' path_group=workspace.selected_path_group path_view=workspace.selected_path_view empty_message='Select a representative path group to inspect its path details.' %}
+      </div>
+      <div class="col-lg-5 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Attachment' label_column='Attachment' groups=workspace.attachment_groups empty_message='No attachment groupings are available.' %}
+      </div>
+    </div>
+  {% else %}
+    <div class="row">
+      <div class="col-12 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Primary Grouping: By Plane' label_column='Plane' groups=workspace.plane_groups empty_message='No plane groupings are available.' %}
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Attachment' label_column='Attachment' groups=workspace.attachment_groups empty_message='No attachment groupings are available.' %}
+      </div>
+      <div class="col-lg-6 mb-3">
+        {% include 'netbox_plant_graph/includes/lane_workspace_group_table.html' with title='Supporting View: By Passive Artifact / Node' label_column='Node' groups=workspace.node_groups empty_message='No node groupings are available.' %}
+      </div>
+    </div>
+  {% endif %}
+
+{% endif %}
+
+{% if workspace.focus == 'findings' %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_findings.html' %}
+{% elif workspace.focus == 'actions' %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_next_actions.html' %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_exports.html' %}
+{% elif workspace.focus == 'compare' %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_compare_context.html' %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_exports.html' %}
+{% else %}
+  {% include 'netbox_plant_graph/includes/lane_workspace_exports.html' %}
+{% endif %}

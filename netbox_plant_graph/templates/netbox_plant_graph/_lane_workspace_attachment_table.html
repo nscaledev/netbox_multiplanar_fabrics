@@ -1,0 +1,48 @@
+<div class="card mb-3">
+  <div class="card-header">{{ title }}</div>
+  <div class="card-body">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Attachment Unit</th>
+          <th>Termination</th>
+          <th>Node</th>
+          <th>Position</th>
+          <th>Planes</th>
+          <th>Lanes</th>
+          <th>Mapped</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in lane_set.attachment_units %}
+          <tr>
+            <td><a href="{{ member.attachment_unit.url }}">{{ member.attachment_unit.display }}</a></td>
+            <td><a href="{{ member.termination_point.url }}">{{ member.termination_point.display }}</a></td>
+            <td><a href="{{ member.plant_node.url }}">{{ member.plant_node.display }}</a></td>
+            <td>{% if member.position %}{{ member.position }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
+            <td>{% if member.plane_ids %}{{ member.plane_ids|join:", " }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
+            <td>{{ member.present_lane_count }} / {{ member.expected_lane_count }}</td>
+            <td>{{ member.mapped_lane_count }}</td>
+            <td>{{ member.status }}</td>
+            <td>
+              <div class="d-flex flex-wrap gap-2">
+                {% if member.attachment_unit.lane_drilldown_url %}
+                  <a class="btn btn-sm btn-outline-primary" href="{{ member.attachment_unit.lane_drilldown_url }}">Drilldown</a>
+                {% endif %}
+                {% if member.attachment_unit.signal_path_resolver_url %}
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ member.attachment_unit.signal_path_resolver_url }}">Path</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="9">No attachment units are available for this target.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

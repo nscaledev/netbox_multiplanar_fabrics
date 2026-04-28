@@ -1,0 +1,169 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1>{{ page_title }}</h1>
+    {% if spatial_template.description %}
+      <p class="text-muted mb-0">{{ spatial_template.description }}</p>
+    {% endif %}
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'plugins:netbox_plant_graph:spatial_template_compose' pk=spatial_template.pk %}" class="btn btn-outline-secondary">
+      Node Composer
+    </a>
+    <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary">
+      &larr; Back to Detail
+    </a>
+  </div>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row">
+  <div class="col-lg-8 mb-3">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Connections</strong>
+        <span class="badge bg-secondary">{{ connections|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        {% if connections %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Assembly</th>
+                <th>Source</th>
+                <th>Dest</th>
+                <th>Mode</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for conn in connections %}
+                <tr>
+                  <td>
+                    <div class="fw-semibold">{{ conn.name }}</div>
+                    {% if conn.label_pattern %}<div class="small text-muted">{{ conn.label_pattern }}</div>{% endif %}
+                  </td>
+                  <td>{{ conn.assembly_template }}</td>
+                  <td>{{ conn.source_node }} (slot {{ conn.source_slot_index }}, connector {{ conn.source_connector_number }})</td>
+                  <td>{{ conn.dest_node }} (slot {{ conn.dest_slot_index }}, connector {{ conn.dest_connector_number }})</td>
+                  <td>{{ conn.get_enumeration_mode_display }}</td>
+                  <td>
+                    <form method="post" class="mb-0" onsubmit="return confirm('Remove this connection template?');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="remove_connection">
+                      <input type="hidden" name="connection_pk" value="{{ conn.pk }}">
+                      <button type="submit" class="btn btn-sm btn-danger">&times;</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No connection templates defined yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4 mb-3">
+    <div class="card">
+      <div class="card-header"><strong>Add Connection</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add_connection">
+
+          <div class="mb-3">
+            <label class="form-label">Name <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Description</label>
+            <input type="text" name="description" class="form-control">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Assembly Template <span class="text-danger">*</span></label>
+            <select name="assembly_template_pk" class="form-select" required>
+              <option value="">-- Select --</option>
+              {% for t in assembly_templates %}
+                <option value="{{ t.pk }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Source Node <span class="text-danger">*</span></label>
+            <select name="source_node_pk" class="form-select" required>
+              <option value="">-- Select --</option>
+              {% for n in nodes %}
+                <option value="{{ n.pk }}">{{ n.name_pattern }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Destination Node <span class="text-danger">*</span></label>
+            <select name="dest_node_pk" class="form-select" required>
+              <option value="">-- Select --</option>
+              {% for n in nodes %}
+                <option value="{{ n.pk }}">{{ n.name_pattern }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label">Source Slot Index</label>
+              <input type="number" name="source_slot_index" class="form-control" min="1" value="1" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Source Connector</label>
+              <input type="number" name="source_connector_number" class="form-control" min="1" value="1" required>
+            </div>
+          </div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label">Dest Slot Index</label>
+              <input type="number" name="dest_slot_index" class="form-control" min="1" value="1" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Dest Connector</label>
+              <input type="number" name="dest_connector_number" class="form-control" min="1" value="1" required>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Enumeration Mode</label>
+            <select name="enumeration_mode" class="form-select" required>
+              {% for value, label in enumeration_mode_choices %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Label Pattern</label>
+            <input type="text" name="label_pattern" class="form-control" placeholder="e.g. conn-{index}">
+          </div>
+
+          <button type="submit" class="btn btn-primary">Add Connection</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

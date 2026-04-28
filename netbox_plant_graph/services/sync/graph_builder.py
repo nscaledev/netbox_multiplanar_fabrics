@@ -1,9 +1,34 @@
+import logging
+
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.utils import timezone
 
 from netbox_plant_graph.models import AttachmentUnit, CoarseEdge, Fabric, FabricPlane, FineEdge, LaneMap, PlaneMembership, PlantNode, SignalLane, TerminationPoint, TransferMap
 
 from .transformer import GraphInputs
+
+logger = logging.getLogger('netbox_plant_graph')
+
+# Schema of keys that may appear in GraphBuildRun.stats.
+GRAPH_BUILD_STATS_SCHEMA = {
+    'fabrics': int,
+    'fabric_planes': int,
+    'nodes': int,
+    'terminations': int,
+    'attachment_units': int,
+    'signal_lanes': int,
+    'coarse_edges': int,
+    'fine_edges': int,
+    'signal_lane_fine_edges': int,
+    'transfer_maps': int,
+    'lane_maps': int,
+    'plane_memberships': int,
+    'dry_run': int,
+    'fabric_id': int,
+    'graph_revision': str,
+    'warnings': list,   # list of {code: str, ...} dicts
+}
 
 
 def _generic_fk_fields(prefix: str, obj) -> dict[str, object]:
@@ -45,6 +70,7 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
         fabric = fabric_input.get('instance')
         if fabric is None:
             fabric, _ = Fabric.objects.get_or_create(name=fabric_input['name'])
+        graph_revision = timezone.now().isoformat()
 
         Fabric.objects.filter(pk=fabric.pk).update(
             description=fabric_input['description'],
@@ -72,6 +98,7 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
                 node_type=node_input['node_type'],
                 role=node_input['role'],
                 status=node_input['status'],
+                tenant=node_input.get('tenant'),
                 metadata=node_input['metadata'],
                 **_generic_fk_fields('source', node_input['source']),
                 **_generic_fk_fields('location', node_input['location']),
@@ -171,7 +198,25 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
             )
 
         attachment_content_type = ContentType.objects.get_for_model(AttachmentUnit)
+
+        # B3: Warn when plane_memberships reference a plane_number not in plane_map.
+        requested_membership_planes = {m['plane_number'] for m in inputs.plane_memberships}
+        missing_planes = requested_membership_planes - set(plane_map)
+        if missing_planes:
+            logger.warning(
+                'Fabric %s: plane numbers %s appear in attachment-unit plane memberships '
+                'but no matching FabricPlane records exist. '
+                'PlaneMembership rows for these planes will be skipped.',
+                fabric, sorted(missing_planes),
+            )
+            stats.setdefault('warnings', []).append({
+                'code': 'missing_fabric_plane_records',
+                'plane_numbers': sorted(missing_planes),
+            })
+
         for membership_input in sorted(inputs.plane_memberships, key=lambda item: (item['plane_number'], item['member_key'])):
+            if membership_input['plane_number'] not in plane_map:
+                continue
             member = attachment_map[membership_input['member_key']]
             PlaneMembership.objects.create(
                 plane=plane_map[membership_input['plane_number']],
@@ -181,5 +226,24 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
                 metadata=membership_input['metadata'],
             )
 
+        fabric.metadata = {
+            **(fabric.metadata or {}),
+            'graph_revision': graph_revision,
+        }
+        fabric.save(update_fields=('metadata', 'last_updated'))
+
     stats['fabric_id'] = fabric.pk
+    stats['graph_revision'] = graph_revision
+
+    # B4: Warn when attachment units were built but zero plane memberships resulted.
+    if stats.get('attachment_units', 0) > 0 and stats.get('plane_memberships', 0) == 0:
+        logger.warning(
+            'Rebuild completed with %d AttachmentUnit(s) but ZERO PlaneMembership records. '
+            'Check: (1) fabric_plane custom field exists on dcim.Interface, '
+            '(2) child interfaces have fabric_plane values set, '
+            '(3) FabricPlane records exist for this fabric.',
+            stats['attachment_units'],
+        )
+        stats.setdefault('warnings', []).append({'code': 'zero_plane_memberships'})
+
     return stats

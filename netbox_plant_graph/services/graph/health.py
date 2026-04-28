@@ -6,6 +6,25 @@ from netbox_plant_graph.models import AttachmentUnit, Fabric, FabricPlane, FineE
 
 from ..netbox.adapters import build_object_reference
 from .audits import run_plane_audit
+from .payloads import CountMetricPayload, FabricHealthPayload, FabricHealthPlanePayload, FabricHealthSummaryPayload, ObjectReferencePayload
+
+
+def _object_reference_payload(reference):
+    return ObjectReferencePayload(
+        app_label=reference['app_label'],
+        model=reference['model'],
+        pk=reference['pk'],
+        display=reference['display'],
+        registry_key=reference.get('registry_key'),
+        url=reference.get('url'),
+        path_resolver_url=reference.get('path_resolver_url'),
+        blast_radius_url=reference.get('blast_radius_url'),
+        lane_drilldown_url=reference.get('lane_drilldown_url'),
+        lane_workspace_url=reference.get('lane_workspace_url'),
+        signal_path_resolver_url=reference.get('signal_path_resolver_url'),
+        signal_blast_radius_url=reference.get('signal_blast_radius_url'),
+        health_url=reference.get('health_url'),
+    )
 
 
 def _normalize_fabric(fabric=None):
@@ -109,3 +128,40 @@ def compute_fabric_health(*, fabric=None):
             'total': len(findings),
         },
     }
+
+
+def compute_typed_fabric_health(*, fabric=None) -> FabricHealthPayload:
+    payload = compute_fabric_health(fabric=fabric)
+    summary = payload.get('summary') or None
+    return FabricHealthPayload(
+        fabric=_object_reference_payload(payload['fabric']) if payload.get('fabric') else None,
+        status=payload['status'],
+        summary=(
+            FabricHealthSummaryPayload(
+                expected_plane_count=summary['expected_plane_count'],
+                planes_total=summary['planes_total'],
+                healthy_planes=summary['healthy_planes'],
+                attachment_units=summary['attachment_units'],
+                signal_lanes=summary['signal_lanes'],
+                fine_edges=summary['fine_edges'],
+            )
+            if summary is not None
+            else None
+        ),
+        planes=tuple(
+            FabricHealthPlanePayload(
+                plane=_object_reference_payload(plane['plane']),
+                status=plane['status'],
+                attachment_membership_count=plane['attachment_membership_count'],
+                finding_count=plane['finding_count'],
+                error_count=plane['error_count'],
+                warning_count=plane['warning_count'],
+            )
+            for plane in payload['planes']
+        ),
+        findings=tuple(
+            CountMetricPayload(name=name, value=value)
+            for name, value in payload['findings']['counts'].items()
+        ),
+        finding_total=payload['findings']['total'],
+    )

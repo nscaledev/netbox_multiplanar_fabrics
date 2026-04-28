@@ -1,0 +1,304 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1>{{ page_title }}</h1>
+    {% if assembly_template.description %}
+      <p class="text-muted mb-0">{{ assembly_template.description }}</p>
+    {% endif %}
+    <p class="text-muted mb-0">
+      Tenant:
+      {% if assembly_template.resolved_tenant %}
+        <a href="{{ assembly_template.resolved_tenant.get_absolute_url }}">{{ assembly_template.resolved_tenant }}</a>
+      {% else %}
+        &mdash;
+      {% endif %}
+    </p>
+  </div>
+  <a href="{{ assembly_template.get_absolute_url }}" class="btn btn-outline-secondary">
+    &larr; Back to Detail
+  </a>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+{# --- Connector columns --- #}
+<div class="row mb-4">
+
+  {# A-Side #}
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>A-Side Connectors</strong>
+        <span class="badge bg-secondary">{{ a_connectors|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        {% if a_connectors %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Label</th>
+                <th>Tenant</th>
+                <th>Type</th>
+                <th>Positions</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for conn in a_connectors %}
+                <tr>
+                  <td>{{ conn.connector_number }}</td>
+                  <td>{% if conn.label %}{{ conn.label }}{% else %}&mdash;{% endif %}</td>
+                  <td>
+                    {% if conn.resolved_tenant %}
+                      <a href="{{ conn.resolved_tenant.get_absolute_url }}">{{ conn.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>{{ conn.get_connector_type_display }}</td>
+                  <td>{{ conn.position_count }}</td>
+                  <td>
+                    <form method="post" style="display:inline;">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="remove_connector">
+                      <input type="hidden" name="connector_pk" value="{{ conn.pk }}">
+                      <button type="submit" class="btn btn-sm btn-danger" title="Remove connector">
+                        &times;
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No A-side connectors yet.</p>
+        {% endif %}
+      </div>
+      <div class="card-footer">
+        <form method="post" class="row g-2 align-items-end">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add_connector">
+          <input type="hidden" name="side" value="A">
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">#</label>
+            <input type="number" name="connector_number" class="form-control form-control-sm" style="width:5rem;" min="1" required placeholder="1">
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Label</label>
+            <input type="text" name="label" class="form-control form-control-sm" style="width:8rem;" placeholder="A1">
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Type</label>
+            <select name="connector_type" class="form-select form-select-sm" style="width:9rem;">
+              <option value="mpo-8">MPO-8</option>
+              <option value="mpo-12" selected>MPO-12</option>
+              <option value="mpo-16">MPO-16</option>
+              <option value="mpo-24">MPO-24</option>
+              <option value="mtp-16">MTP-16</option>
+              <option value="mtp-24">MTP-24</option>
+              <option value="lc-duplex">LC Duplex</option>
+              <option value="lc-simplex">LC Simplex</option>
+              <option value="sc-duplex">SC Duplex</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Positions</label>
+            <input type="number" name="position_count" class="form-control form-control-sm" style="width:5rem;" min="1" value="8">
+          </div>
+          <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Add A-Side</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# B-Side #}
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>B-Side Connectors</strong>
+        <span class="badge bg-secondary">{{ b_connectors|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        {% if b_connectors %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Label</th>
+                <th>Tenant</th>
+                <th>Type</th>
+                <th>Positions</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for conn in b_connectors %}
+                <tr>
+                  <td>{{ conn.connector_number }}</td>
+                  <td>{% if conn.label %}{{ conn.label }}{% else %}&mdash;{% endif %}</td>
+                  <td>
+                    {% if conn.resolved_tenant %}
+                      <a href="{{ conn.resolved_tenant.get_absolute_url }}">{{ conn.resolved_tenant }}</a>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>{{ conn.get_connector_type_display }}</td>
+                  <td>{{ conn.position_count }}</td>
+                  <td>
+                    <form method="post" style="display:inline;">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="remove_connector">
+                      <input type="hidden" name="connector_pk" value="{{ conn.pk }}">
+                      <button type="submit" class="btn btn-sm btn-danger" title="Remove connector">
+                        &times;
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted p-3 mb-0">No B-side connectors yet.</p>
+        {% endif %}
+      </div>
+      <div class="card-footer">
+        <form method="post" class="row g-2 align-items-end">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add_connector">
+          <input type="hidden" name="side" value="B">
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">#</label>
+            <input type="number" name="connector_number" class="form-control form-control-sm" style="width:5rem;" min="1" required placeholder="1">
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Label</label>
+            <input type="text" name="label" class="form-control form-control-sm" style="width:8rem;" placeholder="B1">
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Type</label>
+            <select name="connector_type" class="form-select form-select-sm" style="width:9rem;">
+              <option value="mpo-8">MPO-8</option>
+              <option value="mpo-12" selected>MPO-12</option>
+              <option value="mpo-16">MPO-16</option>
+              <option value="mpo-24">MPO-24</option>
+              <option value="mtp-16">MTP-16</option>
+              <option value="mtp-24">MTP-24</option>
+              <option value="lc-duplex">LC Duplex</option>
+              <option value="lc-simplex">LC Simplex</option>
+              <option value="sc-duplex">SC Duplex</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label form-label-sm mb-1">Positions</label>
+            <input type="number" name="position_count" class="form-control form-control-sm" style="width:5rem;" min="1" value="8">
+          </div>
+          <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Add B-Side</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# --- Preset buttons --- #}
+<div class="card mb-4">
+  <div class="card-header"><strong>Apply Wiring Preset</strong></div>
+  <div class="card-body d-flex gap-2">
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="apply_preset">
+      <input type="hidden" name="preset_name" value="straight">
+      <button type="submit" class="btn btn-outline-primary">Straight</button>
+    </form>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="apply_preset">
+      <input type="hidden" name="preset_name" value="reversed">
+      <button type="submit" class="btn btn-outline-primary">Reversed</button>
+    </form>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="apply_preset">
+      <input type="hidden" name="preset_name" value="cross">
+      <button type="submit" class="btn btn-outline-primary">Cross</button>
+    </form>
+    <span class="text-muted align-self-center ms-2 small">
+      Presets replace all existing mappings.
+    </span>
+  </div>
+</div>
+
+{# --- Mapping matrix --- #}
+<div class="card mb-4">
+  <div class="card-header"><strong>Mapping Matrix</strong></div>
+  <div class="card-body p-0">
+    {% if not a_connectors and not b_connectors %}
+      <p class="text-muted p-3 mb-0">
+        Add A-side and B-side connectors above to build the mapping matrix.
+      </p>
+    {% elif not a_connectors %}
+      <p class="text-muted p-3 mb-0">Add A-side connectors to enable mapping.</p>
+    {% elif not b_connectors %}
+      <p class="text-muted p-3 mb-0">Add B-side connectors to enable mapping.</p>
+    {% else %}
+      <div class="table-responsive">
+        <table class="table table-bordered table-sm mb-0">
+          <thead>
+            <tr>
+              <th class="text-muted">A \ B</th>
+              {% for b in b_connectors %}
+                <th class="text-center">
+                  {% if b.label %}{{ b.label }}{% else %}B{{ b.connector_number }}{% endif %}
+                </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in matrix_rows %}
+              <tr>
+                <th>
+                  {% with a=row.a %}
+                    {% if a.label %}{{ a.label }}{% else %}A{{ a.connector_number }}{% endif %}
+                  {% endwith %}
+                </th>
+                {% for cell in row.cells %}
+                  <td class="text-center p-1">
+                    <form method="post">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="toggle_mapping">
+                      <input type="hidden" name="a_connector_pk" value="{{ row.a.pk }}">
+                      <input type="hidden" name="b_connector_pk" value="{{ cell.b.pk }}">
+                      <button type="submit"
+                        class="btn btn-sm {% if cell.mapped %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                        title="Toggle mapping {{ row.a }} &rarr; {{ cell.b }}">
+                        {% if cell.mapped %}&check;{% else %}&nbsp;{% endif %}
+                      </button>
+                    </form>
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

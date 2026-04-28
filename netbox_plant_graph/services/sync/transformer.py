@@ -2,9 +2,15 @@ from dataclasses import dataclass
 from collections import defaultdict, deque
 
 from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 
 from dcim.models import Cable, FrontPort, Interface, RearPort
 
+from ...breakout_profiles import (
+    get_breakout_profile_for_cable,
+    get_breakout_profile_name_for_cable,
+    get_plugin_breakout_profile_for_cable,
+)
 from .extractor import SourceBundle
 
 
@@ -377,12 +383,59 @@ def _materialize_signal_lane_inputs(attachment_inputs, fine_edges, transfer_maps
     return signal_lanes, lane_fine_edges, lane_maps
 
 
+def _build_assembly_mapping_lookup(cable_pks):
+    """
+    For cables stamped from an AssemblyTemplate, build a position-mapping
+    lookup keyed by cable PK.
+
+    Returns a dict:  {cable_pk: {(cable_end, connector_number, position): (peer_connector_number, peer_position)}}
+    """
+    from ...models import StampRecord, AssemblyTemplate
+
+    cable_ct = ContentType.objects.get_for_model(Cable)
+    template_ct = ContentType.objects.get_for_model(AssemblyTemplate)
+
+    records = StampRecord.objects.filter(
+        result_type=cable_ct,
+        result_id__in=cable_pks,
+        template_type=template_ct,
+    ).values_list('result_id', 'template_id')
+
+    if not records:
+        return {}
+
+    cable_to_template = {result_id: template_id for result_id, template_id in records}
+    template_ids = set(cable_to_template.values())
+
+    from ...models import AssemblyMappingTemplate
+    mappings = AssemblyMappingTemplate.objects.filter(
+        template_id__in=template_ids,
+    ).select_related('a_connector', 'b_connector')
+
+    template_mappings = defaultdict(list)
+    for m in mappings:
+        template_mappings[m.template_id].append(m)
+
+    lookup = {}
+    for cable_pk, template_id in cable_to_template.items():
+        position_map = {}
+        for m in template_mappings.get(template_id, ()):
+            a_conn = m.a_connector.connector_number
+            b_conn = m.b_connector.connector_number
+            position_map[('A', a_conn, m.a_position)] = (b_conn, m.b_position)
+            position_map[('B', b_conn, m.b_position)] = (a_conn, m.a_position)
+        if position_map:
+            lookup[cable_pk] = position_map
+    return lookup
+
+
 def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
     fabric = bundle.fabric
     fabric_name = getattr(fabric, 'name', None) or 'Default Fabric'
     expected_plane_count = getattr(fabric, 'expected_plane_count', 4) or 4
     scope_site = getattr(fabric, 'scope_site', None)
     scope_location = getattr(fabric, 'scope_location', None)
+    tier_role_map: dict = getattr(fabric, 'tier_role_map', None) or {}
 
     node_inputs = {}
     termination_inputs = {}
@@ -397,16 +450,26 @@ def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
     for child_interface in bundle.child_interfaces:
         child_interfaces_by_parent.setdefault(child_interface.parent_id, []).append(child_interface)
 
+    # Pre-compute assembly mapping fallback for cables without native profiles.
+    cable_pks = {cable.pk for cable in bundle.cables}
+    assembly_mapping_lookup = _build_assembly_mapping_lookup(cable_pks) if cable_pks else {}
+
     for device in bundle.devices:
+        device_role_name = _device_role_name(device)
+        tier_level = tier_role_map.get(device_role_name) if tier_role_map else None
         node_inputs[_node_key(device)] = {
             'key': _node_key(device),
             'name': device.name,
             'node_type': _classify_node_type(device),
-            'role': _device_role_name(device),
+            'role': device_role_name,
             'status': getattr(getattr(device, 'status', None), 'value', '') or getattr(device, 'status', '') or '',
             'source': device,
+            'tenant': getattr(device, 'tenant', None),
             'location': getattr(device, 'location', None) or getattr(device, 'site', None),
-            'metadata': {'device_type': getattr(getattr(device, 'device_type', None), 'model', '')},
+            'metadata': {
+                'device_type': getattr(getattr(device, 'device_type', None), 'model', ''),
+                'tier_level': tier_level,
+            },
         }
 
     supported_terminations = tuple(bundle.interfaces) + tuple(bundle.front_ports) + tuple(bundle.rear_ports)
@@ -489,7 +552,7 @@ def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
             'a_tp_key': min(left_tp_key, right_tp_key),
             'b_tp_key': max(left_tp_key, right_tp_key),
             'source': cable,
-            'cable_profile_name': getattr(cable, 'profile', '') or '',
+            'cable_profile_name': get_breakout_profile_name_for_cable(cable),
             'metadata': {'is_active': getattr(cable, 'is_active', lambda: True)()},
         })
         fine_key = _canonical_pair('fine', left_attachment, right_attachment, coarse_key)
@@ -573,9 +636,9 @@ def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
 
             if left_terminations and middle_cables and right_terminations:
                 cable = middle_cables[0]
-                profile = cable.profile_class() if cable.profile_class else None
+                profile = get_breakout_profile_for_cable(cable)
                 profile_pairs = 0
-                if profile is not None:
+                if profile is not None and hasattr(profile, 'get_mapped_position'):
                     right_position_map = {}
                     for right_termination in right_terminations:
                         connector = getattr(right_termination, 'cable_connector', None)
@@ -608,6 +671,97 @@ def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
                             profile_pairs += 1
                 if profile_pairs:
                     continue
+
+                # Fallback: use AssemblyMappingTemplate from StampRecord provenance.
+                assembly_map = assembly_mapping_lookup.get(cable.pk)
+                if assembly_map:
+                    right_position_map = {}
+                    for right_termination in right_terminations:
+                        connector = getattr(right_termination, 'cable_connector', None)
+                        for right_position in _iter_path_positions(right_termination):
+                            right_position_map[(connector, right_position)] = right_termination
+                    assembly_pairs = 0
+                    for left_termination in left_terminations:
+                        for left_position in _iter_path_positions(left_termination):
+                            mapped = assembly_map.get((
+                                left_termination.cable_end,
+                                left_termination.cable_connector,
+                                left_position,
+                            ))
+                            if mapped is None:
+                                continue
+                            peer_connector, peer_position = mapped
+                            peer_termination = right_position_map.get((peer_connector, peer_position))
+                            if peer_termination is None:
+                                continue
+                            add_cable_segment(
+                                cable,
+                                left_termination,
+                                left_position,
+                                peer_termination,
+                                peer_position,
+                                derived_from_profile=True,
+                            )
+                            assembly_pairs += 1
+                    if assembly_pairs:
+                        continue
+
+                breakout_profile = get_plugin_breakout_profile_for_cable(cable)
+                if breakout_profile is not None:
+                    sorted_right = sorted(right_terminations, key=lambda obj: (getattr(obj, 'name', ''), obj.pk))
+                    bp_pairs = 0
+                    for left_termination in left_terminations:
+                        raw_positions = _iter_path_positions(left_termination)
+                        if raw_positions == (None,) and breakout_profile.child_count > 1:
+                            raw_positions = tuple(range(1, breakout_profile.child_count + 1))
+                        # Interface-to-Interface breakout: both ends are single-position
+                        # Interfaces but the profile declares multiple children.
+                        # Expand to per-child positions so each child AU pair gets its
+                        # own fine edge (e.g. 800G parent ↔ 800G parent with 4×200G
+                        # children on each side).
+                        if len(sorted_right) == 1:
+                            peer_termination = sorted_right[0]
+                            for position in raw_positions:
+                                child_ordinal = breakout_profile.get_child_ordinal(position if position is not None else 1)
+                                if child_ordinal is None:
+                                    continue
+                                peer_position = child_ordinal + 1
+                                # Only count a hit when both child AUs exist — if either
+                                # side has no child at this position the attachment lookup
+                                # returns None and add_cable_segment would silently no-op,
+                                # incorrectly blocking the identity-mapping fallback.
+                                left_att = _first_attachment_key(attachment_lookup, left_termination, position)
+                                right_att = _first_attachment_key(attachment_lookup, peer_termination, peer_position)
+                                if not left_att or not right_att or left_att == right_att:
+                                    continue
+                                add_cable_segment(
+                                    cable,
+                                    left_termination,
+                                    position,
+                                    peer_termination,
+                                    peer_position,
+                                    derived_from_profile=True,
+                                )
+                                bp_pairs += 1
+                        else:
+                            for left_position in raw_positions:
+                                child_ordinal = breakout_profile.get_child_ordinal(left_position if left_position is not None else 1)
+                                if child_ordinal is None:
+                                    continue
+                                if not (0 <= child_ordinal < len(sorted_right)):
+                                    continue
+                                peer_termination = sorted_right[child_ordinal]
+                                add_cable_segment(
+                                    cable,
+                                    left_termination,
+                                    left_position,
+                                    peer_termination,
+                                    None,
+                                    derived_from_profile=True,
+                                )
+                                bp_pairs += 1
+                    if bp_pairs:
+                        continue
 
                 if not _can_identity_map_without_profile(left_terminations, right_terminations):
                     continue

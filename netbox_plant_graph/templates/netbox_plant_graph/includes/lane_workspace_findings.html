@@ -1,0 +1,55 @@
+<div class="card mb-3">
+  <div class="card-header">Related Findings</div>
+  <div class="card-body">
+    <div class="table-responsive lane-workspace-table-wrap" aria-label="Related findings">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Scope</th>
+            <th>Type</th>
+            <th>Severity</th>
+            <th>Status</th>
+            <th>Summary</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for finding in workspace.related_findings %}
+            <tr>
+              <td>{{ finding.finding_kind }}</td>
+              <td>{{ finding.directness }}</td>
+              <td>{{ finding.finding_type }}</td>
+              <td>{{ finding.severity }}</td>
+              <td>{{ finding.status|default:"-" }}</td>
+              <td>
+                <div class="fw-semibold">{{ finding.summary }}</div>
+                <div class="small text-muted">{{ finding.message }}</div>
+                {% if finding.object %}
+                  <div class="small">
+                    {% if finding.object.url %}
+                      <a href="{{ finding.object.url }}">{{ finding.object.display }}</a>
+                    {% else %}
+                      {{ finding.object.display }}
+                    {% endif %}
+                  </div>
+                {% endif %}
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  {% for action in finding.action_links %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ action.url }}">{{ action.label }}</a>
+                  {% endfor %}
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7">No related findings are currently scoped to this workspace selection.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

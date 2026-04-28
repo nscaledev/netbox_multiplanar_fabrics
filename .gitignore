@@ -16,6 +16,8 @@ tests/e2e/.state/
 .venv/
 netbox_plant_graph.code-workspace
 netbox_plant_graph/version.py
+deprecated_junk/
+.tmp/
 
 # Icon must end with two \r
 Icon

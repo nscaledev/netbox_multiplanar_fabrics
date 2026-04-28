@@ -1,0 +1,79 @@
+<div class="card mb-3 lane-workspace-panel" id="lane-workspace-query" tabindex="-1">
+  <div class="card-header">Query Bar</div>
+  <div class="card-body">
+    <form method="get" class="row g-3" data-lane-workspace-query-form>
+      <div class="col-md-3">
+        <label class="form-label" for="target_registry_key">Target Type</label>
+        <select class="form-select" id="target_registry_key" name="target_registry_key">
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.target_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="target_id">Target ID</label>
+        <input class="form-control" id="target_id" name="target_id" value="{{ query.target_id }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="group_by">Grouping</label>
+        <select class="form-select" id="group_by" name="group_by">
+          <option value="attachment"{% if query.group_by == 'attachment' %} selected{% endif %}>By Attachment</option>
+          <option value="node"{% if query.group_by == 'node' %} selected{% endif %}>By Passive Artifact / Node</option>
+          <option value="plane"{% if query.group_by == 'plane' %} selected{% endif %}>By Plane</option>
+          <option value="path"{% if query.group_by == 'path' %} selected{% endif %}>By Path</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="mode">Mode</label>
+        <select class="form-select" id="mode" name="mode">
+          <option value="grouped"{% if query.mode == 'grouped' %} selected{% endif %}>Grouped Coverage</option>
+          <option value="lane"{% if query.mode == 'lane' %} selected{% endif %}>Exact Lane</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="focus">Focus</label>
+        <select class="form-select" id="focus" name="focus">
+          <option value="summary"{% if query.focus == 'summary' %} selected{% endif %}>Summary</option>
+          <option value="paths"{% if query.focus == 'paths' %} selected{% endif %}>Paths</option>
+          <option value="findings"{% if query.focus == 'findings' %} selected{% endif %}>Findings</option>
+          <option value="actions"{% if query.focus == 'actions' %} selected{% endif %}>Actions</option>
+          <option value="compare"{% if query.focus == 'compare' %} selected{% endif %}>Compare</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="lane_index">Lane Index</label>
+        <input class="form-control" id="lane_index" name="lane_index" value="{{ query.lane_index|default_if_none:'' }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="plane_id">Plane Filter</label>
+        <input class="form-control" id="plane_id" name="plane_id" value="{{ query.plane_id|default_if_none:'' }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="path_lane_index">Path Lane</label>
+        <input class="form-control" id="path_lane_index" name="path_lane_index" value="{{ query.path_lane_index|default_if_none:'' }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="compare_registry_key">Compare Type</label>
+        <select class="form-select" id="compare_registry_key" name="compare_registry_key">
+          <option value="">None</option>
+          {% for choice in registry_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.compare_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="compare_id">Compare ID</label>
+        <input class="form-control" id="compare_id" name="compare_id" value="{{ query.compare_id }}">
+      </div>
+      {% if query.group_key %}
+        <input type="hidden" name="group_key" value="{{ query.group_key }}">
+      {% endif %}
+      {% if query.source_finding_id %}
+        <input type="hidden" name="source_finding_id" value="{{ query.source_finding_id }}">
+      {% endif %}
+      <div class="col-md-2 align-self-end">
+        <button type="submit" class="btn btn-primary">Inspect</button>
+      </div>
+    </form>
+  </div>
+</div>

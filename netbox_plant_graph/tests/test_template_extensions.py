@@ -13,7 +13,7 @@ class TemplateExtensionTestCase(PlantGraphTopologyMixin):
 
         self.assertIn('Resolve Path', html)
         self.assertIn('Lane Drilldown', html)
-        self.assertIn('Blast Radius', html)
+        self.assertIn('Physical Cable Blast Radius', html)
         self.assertIn('source_registry_key=interface', html)
         self.assertIn(f'source_id={topology["interface_a"].pk}', html)
 

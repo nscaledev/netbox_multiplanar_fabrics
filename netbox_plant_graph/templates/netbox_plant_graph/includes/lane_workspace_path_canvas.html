@@ -1,0 +1,64 @@
+<div class="lane-workspace-path-canvas mb-3" data-workspace-path-canvas>
+  <div class="small text-muted mb-2">Representative Path Stage Sequence</div>
+  <div class="lane-workspace-path-canvas__svg-wrap">
+    <svg class="lane-workspace-path-canvas__svg" data-workspace-path-canvas-svg viewBox="0 0 320 96" aria-hidden="true" focusable="false"></svg>
+  </div>
+  <ol class="lane-workspace-stage-list mb-0" data-path-stage-list>
+    {% for step in path_view.steps %}
+      <li class="lane-workspace-stage-item" data-path-stage-item>
+        <span class="badge text-bg-light lane-workspace-stage-item__index">{{ forloop.counter }}</span>
+        <div class="lane-workspace-stage-item__body">
+          <div class="fw-semibold" data-stage-label>{{ step.display }}</div>
+          <div class="small text-muted">
+            <span data-stage-kind>{{ step.step_kind }}</span>
+            {% if step.edge_type %}
+              <span class="ms-1" data-stage-type>{{ step.edge_type }}</span>
+            {% elif step.object %}
+              <span class="ms-1" data-stage-type>{{ step.object.model }}</span>
+            {% endif %}
+          </div>
+          <div class="small">
+            {% if step.attachment_unit %}
+              Attachment:
+              {% if step.attachment_unit.url %}
+                <a href="{{ step.attachment_unit.url }}" data-stage-context>{{ step.attachment_unit.display }}</a>
+              {% else %}
+                <span data-stage-context>{{ step.attachment_unit.display }}</span>
+              {% endif %}
+            {% elif step.plant_node %}
+              Node:
+              {% if step.plant_node.url %}
+                <a href="{{ step.plant_node.url }}" data-stage-context>{{ step.plant_node.display }}</a>
+              {% else %}
+                <span data-stage-context>{{ step.plant_node.display }}</span>
+              {% endif %}
+            {% elif step.parent_coarse_edge %}
+              Parent:
+              {% if step.parent_coarse_edge.url %}
+                <a href="{{ step.parent_coarse_edge.url }}" data-stage-context>{{ step.parent_coarse_edge.display }}</a>
+              {% else %}
+                <span data-stage-context>{{ step.parent_coarse_edge.display }}</span>
+              {% endif %}
+            {% elif step.owner_node %}
+              Owner:
+              {% if step.owner_node.url %}
+                <a href="{{ step.owner_node.url }}" data-stage-context>{{ step.owner_node.display }}</a>
+              {% else %}
+                <span data-stage-context>{{ step.owner_node.display }}</span>
+              {% endif %}
+            {% elif step.owner_edge %}
+              Owner:
+              {% if step.owner_edge.url %}
+                <a href="{{ step.owner_edge.url }}" data-stage-context>{{ step.owner_edge.display }}</a>
+              {% else %}
+                <span data-stage-context>{{ step.owner_edge.display }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted" data-stage-context>No extra context</span>
+            {% endif %}
+          </div>
+        </div>
+      </li>
+    {% endfor %}
+  </ol>
+</div>

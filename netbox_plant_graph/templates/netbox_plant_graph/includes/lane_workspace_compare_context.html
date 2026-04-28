@@ -1,0 +1,53 @@
+<div class="card mb-3">
+  <div class="card-header">Compare Context</div>
+  <div class="card-body">
+    {% if workspace.compare_context %}
+      <dl class="row mb-3">
+        <dt class="col-sm-4">Candidate</dt>
+        <dd class="col-sm-8">
+          {% if workspace.compare_context.compare_target.url %}
+            <a href="{{ workspace.compare_context.compare_target.url }}">{{ workspace.compare_context.compare_target.display }}</a>
+          {% else %}
+            {{ workspace.compare_context.compare_target.display }}
+          {% endif %}
+        </dd>
+        <dt class="col-sm-4">Summary</dt>
+        <dd class="col-sm-8">{{ workspace.compare_context.compare_summary }}</dd>
+      </dl>
+      <div class="table-responsive lane-workspace-table-wrap" aria-label="Compare metrics">
+        <table class="table table-hover mb-3">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Baseline</th>
+              <th>Candidate</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for metric in workspace.compare_context.metrics %}
+              <tr>
+                <td>{{ metric.name }}</td>
+                <td>{{ metric.baseline_value }}</td>
+                <td>{{ metric.candidate_value }}</td>
+                <td>{{ metric.status }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <ul class="mb-3">
+        {% for regression in workspace.compare_context.regressions %}
+          <li>{{ regression }}</li>
+        {% empty %}
+          <li>No regressions detected in the compact compare context.</li>
+        {% endfor %}
+      </ul>
+      {% if workspace.compare_context.full_compare_action %}
+        <a class="btn btn-sm btn-outline-primary" href="{{ workspace.compare_context.full_compare_action.url }}">{{ workspace.compare_context.full_compare_action.label }}</a>
+      {% endif %}
+    {% else %}
+      <p class="mb-0">No compare target is currently attached to this workspace.</p>
+    {% endif %}
+  </div>
+</div>

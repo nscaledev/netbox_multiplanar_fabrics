@@ -1,0 +1,35 @@
+{% extends 'base/layout.html' %}
+
+{% block content %}
+<h1>{{ page_title }}</h1>
+
+<div class="alert alert-warning">
+  The custom coordinate-layout page is deprecated.
+  Operator-facing 2D site and location layout now lives in <code>netbox-floorplan-plugin</code>.
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <p class="mb-3">
+      Use the floorplan plugin for interactive layout editing and inspection. This plugin still keeps
+      read-only <code>SpatialPlacement</code> records for planning metadata such as <code>z</code>,
+      orientation, and non-floorplan reference frames.
+    </p>
+
+    {% if scope_label %}
+      <p class="mb-3">
+        The requested scope <strong>{{ scope_label }}</strong> could not be handed off automatically.
+        Check that the floorplan plugin is enabled and that the selected scope exists.
+      </p>
+    {% endif %}
+
+    <div class="d-flex gap-2 flex-wrap">
+      {% if floorplan_list_url %}
+        <a href="{{ floorplan_list_url }}" class="btn btn-primary">Browse Floorplans</a>
+      {% endif %}
+      <a href="{{ spatial_placement_list_url }}" class="btn btn-outline-secondary">Browse Spatial Placement Metadata</a>
+      <a href="{% url 'plugins:netbox_plant_graph:coordinate_layout' %}" class="btn btn-outline-secondary">Reset</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

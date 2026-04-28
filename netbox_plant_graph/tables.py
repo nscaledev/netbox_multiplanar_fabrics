@@ -5,6 +5,12 @@ from netbox.tables.columns import ActionsColumn
 from .object_registry import TABLE_OBJECT_SPECS
 
 
+def _include_tenant(columns):
+    if 'tenant' in columns:
+        return columns
+    return columns + ('tenant',)
+
+
 def build_table_class(spec):
     row_actions = []
     if spec.view is not None and spec.view.supports_create:
@@ -15,13 +21,14 @@ def build_table_class(spec):
 
     meta_class = type('Meta', (NetBoxTable.Meta,), {
         'model': spec.model,
-        'fields': spec.table.fields,
-        'default_columns': spec.table.default_columns,
+        'fields': _include_tenant(spec.table.fields),
+        'default_columns': _include_tenant(spec.table.default_columns),
     })
     attrs = {
         '__module__': __name__,
         'Meta': meta_class,
         spec.table.linkify_field: tables.Column(linkify=True),
+        'tenant': tables.Column(accessor='resolved_tenant', linkify=True, default='—', verbose_name='Tenant'),
         'actions': ActionsColumn(actions=tuple(row_actions)),
     }
     return type(spec.table.class_name, (NetBoxTable,), attrs)

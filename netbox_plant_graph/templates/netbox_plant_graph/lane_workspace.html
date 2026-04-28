@@ -1,0 +1,39 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'netbox_plant_graph/lane_workspace.css' %}">
+{% endblock %}
+
+{% block content %}
+  <div class="lane-workspace" data-lane-workspace-root>
+    <a class="visually-hidden-focusable lane-workspace-skip-link" href="#lane-workspace-main">Skip To Main Workspace</a>
+    <h1>Lane Workspace</h1>
+
+    {% include 'netbox_plant_graph/includes/lane_workspace_query_bar.html' %}
+
+    {% if error %}
+      <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if workspace and lane_set and allocation_summary %}
+      <div class="row align-items-start g-3 lane-workspace-shell">
+        <div class="col-xl-3 col-lg-4 lane-workspace-shell__summary">
+          {% include 'netbox_plant_graph/includes/lane_workspace_summary_rail.html' %}
+        </div>
+        <div class="col-xl-6 col-lg-8 lane-workspace-shell__main">
+          {% include 'netbox_plant_graph/includes/lane_workspace_main_pane.html' %}
+        </div>
+        <div class="col-xl-3 col-lg-12 lane-workspace-shell__context">
+          {% include 'netbox_plant_graph/includes/lane_workspace_context_rail.html' %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'netbox_plant_graph/lane_workspace.js' %}"></script>
+{% endblock %}

@@ -116,7 +116,13 @@ cd ~/src/netbox_multiplanar_fabrics/devrun
 ./dev.sh test netbox_plant_graph.tests.test_sync --verbosity 2
 ./dev.sh test netbox_plant_graph.tests.test_resolver --verbosity 2
 ./dev.sh test netbox_plant_graph.tests.test_graphql --verbosity 2
+./dev.sh test netbox_plant_graph.tests.test_floorplan_bridge netbox_plant_graph.tests.test_api --verbosity 2
 ```
+
+For floorplan-integration changes, keep the boundary explicit: operator-facing
+2D edits belong in `netbox-floorplan-plugin`, while this repo owns stamping,
+planning metadata, and the explicit reconciliation path that copies managed
+floorplan rack moves back into `SpatialPlacement`.
 
 For local development that needs the full NetBox stack, use:
 
@@ -126,6 +132,106 @@ cd ~/src/netbox_multiplanar_fabrics/devrun
 ./dev.sh status
 ./dev.sh stop
 ```
+
+## Use of scripted Playwright browser for runbook documentation
+
+For runbook documentation that needs real NetBox web-UI screenshots, use a
+scripted Playwright browser from inside the WSL2 environment. Do not treat this
+as a replacement for Python tests; it is for capturing documented operator
+flows and verifying that the UI still supports them.
+
+This repo uses a repo-local Playwright install and browser cache:
+
+- package install path: `.tmp/playwright-run/`
+- browser cache path: `.tmp/playwright-browsers/`
+- current scripted Phase 1 workflow: `devrun/playwright_phase1_runbook.js`
+- current screenshot output directory: `docs/images/runbook-roce-phase1-ui/`
+
+### One-time WSL2 setup
+
+Install Playwright into the repo-local staging directory:
+
+```bash
+cd ~/src/netbox_multiplanar_fabrics
+npm install --prefix .tmp/playwright-run playwright@1.59.1
+```
+
+Install Chromium and its Linux dependencies into the repo-local browser cache:
+
+```bash
+cd ~/src/netbox_multiplanar_fabrics
+sudo PLAYWRIGHT_BROWSERS_PATH=$PWD/.tmp/playwright-browsers \
+  node .tmp/playwright-run/node_modules/playwright/cli.js install --with-deps chromium
+```
+
+Use the WSL2 Linux browser runtime. Do not try to point Playwright at a Windows
+Chrome or Edge binary from inside WSL.
+
+### Runtime expectations
+
+The scripted runbook browser assumes:
+
+- the local NetBox stack is already running
+- the NetBox UI is reachable at `http://127.0.0.1:8000`
+- an admin-capable account exists
+- `NETBOX_ADMIN_PASSWORD` is exported before the script runs
+
+The default script values today are:
+
+- `NETBOX_BASE_URL=http://127.0.0.1:8000`
+- `NETBOX_ADMIN_USERNAME=admin`
+- `PHASE1_SCREENSHOT_DIR=$PWD/docs/images/runbook-roce-phase1-ui`
+
+Example invocation:
+
+```bash
+cd ~/src/netbox_multiplanar_fabrics
+PLAYWRIGHT_BROWSERS_PATH=$PWD/.tmp/playwright-browsers \
+NETBOX_BASE_URL=http://127.0.0.1:8000 \
+NETBOX_ADMIN_USERNAME=admin \
+NETBOX_ADMIN_PASSWORD='...' \
+PHASE1_SCREENSHOT_DIR=$PWD/docs/images/runbook-roce-phase1-ui \
+node devrun/playwright_phase1_runbook.js
+```
+
+If your local admin password is stored in a credentials file, source or export
+it before running the script.
+
+### Script behavior that matters
+
+`devrun/playwright_phase1_runbook.js` is intentionally opinionated. Preserve
+these behaviors unless the NetBox UI changes:
+
+- Hide the right-side Django debug toolbar before screenshots by clicking `#djHideToolBarButton`. Leaving the toolbar visible masks important UI elements.
+- Use the page's real primary submit button (`form button[type="submit"].btn-primary`) rather than a tab header or generic "Create" control.
+- Use the form `Reslug` button (`button.reslug`) for tenant creation so the slug field is derived once from the name. This avoids bad doubled slugs such as `operatoroperator`.
+- Use the actual TomSelect control for tenant-group assignment:
+  - input: `#id_group-ts-control`
+  - dropdown option: `#id_group-ts-dropdown .option`
+- Capture each stable screen with `page.screenshot(..., fullPage: true)` after the page reaches `networkidle` and after the toolbar is hidden.
+
+### Reset expectations before reruns
+
+If you rerun the documented Phase 1 flow, remove the previously created tenancy
+objects first. Otherwise NetBox will correctly reject duplicate names or slugs.
+
+At minimum, clear:
+
+- tenant `Operator`
+- tenant `Tenant Alpha`
+- tenant `Tenant Beta`
+- tenant group `GPU Workload Tenants`
+
+The runbook cleanup path should be used when the broader RoCE topology has
+already been created. For Phase 1-only reruns, verify these tenancy objects are
+gone before capturing screenshots again.
+
+### Updating the markdown
+
+Store the resulting screenshots under `docs/images/runbook-roce-phase1-ui/` and
+embed them directly in `docs/runbook-roce-fabric-modeling.md` next to the
+corresponding procedural steps. Keep file names stable and step-oriented so the
+document remains easy to diff and refresh.
 
 ## Pull Request Guidelines
 
@@ -169,6 +275,11 @@ Read these files together when you are doing architecture work:
 - `netbox_plant_graph/tests/test_sync.py`
 - `netbox_plant_graph/tests/test_resolver.py`
 - `netbox_plant_graph_plugin_design.md`
+- `audit_remediation_durability_plan.md`
+- `unresolved_lane_durability_architecture.md`
+- `typed_lane_api_query_expansion_architecture.md`
+- `lane_workspace_user_experience_architecture.md`
+- `policy_disjointness_workflow_architecture.md`
 
 ### Core Architecture
 
@@ -290,7 +401,7 @@ Important behavior:
 `netbox_plant_graph/graphql/schema.py` registers both:
 
 - model-backed GraphQL fields from the registry
-- operational queries such as `resolvePath`, `planeAudit`, and `blastRadius`
+- operational queries such as `resolvePath`, `planeAudit`, `blastRadius`, and `laneCompare`
 
 Important behavior:
 
@@ -456,6 +567,11 @@ Typical places:
 - `README.md`
 - `LOCAL_DEV_SETUP.md`
 - `netbox_plant_graph_plugin_design.md`
+- focused implementation notes such as `audit_remediation_durability_plan.md`
+- future-scope architecture notes such as `unresolved_lane_durability_architecture.md`
+- future-scope architecture notes such as `typed_lane_api_query_expansion_architecture.md`
+- future-scope architecture notes such as `lane_workspace_user_experience_architecture.md`
+- future-scope architecture notes such as `policy_disjointness_workflow_architecture.md`
 - inline docstrings when service behavior becomes more complex
 
 ## Testing and the Definition of Green

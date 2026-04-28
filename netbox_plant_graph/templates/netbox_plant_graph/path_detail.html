@@ -1,54 +1,51 @@
 {% extends 'base/layout.html' %}
+{% load form_helpers %}
 
 {% block content %}
 <h1>Path Resolver</h1>
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3">
+    <form method="get" class="row g-3" data-path-resolver-form>
+      {{ form.source_id }}
+      {{ form.destination_id }}
       <div class="col-md-3">
-        <label class="form-label" for="source_registry_key">Source Type</label>
-        <select class="form-select" id="source_registry_key" name="source_registry_key">
-          {% for choice in registry_choices %}
-            <option value="{{ choice.value }}"{% if choice.value == query.source_registry_key %} selected{% endif %}>{{ choice.label }}</option>
-          {% endfor %}
-        </select>
+        {% render_field form.source_registry_key %}
+      </div>
+      <div class="col-md-9">
+        {% for spec in selector_specs %}
+          <div
+            class="{% if spec.registry_key != query.source_registry_key %}d-none{% endif %}"
+            data-path-resolver-selector-container
+            data-path-resolver-role="source"
+            data-path-resolver-registry-key="{{ spec.registry_key }}"
+          >
+            {% render_field form|getfield:spec.source_field_name %}
+          </div>
+        {% endfor %}
       </div>
       <div class="col-md-3">
-        <label class="form-label" for="source_id">Source ID</label>
-        <input class="form-control" id="source_id" name="source_id" value="{{ query.source_id }}">
+        {% render_field form.destination_registry_key %}
+      </div>
+      <div class="col-md-9">
+        {% for spec in selector_specs %}
+          <div
+            class="{% if spec.registry_key != query.destination_registry_key %}d-none{% endif %}"
+            data-path-resolver-selector-container
+            data-path-resolver-role="destination"
+            data-path-resolver-registry-key="{{ spec.registry_key }}"
+          >
+            {% render_field form|getfield:spec.destination_field_name %}
+          </div>
+        {% endfor %}
       </div>
       <div class="col-md-3">
-        <label class="form-label" for="destination_registry_key">Destination Type</label>
-        <select class="form-select" id="destination_registry_key" name="destination_registry_key">
-          {% for choice in registry_choices %}
-            <option value="{{ choice.value }}"{% if choice.value == query.destination_registry_key %} selected{% endif %}>{{ choice.label }}</option>
-          {% endfor %}
-        </select>
+        {% render_field form.plane_id %}
       </div>
       <div class="col-md-3">
-        <label class="form-label" for="destination_id">Destination ID</label>
-        <input class="form-control" id="destination_id" name="destination_id" value="{{ query.destination_id }}">
+        {% render_field form.resolution %}
       </div>
       <div class="col-md-3">
-        <label class="form-label" for="plane_id">Plane Filter</label>
-        <select class="form-select" id="plane_id" name="plane_id">
-          <option value="">Any plane</option>
-          {% for plane in plane_choices %}
-            <option value="{{ plane.pk }}"{% if query.plane_id and plane.pk|stringformat:'s' == query.plane_id %} selected{% endif %}>{{ plane.fabric.name }} / Plane {{ plane.plane_number }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label" for="resolution">Resolution</label>
-        <select class="form-select" id="resolution" name="resolution">
-          {% for choice in resolution_choices %}
-            <option value="{{ choice.value }}"{% if choice.value == query.resolution %} selected{% endif %}>{{ choice.label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label" for="max_depth">Max Depth</label>
-        <input class="form-control" id="max_depth" name="max_depth" value="{{ query.max_depth }}">
+        {% render_field form.max_depth %}
       </div>
       <div class="col-md-3 align-self-end">
         <button type="submit" class="btn btn-primary">Resolve</button>
@@ -188,4 +185,61 @@
     </div>
   </div>
 {% endif %}
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    var form = document.querySelector('[data-path-resolver-form]');
+    if (!form) {
+      return;
+    }
+
+    function syncRole(role) {
+      var registrySelect = form.querySelector('[name="' + role + '_registry_key"]');
+      var hiddenInput = form.querySelector('[name="' + role + '_id"]');
+      var containers = form.querySelectorAll('[data-path-resolver-role="' + role + '"]');
+      if (!registrySelect || !hiddenInput) {
+        return;
+      }
+
+      var activeKey = registrySelect.value;
+      var activeSelect = null;
+
+      containers.forEach(function (container) {
+        var isActive = container.dataset.pathResolverRegistryKey === activeKey;
+        container.classList.toggle('d-none', !isActive);
+
+        container.querySelectorAll('select').forEach(function (select) {
+          select.disabled = !isActive;
+          if (isActive) {
+            activeSelect = select;
+          }
+        });
+      });
+
+      hiddenInput.value = activeSelect ? activeSelect.value : '';
+    }
+
+    ['source', 'destination'].forEach(function (role) {
+      var registrySelect = form.querySelector('[name="' + role + '_registry_key"]');
+      if (registrySelect) {
+        registrySelect.addEventListener('change', function () {
+          syncRole(role);
+        });
+      }
+
+      form.querySelectorAll('[data-path-resolver-role="' + role + '"] select').forEach(function (select) {
+        select.addEventListener('change', function () {
+          syncRole(role);
+        });
+      });
+
+      syncRole(role);
+    });
+
+    form.addEventListener('submit', function () {
+      syncRole('source');
+      syncRole('destination');
+    });
+  });
+</script>
 {% endblock %}

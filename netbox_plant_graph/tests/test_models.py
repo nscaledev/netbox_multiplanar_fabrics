@@ -1,6 +1,7 @@
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
+from tenancy.models import Tenant
 
 from netbox_plant_graph.models import Fabric, FabricPlane, PlaneMembership
 
@@ -33,3 +34,16 @@ class ModelBehaviorTestCase(TestCase):
             membership.get_absolute_url(),
             reverse('plugins:netbox_plant_graph:plane-membership', args=[membership.pk]),
         )
+
+    def test_fabric_resolved_tenant_uses_direct_tenant(self):
+        tenant = Tenant.objects.create(name='Core Tenant', slug='core-tenant')
+        fabric = Fabric.objects.create(name='Fabric D', tenant=tenant)
+
+        self.assertEqual(fabric.resolved_tenant, tenant)
+
+    def test_fabric_plane_resolved_tenant_inherits_from_fabric(self):
+        tenant = Tenant.objects.create(name='Inherited Tenant', slug='inherited-tenant')
+        fabric = Fabric.objects.create(name='Fabric E', tenant=tenant)
+        plane = FabricPlane.objects.create(fabric=fabric, plane_number=2)
+
+        self.assertEqual(plane.resolved_tenant, tenant)

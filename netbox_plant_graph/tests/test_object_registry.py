@@ -16,3 +16,10 @@ class ObjectRegistryContractTestCase(SimpleTestCase):
         self.assertEqual(spec.api.basename, 'fabrics')
         self.assertEqual(spec.view.list_class_name, 'FabricListView')
         self.assertEqual(spec.table.linkify_field, 'name')
+
+    def test_spatialplacement_spec_is_read_only(self):
+        spec = get_object_spec('spatialplacement')
+
+        self.assertFalse(spec.view.supports_create)
+        self.assertTrue(spec.api.read_only)
+        self.assertFalse(spec.navigation.show_add_button)

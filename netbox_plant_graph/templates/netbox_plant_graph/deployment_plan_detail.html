@@ -1,0 +1,149 @@
+{% extends 'generic/object.html' %}
+
+{% block content %}
+{# --- Plan fields card --- #}
+<div class="card mb-3">
+  <div class="card-header">
+    <strong>Deployment Plan</strong>
+  </div>
+  <div class="card-body">
+    <table class="table table-hover">
+      <tbody>
+        {% for field in detail_fields %}
+          <tr>
+            <th>{{ field.label }}</th>
+            <td>
+              {% if field.url %}<a href="{{ field.url }}">{{ field.value }}</a>
+              {% elif field.is_empty %}&mdash;
+              {% else %}{{ field.value }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# --- Status summary --- #}
+<div class="row mb-3">
+  {% for stat in stamp_stats %}
+    <div class="col-auto">
+      <div class="card">
+        <div class="card-body text-center py-2 px-3">
+          <div class="fw-bold">{{ stat.count }}</div>
+          <div class="text-muted small">{{ stat.label }}</div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{# --- Action buttons --- #}
+{% if can_execute or can_rollback %}
+  <div class="card mb-3">
+    <div class="card-header"><strong>Plan Actions</strong></div>
+    <div class="card-body d-flex flex-wrap gap-2">
+      {% if can_execute %}
+        <form method="post" action="{% url 'plugins:netbox_plant_graph:deployment_plan_execute' pk=object.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-success" onclick="return confirm('Execute all pending stamps in this plan?')">
+            Execute Plan
+          </button>
+        </form>
+      {% endif %}
+      {% if can_rollback %}
+        <form method="post" action="{% url 'plugins:netbox_plant_graph:deployment_plan_rollback' pk=object.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger" onclick="return confirm('Roll back all stamped objects in this plan? This will delete the created objects.')">
+            Roll Back Plan
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+{# --- Template Library link --- #}
+<div class="mb-3">
+  <a href="{% url 'plugins:netbox_plant_graph:template_library' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="mdi mdi-book-open-variant"></i> Template Library
+  </a>
+</div>
+
+{# --- Stamp records table --- #}
+<div class="card">
+  <div class="card-header"><strong>Stamp Records</strong></div>
+  <div class="card-body p-0">
+    {% if stamp_records %}
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Template</th>
+            <th>Result</th>
+            <th>Tenant</th>
+            <th>Status</th>
+            <th>Stamped At</th>
+            <th>Stamped By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for record in stamp_records %}
+            <tr>
+              <td>
+                {% if record.template %}
+                  <a href="{{ record.template.get_absolute_url }}">{{ record.template }}</a>
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+              <td>
+                {% if record.result %}
+                  <a href="{{ record.result.get_absolute_url }}">{{ record.result }}</a>
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+              <td>
+                {% if record.resolved_tenant %}
+                  <a href="{{ record.resolved_tenant.get_absolute_url }}">{{ record.resolved_tenant }}</a>
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+              <td>
+                <span class="badge bg-{% if record.status == 'stamped' or record.status == 'validated' %}success{% elif record.status == 'failed' %}danger{% elif record.status == 'rolled_back' %}warning{% else %}secondary{% endif %}">
+                  {{ record.get_status_display }}
+                </span>
+                {% if record.error_detail %}
+                  <span class="text-danger small ms-1">{{ record.error_detail|truncatechars:80 }}</span>
+                {% endif %}
+                {% with floorplan_sync=record.metadata.floorplan_sync %}
+                  {% if floorplan_sync %}
+                    <div class="small text-muted mt-1">
+                      Floorplan sync:
+                      {% if floorplan_sync.sync_skipped_reason == 'disabled' %}
+                        disabled
+                      {% elif floorplan_sync.sync_skipped_reason == 'no_rack_placements' %}
+                        skipped (no rack placements)
+                      {% else %}
+                        {{ floorplan_sync.racks_synced_to_floorplan }} rack(s) synced across {{ floorplan_sync.floorplans_touched }} floorplan(s)
+                      {% endif %}
+                      {% if floorplan_sync.floorplan_errors %}
+                        <span class="text-danger">{{ floorplan_sync.floorplan_errors|join:', ' }}</span>
+                      {% endif %}
+                    </div>
+                  {% endif %}
+                {% endwith %}
+              </td>
+              <td>{{ record.stamped_at|default:"&mdash;" }}</td>
+              <td>{{ record.stamped_by|default:"&mdash;" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="text-muted p-3 mb-0">No stamp records in this plan yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
