@@ -2,6 +2,9 @@
 set -euo pipefail
 
 DEVRUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Supported NetBox release lines: 4.2.x (GA baseline 4.2.3) and 4.5.x (GA baseline 4.5.7).
+# Override NETBOX_RELEASE to target a specific patch release, e.g.
+#   NETBOX_RELEASE=4.2.3 ./dev.sh start
 NETBOX_RELEASE="${NETBOX_RELEASE:-4.5.7}"
 NETBOX_SRC="${NETBOX_SRC:-$HOME/src/netbox-v${NETBOX_RELEASE}}"
 NETBOX_PROJECT_DIR="${NETBOX_PROJECT_DIR:-$NETBOX_SRC/netbox}"

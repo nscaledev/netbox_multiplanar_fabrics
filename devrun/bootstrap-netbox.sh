@@ -177,10 +177,23 @@ REDIS = {
 }
 
 SECRET_KEY = '$NETBOX_SECRET_KEY'
+EOF
+
+    # API_TOKEN_PEPPERS was introduced in NetBox 4.5.0.  Including it on
+    # older releases (e.g. 4.2.x) causes an unrecognised-setting error, so
+    # we only emit the block when the configured release starts with "4.5."
+    # or is from a later major or minor line.
+    case "$NETBOX_RELEASE" in
+        4.5.*|4.[6-9].*|[5-9].*)
+            cat >> "$CONFIG_FILE" <<EOF
 API_TOKEN_PEPPERS = {
     1: '$NETBOX_API_TOKEN_PEPPER',
 }
+EOF
+            ;;
+    esac
 
+    cat >> "$CONFIG_FILE" <<EOF
 PLUGINS = ['netbox_floorplan', 'netbox_plant_graph'] if os.getenv('NETBOX_PLANT_GRAPH_ENABLE') == '1' else []
 
 PLUGINS_CONFIG = {

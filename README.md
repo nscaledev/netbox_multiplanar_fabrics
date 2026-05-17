@@ -64,7 +64,7 @@ The test suite includes a multiplane shuffle fixture with one 800G host interfac
 
 ## Requirements
 
-- NetBox 4.5.0+
+- NetBox 4.2.3+ (supported lines: 4.2.x and 4.5.x; 4.3.x and 4.4.x are not validated)
 - Python 3.12+
 - `netbox-floorplan-plugin` 0.9.x for the floorplan/layout integration work
 

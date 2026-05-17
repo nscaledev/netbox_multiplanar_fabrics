@@ -11,7 +11,17 @@ from django.core.exceptions import FieldDoesNotExist
 from django.urls import reverse
 from django.utils import timezone
 from django.views import View
-from netbox.object_actions import AddObject, BulkExport
+try:
+    from netbox.object_actions import AddObject, BulkExport
+except ImportError:  # pragma: no cover - only triggered on NetBox < 4.2
+    # Compatibility stubs for NetBox versions that pre-date the object_actions
+    # module.  The stubs carry the correct class names so that name-based
+    # introspection (e.g. test assertions on __name__) still works.
+    class AddObject:  # type: ignore[no-redef]  # noqa: N801
+        """Compatibility stub for NetBox versions without netbox.object_actions."""
+
+    class BulkExport:  # type: ignore[no-redef]  # noqa: N801
+        """Compatibility stub for NetBox versions without netbox.object_actions."""
 from netbox.views import generic
 
 from .choices import GraphResolutionChoices, SpatialNodeTypeChoices

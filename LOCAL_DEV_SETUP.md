@@ -4,8 +4,11 @@ This project follows the same local dev patterns as `netbox_rpki`.
 
 ## Expected environment
 
-- NetBox source tree at `$HOME/src/netbox-v4.5.7/netbox`
-- Virtualenv at `$HOME/.virtualenvs/netbox-4.5.7`
+- NetBox source tree at `$HOME/src/netbox-v<RELEASE>/netbox`
+  (default: `$HOME/src/netbox-v4.5.7/netbox`; 4.2.3 is also supported — set
+  `NETBOX_RELEASE=4.2.3` to target that line)
+- Virtualenv at `$HOME/.virtualenvs/netbox-<RELEASE>`
+  (default: `$HOME/.virtualenvs/netbox-4.5.7`)
 - Docker for PostgreSQL and Redis
 - `netbox-floorplan-plugin` installed into the same NetBox virtualenv
 - `PLUGINS = ['netbox_floorplan', 'netbox_plant_graph']` in local NetBox configuration

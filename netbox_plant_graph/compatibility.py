@@ -4,10 +4,16 @@ from dataclasses import dataclass
 from typing import Iterable
 
 
-SUPPORTED_NETBOX_MAJOR_MINOR = (4, 5)
+# Each tuple is a (major, minor) pair.  Patch releases within a listed line
+# are classified as 'beta' (untested patch) or 'ga' (release-gated) depending
+# on whether the exact (netbox_full, python_full) pair appears in GA_COMBINATIONS.
+# Versions whose major.minor pair is NOT listed here are classified as
+# 'unsupported' regardless of patch level or Python version.
+SUPPORTED_NETBOX_MAJOR_MINOR_VERSIONS = frozenset({(4, 2), (4, 5)})
 SUPPORTED_PYTHON_MIN = (3, 12)
 SUPPORTED_PYTHON_BEST_EFFORT_MAX = (3, 14)
 GA_COMBINATIONS = {
+    ((4, 2, 3), (3, 12)),
     ((4, 5, 0), (3, 12)),
     ((4, 5, 7), (3, 12)),
 }
@@ -47,12 +53,16 @@ def classify_runtime(*, netbox_version: str, python_version: tuple[int, int]) ->
     netbox_full = _release_prefix(netbox_release, 3)
     python_full = _release_prefix(python_version, 2)
 
-    if netbox_major_minor != SUPPORTED_NETBOX_MAJOR_MINOR:
+    if netbox_major_minor not in SUPPORTED_NETBOX_MAJOR_MINOR_VERSIONS:
+        _supported_lines = ', '.join(
+            f'{maj}.{min}.x'
+            for maj, min in sorted(SUPPORTED_NETBOX_MAJOR_MINOR_VERSIONS)
+        )
         return CompatibilityAssessment(
             status='unsupported',
             message=(
                 f'Unsupported runtime: NetBox {netbox_version} is outside the supported '
-                f'{SUPPORTED_NETBOX_MAJOR_MINOR[0]}.{SUPPORTED_NETBOX_MAJOR_MINOR[1]}.x release line.'
+                f'release lines ({_supported_lines}).'
             ),
         )
 
@@ -80,7 +90,8 @@ def classify_runtime(*, netbox_version: str, python_version: tuple[int, int]) ->
             status='beta',
             message=(
                 f'Beta runtime: NetBox {netbox_version} with Python '
-                f'{python_full[0]}.{python_full[1]} is inside the supported 4.5.x line, '
+                f'{python_full[0]}.{python_full[1]} is inside the supported '
+                f'{netbox_major_minor[0]}.{netbox_major_minor[1]}.x line, '
                 'but this exact patch combination is not release-gated.'
             ),
         )

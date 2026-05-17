@@ -73,7 +73,7 @@ class PlantGraphConfig(PluginConfig):
     author = 'Mencken Davidson'
     author_email = 'mencken@gmail.com'
     base_url = 'plant-graph'
-    min_version = '4.5.0'
+    min_version = '4.2.3'
     max_version = '4.5.99'
     required_settings = []
     default_settings = {
@@ -106,9 +106,12 @@ class PlantGraphConfig(PluginConfig):
         post_migrate.connect(_ensure_managed_custom_fields, sender=self)
 
         from . import navigation as _nav
-        from netbox.plugins import register_menu as _register_menu
-        for _m in getattr(_nav, 'menus', ()):  # pragma: no branch
-            _register_menu(_m)
+        try:
+            from netbox.plugins import register_menu as _register_menu
+            for _m in getattr(_nav, 'menus', ()):  # pragma: no branch
+                _register_menu(_m)
+        except (ImportError, AttributeError):  # pragma: no cover
+            pass  # register_menu not available on this NetBox version
         emit_runtime_compatibility_warning(netbox_version=getattr(settings, 'VERSION', self.min_version))
         emit_floorplan_availability_warning()
 
