@@ -30,14 +30,18 @@ except ImportError:
 
 class PlantGraphTopologyMixin(CablePathTestCase):
     @staticmethod
-    def _create_front_port(*, device, name):
+    def _create_front_port(*, device, name, rear_port=None):
         field_names = {field.name for field in FrontPort._meta.fields}
         if 'rear_port' not in field_names:
             return FrontPort.objects.create(device=device, name=name)
-        rear_port = RearPort.objects.create(device=device, name=f'{name}-rear', positions=1)
+        if rear_port is None:
+            rear_port = device.rearports.order_by('pk').first()
+        if rear_port is None:
+            rear_port = RearPort.objects.create(device=device, name=f'{name}-rear', positions=1)
         kwargs = {'device': device, 'name': name, 'rear_port': rear_port}
         if 'rear_port_position' in field_names:
-            kwargs['rear_port_position'] = 1
+            existing_count = FrontPort.objects.filter(rear_port=rear_port).count()
+            kwargs['rear_port_position'] = 1001 + existing_count
         return FrontPort.objects.create(**kwargs)
 
     @staticmethod
@@ -88,10 +92,10 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         peer_device = self.create_peer_device(name='Patch Peer')
         interface_a = Interface.objects.create(device=self.device, name='Interface A')
         interface_b = Interface.objects.create(device=peer_device, name='Interface B')
-        front_port_a = self._create_front_port(device=self.device, name='Front Port A')
         rear_port_a = RearPort.objects.create(device=self.device, name='Rear Port A', positions=1)
-        front_port_b = self._create_front_port(device=peer_device, name='Front Port B')
+        front_port_a = self._create_front_port(device=self.device, name='Front Port A', rear_port=rear_port_a)
         rear_port_b = RearPort.objects.create(device=peer_device, name='Rear Port B', positions=1)
+        front_port_b = self._create_front_port(device=peer_device, name='Front Port B', rear_port=rear_port_b)
 
         PortMapping.objects.create(
             device=self.device,
@@ -177,11 +181,10 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         shuffle_front_ports = []
         shuffle_rear_ports = []
         for port_number in range(1, 5):
+            rear_port = RearPort.objects.create(device=shuffle_device, name=f'rear{port_number}', positions=1)
+            shuffle_rear_ports.append(rear_port)
             shuffle_front_ports.append(
-                self._create_front_port(device=shuffle_device, name=f'front{port_number}')
-            )
-            shuffle_rear_ports.append(
-                RearPort.objects.create(device=shuffle_device, name=f'rear{port_number}', positions=1)
+                self._create_front_port(device=shuffle_device, name=f'front{port_number}', rear_port=rear_port)
             )
 
         shuffle_mapping = {1: 1, 2: 3, 3: 2, 4: 4}
@@ -385,8 +388,8 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         peer_device = self.create_peer_device(name='Unmapped Passive Peer')
         interface_a = Interface.objects.create(device=self.device, name='Interface A')
         interface_b = Interface.objects.create(device=peer_device, name='Interface B')
-        front_port = self._create_front_port(device=self.device, name='Front Port A')
         rear_port = RearPort.objects.create(device=self.device, name='Rear Port A', positions=1)
+        front_port = self._create_front_port(device=self.device, name='Front Port A', rear_port=rear_port)
 
         access_cable = Cable(a_terminations=[interface_a], b_terminations=[front_port])
         access_cable.clean()

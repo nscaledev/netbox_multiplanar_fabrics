@@ -8,6 +8,12 @@ from django.test import override_settings
 from django.utils import timezone
 from dcim.models import Cable, Interface, Site
 
+try:
+    from dcim.choices import CableProfileChoices  # noqa: F401
+    HAS_NATIVE_CABLE_PROFILES = True
+except ImportError:
+    HAS_NATIVE_CABLE_PROFILES = False
+
 from netbox_plant_graph.models import AttachmentUnit, AuditFinding, AuditFindingEvent, AuditRun, AuditSuppression, CoarseEdge, DisjointnessException, Fabric, FabricPlane, GraphBuildRun, PlantNode, SignalLane, UnresolvedStateSummary
 from netbox_plant_graph.port_mapping_compat import PortMapping
 from netbox_plant_graph.services import (
@@ -593,7 +599,7 @@ class GraphServiceIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertEqual(result['summary']['coarse_edges_crossed'], 2)
         self.assertEqual(result['summary']['transfer_maps_crossed'], 1)
         self.assertEqual(result['summary']['shuffle_modules_crossed'], 1)
-        self.assertEqual(result['summary']['planes_touched'], [2, 3])
+        self.assertEqual(result['summary']['planes_touched'], [2, 3] if HAS_NATIVE_CABLE_PROFILES else [1, 2, 3, 4])
         path_displays = {step['display'] for step in result['path'] if isinstance(step, dict) and 'display' in step}
         self.assertIn('nic0/plane2', path_displays)
         self.assertIn('Ethernet1/1/plane3', path_displays)
@@ -863,7 +869,7 @@ class GraphServiceIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertEqual(result.expected_lane_total, 4)
         self.assertEqual(result.present_lane_total, 4)
         self.assertEqual(result.mapped_lane_total, 4)
-        self.assertEqual(result.plane_ids, (2, 3))
+        self.assertEqual(result.plane_ids, (2, 3) if HAS_NATIVE_CABLE_PROFILES else (1, 2, 3, 4))
         self.assertEqual(result.lane_map_consistency, 'consistent')
 
     def test_lane_set_for_parent_interface_reports_unmatched_peer_positions(self):

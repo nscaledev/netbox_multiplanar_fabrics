@@ -8,9 +8,17 @@ from netbox_plant_graph.checks import check_breakout_profile_custom_field, check
 from netbox_plant_graph.models import BreakoutProfile
 
 
+def _model_type_for_model(model):
+    try:
+        from core.models import ObjectType
+        return ObjectType.objects.get_for_model(model)
+    except Exception:
+        return ContentType.objects.get_for_model(model)
+
+
 class FabricPlaneCustomFieldCheckTestCase(TestCase):
     def setUp(self):
-        self.interface_type = ContentType.objects.get_for_model(Interface)
+        self.interface_type = _model_type_for_model(Interface)
 
     def test_check_warns_when_custom_field_is_missing(self):
         CustomField.objects.filter(name='fabric_plane').delete()
@@ -44,8 +52,8 @@ class FabricPlaneCustomFieldCheckTestCase(TestCase):
 
 class BreakoutProfileCustomFieldCheckTestCase(TestCase):
     def setUp(self):
-        self.cable_type = ContentType.objects.get_for_model(Cable)
-        self.breakout_profile_type = ContentType.objects.get_for_model(BreakoutProfile)
+        self.cable_type = _model_type_for_model(Cable)
+        self.breakout_profile_type = _model_type_for_model(BreakoutProfile)
 
     def test_check_warns_when_custom_field_is_missing(self):
         CustomField.objects.filter(name='mpf_breakout_profile').delete()
@@ -69,7 +77,7 @@ class BreakoutProfileCustomFieldCheckTestCase(TestCase):
         self.assertEqual([message.id for message in messages], ['netbox_plant_graph.W004'])
 
     def test_check_warns_when_custom_field_targets_wrong_model(self):
-        interface_type = ContentType.objects.get_for_model(Interface)
+        interface_type = _model_type_for_model(Interface)
         custom_field, _ = CustomField.objects.get_or_create(
             name='mpf_breakout_profile',
             defaults={'label': 'Breakout Profile', 'type': 'object'},

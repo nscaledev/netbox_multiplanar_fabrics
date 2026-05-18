@@ -25,13 +25,19 @@ class _CompatPortMappingRecord:
 
 def _iter_records():
     for front_port in FrontPort.objects.exclude(rear_port_id__isnull=True).select_related('device', 'rear_port'):
+        rear_port_position = front_port.rear_port_position
+        rear_port_positions = max(getattr(front_port.rear_port, 'positions', 1) or 1, 1)
+        if rear_port_position in (None, ''):
+            continue
+        if int(rear_port_position) < 1 or int(rear_port_position) > rear_port_positions:
+            continue
         yield _CompatPortMappingRecord(
             pk=front_port.pk,
             device_id=front_port.device_id,
             front_port_id=front_port.pk,
             front_port_position=1,
             rear_port_id=front_port.rear_port_id,
-            rear_port_position=front_port.rear_port_position,
+            rear_port_position=int(rear_port_position),
             device=front_port.device,
             front_port=front_port,
             rear_port=front_port.rear_port,

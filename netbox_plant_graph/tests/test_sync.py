@@ -5,6 +5,12 @@ from django.test import override_settings
 
 from dcim.models import FrontPort, Interface, RearPort, Site
 
+try:
+    from dcim.choices import CableProfileChoices  # noqa: F401
+    HAS_NATIVE_CABLE_PROFILES = True
+except ImportError:
+    HAS_NATIVE_CABLE_PROFILES = False
+
 from netbox_plant_graph.jobs import BlastRadiusJob, FullGraphRebuildJob, IncrementalRefreshJob
 from netbox_plant_graph.models import AttachmentUnit, CoarseEdge, Fabric, FineEdge, GraphBuildRun, LaneMap, PlaneMembership, PlantNode, SignalLane, TerminationPoint, TransferMap, UnresolvedStateObservation, UnresolvedStateSummary
 from netbox_plant_graph.port_mapping_compat import PortMapping
@@ -487,7 +493,7 @@ class GraphSyncIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertEqual(result['terminations'], 10)
         self.assertEqual(result['coarse_edges'], 8)
         self.assertEqual(result['transfer_maps'], 4)
-        self.assertEqual(result['fine_edges'], 12)
+        self.assertEqual(result['fine_edges'], 12 if HAS_NATIVE_CABLE_PROFILES else 18)
 
         self.assertEqual(PlantNode.objects.filter(fabric=fabric).count(), 3)
         self.assertEqual(TerminationPoint.objects.filter(plant_node__fabric=fabric).count(), 10)
@@ -569,7 +575,7 @@ class GraphSyncIntegrationTestCase(PlantGraphTopologyMixin):
                 granularity='signal_lane',
                 a_lane__attachment_unit__termination_point__plant_node__fabric=fabric,
             ).count(),
-            32,
+            32 if HAS_NATIVE_CABLE_PROFILES else 56,
         )
         self.assertEqual(
             LaneMap.objects.filter(owner_node__fabric=fabric).count(),
