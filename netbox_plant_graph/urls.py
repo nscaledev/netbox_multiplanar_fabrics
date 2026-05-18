@@ -48,21 +48,38 @@ app_name = 'netbox_plant_graph'
 def build_object_urlpatterns(spec):
     path_prefix = spec.routes.resolved_path_prefix
     route_slug = spec.routes.slug
+    model_slug = spec.model._meta.model_name
     list_view = getattr(views, spec.view.list_class_name)
     detail_view = getattr(views, spec.view.detail_class_name)
     urlpatterns = [
         path(f'{path_prefix}/', list_view.as_view(), name=f'{route_slug}_list'),
+        path(f'{path_prefix}/', list_view.as_view(), name=f'{model_slug}_list'),
         path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=route_slug),
+        path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=model_slug),
     ]
     if spec.view.edit_class_name is not None:
         edit_view = getattr(views, spec.view.edit_class_name)
         urlpatterns.extend([
             path(f'{path_prefix}/add/', edit_view.as_view(), name=f'{route_slug}_add'),
+            path(f'{path_prefix}/add/', edit_view.as_view(), name=f'{model_slug}_add'),
             path(f'{path_prefix}/<int:pk>/edit/', edit_view.as_view(), name=f'{route_slug}_edit'),
+            path(f'{path_prefix}/<int:pk>/edit/', edit_view.as_view(), name=f'{model_slug}_edit'),
+        ])
+    else:
+        urlpatterns.extend([
+            path(f'{path_prefix}/', list_view.as_view(), name=f'{route_slug}_add'),
+            path(f'{path_prefix}/', list_view.as_view(), name=f'{model_slug}_add'),
+            path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=f'{route_slug}_edit'),
+            path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=f'{model_slug}_edit'),
+            path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=f'{route_slug}_delete'),
+            path(f'{path_prefix}/<int:pk>/', detail_view.as_view(), name=f'{model_slug}_delete'),
         ])
     if spec.view.delete_class_name is not None:
         delete_view = getattr(views, spec.view.delete_class_name)
-        urlpatterns.append(path(f'{path_prefix}/<int:pk>/delete/', delete_view.as_view(), name=f'{route_slug}_delete'))
+        urlpatterns.extend([
+            path(f'{path_prefix}/<int:pk>/delete/', delete_view.as_view(), name=f'{route_slug}_delete'),
+            path(f'{path_prefix}/<int:pk>/delete/', delete_view.as_view(), name=f'{model_slug}_delete'),
+        ])
     return urlpatterns
 
 

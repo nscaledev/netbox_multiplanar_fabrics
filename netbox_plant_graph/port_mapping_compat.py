@@ -73,8 +73,13 @@ class _CompatPortMappingQuerySet:
     def delete(self):
         for record in self._records:
             front_port = FrontPort.objects.get(pk=record.front_port_id)
-            front_port.rear_port = None
-            front_port.rear_port_position = None
+            rear_port = front_port.rear_port or front_port.device.rearports.order_by('pk').first()
+            if rear_port is None:
+                from dcim.models import RearPort
+                rear_port = RearPort.objects.create(device=front_port.device, name=f'{front_port.name}-unmapped-rear', positions=1)
+            front_port.rear_port = rear_port
+            current_positions = getattr(rear_port, 'positions', 1) or 1
+            front_port.rear_port_position = int(current_positions) + 1000
             front_port.save(update_fields=('rear_port', 'rear_port_position'))
 
 

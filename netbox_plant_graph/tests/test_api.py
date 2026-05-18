@@ -419,8 +419,15 @@ class StampActionEndpointTestCase(TestCase):
         cls.rack_type = RackType.objects.create(manufacturer=cls.manufacturer, model='Stamp API RT', slug='stamp-api-rt')
         cls.rack = Rack.objects.create(name='Stamp API Rack', site=cls.site)
 
-        RearPortTemplate.objects.create(device_type=cls.device_type, name='A1', type='mpo', positions=4)
-        FrontPortTemplate.objects.create(device_type=cls.device_type, name='B1', type='lc', positions=4)
+        rear_template = RearPortTemplate.objects.create(device_type=cls.device_type, name='A1', type='mpo', positions=4)
+        front_template_kwargs = {'device_type': cls.device_type, 'name': 'B1', 'type': 'lc', 'positions': 4}
+        front_field_names = {field.name for field in FrontPortTemplate._meta.fields}
+        if 'positions' not in front_field_names:
+            front_template_kwargs.pop('positions')
+        if 'rear_port' in front_field_names:
+            front_template_kwargs['rear_port'] = rear_template
+            front_template_kwargs.setdefault('rear_port_position', 1)
+        FrontPortTemplate.objects.create(**front_template_kwargs)
 
     def setUp(self):
         self.client.force_login(self.user)

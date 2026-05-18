@@ -27,6 +27,10 @@ def _ensure_managed_custom_fields(sender, **kwargs):
     call repeatedly.
     """
     try:
+        try:
+            from core.models import ObjectType
+        except Exception:  # pragma: no cover
+            ObjectType = None
         from django.contrib.contenttypes.models import ContentType
         from extras.models import CustomField
 
@@ -45,7 +49,10 @@ def _ensure_managed_custom_fields(sender, **kwargs):
             },
         )
         from dcim.models import Interface
-        iface_ct = ContentType.objects.get_for_model(Interface)
+        if ObjectType is not None:
+            iface_ct = ObjectType.objects.get_for_model(Interface)
+        else:
+            iface_ct = ContentType.objects.get_for_model(Interface)
         if not cf.object_types.filter(pk=iface_ct.pk).exists():
             cf.object_types.add(iface_ct)
         if created:
@@ -104,6 +111,7 @@ class PlantGraphConfig(PluginConfig):
 
         from django.db.models.signals import post_migrate
         post_migrate.connect(_ensure_managed_custom_fields, sender=self)
+        _ensure_managed_custom_fields(sender=self)
 
         from . import navigation as _nav
         try:

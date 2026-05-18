@@ -22,6 +22,13 @@ for spec in API_OBJECT_SPECS:
     router.register(spec.api.basename, VIEWSET_CLASS_MAP[spec.registry_key], basename=spec.api.basename)
 
 urlpatterns = router.urls
+for spec in API_OBJECT_SPECS:
+    viewset_class = VIEWSET_CLASS_MAP[spec.registry_key]
+    model_name = spec.model._meta.model_name
+    urlpatterns += [
+        path(f'{spec.api.basename}/', viewset_class.as_view({'get': 'list'}), name=f'{model_name}-list'),
+        path(f'{spec.api.basename}/<int:pk>/', viewset_class.as_view({'get': 'retrieve'}), name=f'{model_name}-detail'),
+    ]
 urlpatterns += [
     path('workflow/summary/', AuditWorkflowSummaryAPIView.as_view(), name='workflow-summary'),
     path('workflow/findings/', AuditWorkflowFindingSearchAPIView.as_view(), name='workflow-findings'),

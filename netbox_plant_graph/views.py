@@ -960,6 +960,12 @@ def build_list_view_class(spec):
     if spec.view.supports_create:
         actions.insert(0, AddObject)
 
+    def _get_permitted_actions(self, user, model=None):
+        configured_actions = getattr(self, 'actions', {})
+        if hasattr(configured_actions, 'get'):
+            return generic.ObjectListView.get_permitted_actions(self, user, model=model)
+        return ()
+
     return type(spec.view.list_class_name, (generic.ObjectListView,), {
         '__module__': __name__,
         'queryset': spec.model.objects.all(),
@@ -967,6 +973,7 @@ def build_list_view_class(spec):
         'filterset': getattr(filterset_module, spec.filterset.class_name),
         'filterset_form': getattr(forms_module, spec.filter_form.class_name),
         'actions': tuple(actions),
+        'get_permitted_actions': _get_permitted_actions,
     })
 
 

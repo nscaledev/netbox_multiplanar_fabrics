@@ -11,16 +11,23 @@ def ensure_breakout_profile_custom_field():
     Ensure the configured breakout-profile custom field exists on dcim.Cable and
     points at netbox_plant_graph.BreakoutProfile.
     """
-    from django.contrib.contenttypes.models import ContentType
-
     from dcim.models import Cable
+    try:
+        from core.models import ObjectType
+    except Exception:  # pragma: no cover
+        ObjectType = None
+    from django.contrib.contenttypes.models import ContentType
     from extras.models import CustomField
 
     from .models import BreakoutProfile
 
     field_name = get_breakout_profile_field_name()
-    breakout_profile_type = ContentType.objects.get_for_model(BreakoutProfile)
-    cable_type = ContentType.objects.get_for_model(Cable)
+    if ObjectType is not None:
+        breakout_profile_type = ObjectType.objects.get_for_model(BreakoutProfile)
+        cable_type = ObjectType.objects.get_for_model(Cable)
+    else:
+        breakout_profile_type = ContentType.objects.get_for_model(BreakoutProfile)
+        cable_type = ContentType.objects.get_for_model(Cable)
 
     custom_field, created = CustomField.objects.get_or_create(
         name=field_name,

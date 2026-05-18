@@ -13,11 +13,6 @@ def _include_tenant(columns):
 
 def build_table_class(spec):
     row_actions = []
-    if spec.view is not None and spec.view.supports_create:
-        row_actions.insert(0, 'edit')
-    if spec.view is not None and spec.view.supports_delete:
-        insert_at = 1 if 'edit' in row_actions else 0
-        row_actions.insert(insert_at, 'delete')
 
     meta_class = type('Meta', (NetBoxTable.Meta,), {
         'model': spec.model,
