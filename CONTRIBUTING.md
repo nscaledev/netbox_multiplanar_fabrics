@@ -68,25 +68,25 @@ workflows.
 ### Generating Migrations Locally
 
 In the standard local workspace layout from `LOCAL_DEV_SETUP.md`, NetBox's
-management entry point lives at (using the default 4.5.7 release):
+management entry point lives at (using the default 4.2.3 release):
 
 ```bash
-~/src/netbox-v4.5.7/netbox/manage.py
+~/src/netbox-v4.2.3/netbox/manage.py
 ```
 
 Use the pinned NetBox virtualenv and the plugin's test configuration when
 generating plugin migrations:
 
 ```bash
-~/.virtualenvs/netbox-4.5.7/bin/python \
-    ~/src/netbox-v4.5.7/netbox/manage.py \
+~/.virtualenvs/netbox-4.2.3/bin/python \
+    ~/src/netbox-v4.2.3/netbox/manage.py \
     makemigrations netbox_plant_graph \
     --settings=netbox_plant_graph.tests.netbox_configuration
 ```
 
 If your local checkout or virtualenv uses a different pinned NetBox version
-(e.g. 4.2.3), adjust the `netbox-v4.5.7` and `netbox-4.5.7` path segments
-accordingly.  The supported release lines are **4.2.x** and **4.5.x**.
+(e.g. 4.5.7), adjust the `netbox-v4.2.3` and `netbox-4.2.3` path segments
+accordingly. The supported release lines are **4.2.x** and **4.5.x**.
 
 ### Test Lane Expectations
 

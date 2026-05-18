@@ -7,19 +7,36 @@ from netbox.configuration_testing import *  # noqa: F401,F403
 DEVELOPER = True
 
 
-DATABASES = deepcopy(DATABASES)
-DATABASES['default'].update({
-    'NAME': os.getenv('NETBOX_TEST_DB_NAME', DATABASES['default']['NAME']),
-    'USER': os.getenv('NETBOX_TEST_DB_USER', DATABASES['default']['USER']),
-    'PASSWORD': os.getenv('NETBOX_TEST_DB_PASSWORD', DATABASES['default']['PASSWORD']),
-    'HOST': os.getenv('NETBOX_TEST_DB_HOST', DATABASES['default']['HOST']),
-    'PORT': os.getenv('NETBOX_TEST_DB_PORT', DATABASES['default']['PORT']),
-})
-DATABASES['default'].setdefault('TEST', {})
-DATABASES['default']['TEST']['NAME'] = os.getenv(
-    'NETBOX_TEST_DB_TEST_NAME',
-    f"test_{DATABASES['default']['NAME']}_plant_graph",
-)
+if 'DATABASE' in globals():
+    DATABASE = deepcopy(DATABASE)
+    DATABASE.update({
+        'NAME': os.getenv('NETBOX_TEST_DB_NAME', DATABASE.get('NAME')),
+        'USER': os.getenv('NETBOX_TEST_DB_USER', DATABASE.get('USER')),
+        'PASSWORD': os.getenv('NETBOX_TEST_DB_PASSWORD', DATABASE.get('PASSWORD')),
+        'HOST': os.getenv('NETBOX_TEST_DB_HOST', DATABASE.get('HOST')),
+        'PORT': os.getenv('NETBOX_TEST_DB_PORT', DATABASE.get('PORT')),
+    })
+    DATABASE.setdefault('TEST', {})
+    DATABASE['TEST']['NAME'] = os.getenv(
+        'NETBOX_TEST_DB_TEST_NAME',
+        f"test_{DATABASE['NAME']}_plant_graph",
+    )
+    # Keep a Django-native alias for internal consumers expecting DATABASES.
+    DATABASES = {'default': DATABASE}
+else:
+    DATABASES = deepcopy(DATABASES)
+    DATABASES['default'].update({
+        'NAME': os.getenv('NETBOX_TEST_DB_NAME', DATABASES['default']['NAME']),
+        'USER': os.getenv('NETBOX_TEST_DB_USER', DATABASES['default']['USER']),
+        'PASSWORD': os.getenv('NETBOX_TEST_DB_PASSWORD', DATABASES['default']['PASSWORD']),
+        'HOST': os.getenv('NETBOX_TEST_DB_HOST', DATABASES['default']['HOST']),
+        'PORT': os.getenv('NETBOX_TEST_DB_PORT', DATABASES['default']['PORT']),
+    })
+    DATABASES['default'].setdefault('TEST', {})
+    DATABASES['default']['TEST']['NAME'] = os.getenv(
+        'NETBOX_TEST_DB_TEST_NAME',
+        f"test_{DATABASES['default']['NAME']}_plant_graph",
+    )
 
 REDIS = deepcopy(REDIS)
 for section_name in ('tasks', 'caching'):

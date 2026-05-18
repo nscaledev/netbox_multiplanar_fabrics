@@ -148,17 +148,6 @@ ALLOWED_HOSTS = ['*']
 DEBUG = True
 DEVELOPER = True
 
-DATABASES = {
-    'default': {
-        'NAME': 'netbox',
-        'USER': 'netbox',
-        'PASSWORD': '$NETBOX_DATABASE_PASSWORD',
-        'HOST': '127.0.0.1',
-        'PORT': '5432',
-        'CONN_MAX_AGE': 300,
-    }
-}
-
 REDIS = {
     'tasks': {
         'HOST': '127.0.0.1',
@@ -178,6 +167,37 @@ REDIS = {
 
 SECRET_KEY = '$NETBOX_SECRET_KEY'
 EOF
+
+    # NetBox 4.2.x expects DATABASE (singular) while newer releases use
+    # DATABASES. Emit the format expected by the selected release line.
+    case "$NETBOX_RELEASE" in
+        4.2.*)
+            cat >> "$CONFIG_FILE" <<EOF
+DATABASE = {
+    'NAME': 'netbox',
+    'USER': 'netbox',
+    'PASSWORD': '$NETBOX_DATABASE_PASSWORD',
+    'HOST': '127.0.0.1',
+    'PORT': '5432',
+    'CONN_MAX_AGE': 300,
+}
+EOF
+            ;;
+        *)
+            cat >> "$CONFIG_FILE" <<EOF
+DATABASES = {
+    'default': {
+        'NAME': 'netbox',
+        'USER': 'netbox',
+        'PASSWORD': '$NETBOX_DATABASE_PASSWORD',
+        'HOST': '127.0.0.1',
+        'PORT': '5432',
+        'CONN_MAX_AGE': 300,
+    }
+}
+EOF
+            ;;
+    esac
 
     # API_TOKEN_PEPPERS was introduced in NetBox 4.5.0.  Including it on
     # older releases (e.g. 4.2.x) causes an unrecognised-setting error, so
