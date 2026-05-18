@@ -7,7 +7,6 @@ Workstreams C4 + D7 from docs/gap-resolution-plan.md.
 
 from django.db import migrations
 
-
 def create_breakout_reference_data(apps, schema_editor):
     BreakoutProfile = apps.get_model('netbox_plant_graph', 'BreakoutProfile')
     DeviceBreakoutTemplate = apps.get_model('netbox_plant_graph', 'DeviceBreakoutTemplate')
@@ -74,7 +73,6 @@ def create_breakout_reference_data(apps, schema_editor):
             },
         )
 
-
 def remove_breakout_reference_data(apps, schema_editor):
     """Reverse: delete only if still in pristine reference state (no FK consumers)."""
     DeviceBreakoutTemplate = apps.get_model('netbox_plant_graph', 'DeviceBreakoutTemplate')
@@ -82,7 +80,6 @@ def remove_breakout_reference_data(apps, schema_editor):
 
     DeviceBreakoutTemplate.objects.filter(slug='gpu-server-800g-4plane').delete()
     BreakoutProfile.objects.filter(slug='breakout-800g-4x200g').delete()
-
 
 class Migration(migrations.Migration):
 

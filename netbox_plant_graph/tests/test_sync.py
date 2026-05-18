@@ -3,10 +3,11 @@ from unittest.mock import patch
 from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
 
-from dcim.models import FrontPort, Interface, PortMapping, RearPort, Site
+from dcim.models import FrontPort, Interface, RearPort, Site
 
 from netbox_plant_graph.jobs import BlastRadiusJob, FullGraphRebuildJob, IncrementalRefreshJob
 from netbox_plant_graph.models import AttachmentUnit, CoarseEdge, Fabric, FineEdge, GraphBuildRun, LaneMap, PlaneMembership, PlantNode, SignalLane, TerminationPoint, TransferMap, UnresolvedStateObservation, UnresolvedStateSummary
+from netbox_plant_graph.port_mapping_compat import PortMapping
 from netbox_plant_graph.services.graph.unresolved_candidates import collect_unresolved_candidates
 from netbox_plant_graph.services.sync import rebuild_graph
 from netbox_plant_graph.services.sync.graph_builder import build_graph

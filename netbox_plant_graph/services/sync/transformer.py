@@ -580,7 +580,7 @@ def transform_source_bundle(bundle: SourceBundle) -> GraphInputs:
             'src_attachment_key': _attachment_key(port_mapping.front_port, port_mapping.front_port_position),
             'dst_attachment_key': _attachment_key(port_mapping.rear_port, port_mapping.rear_port_position),
             'mapping_type': 'identity',
-            'source_port_mapping': port_mapping,
+            'source_port_mapping': getattr(port_mapping, 'pk', None),
             'metadata': {},
         })
         fine_key = _canonical_pair('fine', source_attachment, destination_attachment, transfer_key)

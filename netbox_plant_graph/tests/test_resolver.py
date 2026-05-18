@@ -6,9 +6,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.test import override_settings
 from django.utils import timezone
-from dcim.models import Cable, Interface, PortMapping, Site
+from dcim.models import Cable, Interface, Site
 
 from netbox_plant_graph.models import AttachmentUnit, AuditFinding, AuditFindingEvent, AuditRun, AuditSuppression, CoarseEdge, DisjointnessException, Fabric, FabricPlane, GraphBuildRun, PlantNode, SignalLane, UnresolvedStateSummary
+from netbox_plant_graph.port_mapping_compat import PortMapping
 from netbox_plant_graph.services import (
     acknowledge_audit_finding,
     build_audit_run_timeline,

@@ -337,7 +337,7 @@ class TransferMap(RegistryModelMixin):
     src_attachment_unit = models.ForeignKey('AttachmentUnit', related_name='transfer_map_sources', on_delete=models.CASCADE)
     dst_attachment_unit = models.ForeignKey('AttachmentUnit', related_name='transfer_map_destinations', on_delete=models.CASCADE)
     mapping_type = models.CharField(max_length=50, choices=TransferMapTypeChoices, default='identity')
-    source_port_mapping = models.ForeignKey('dcim.PortMapping', null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    source_port_mapping = models.PositiveBigIntegerField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -1305,4 +1305,3 @@ class ConnectionTemplate(RegistryModelMixin):
                 raise ValidationError({'source_node': 'Source node must belong to the same SpatialTemplate.'})
             if self.dest_node.template_id != self.spatial_template_id:
                 raise ValidationError({'dest_node': 'Dest node must belong to the same SpatialTemplate.'})
-

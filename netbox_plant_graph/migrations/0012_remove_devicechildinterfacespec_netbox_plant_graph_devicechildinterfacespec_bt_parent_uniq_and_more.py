@@ -4,11 +4,10 @@ import taggit.managers
 import utilities.json
 from django.db import migrations, models
 
-
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('extras', '0134_owner'),
+        ('extras', '0122_charfield_null_choices'),
         ('netbox_plant_graph', '0011_batch_schema_additions'),
     ]
 

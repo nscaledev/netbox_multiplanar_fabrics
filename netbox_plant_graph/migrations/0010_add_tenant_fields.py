@@ -1,10 +1,9 @@
 from django.db import migrations, models
 
-
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0023_add_mptt_tree_indexes'),
+        ('tenancy', '0017_natural_ordering'),
         ('netbox_plant_graph', '0009_planning_models'),
     ]
 

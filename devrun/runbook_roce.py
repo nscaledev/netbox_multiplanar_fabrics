@@ -41,7 +41,6 @@ from dcim.models import (
     Interface,
     Location,
     Manufacturer,
-    PortMapping,
     Rack,
     RearPort,
     Site,
@@ -56,6 +55,7 @@ from netbox_plant_graph.breakout_profiles import (
     set_plugin_breakout_profile_for_cable,
 )
 from netbox_plant_graph.models import BreakoutProfile, Fabric, FabricPlane
+from netbox_plant_graph.port_mapping_compat import PortMapping
 
 
 HALL_CODES = ("a", "b", "c")

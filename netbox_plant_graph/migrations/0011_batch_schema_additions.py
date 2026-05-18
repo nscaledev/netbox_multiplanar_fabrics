@@ -1,12 +1,11 @@
 import django.db.models.deletion
 from django.db import migrations, models
 
-
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('dcim', '0226_modulebay_rebuild_tree'),
-        ('tenancy', '0023_add_mptt_tree_indexes'),
+        ('dcim', '0200_populate_mac_addresses'),
+        ('tenancy', '0017_natural_ordering'),
         ('netbox_plant_graph', '0010_add_tenant_fields'),
     ]
 

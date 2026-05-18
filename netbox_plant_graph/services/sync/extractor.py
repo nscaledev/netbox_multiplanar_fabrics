@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 
-from dcim.models import Cable, CablePath, CableTermination, Device, FrontPort, Interface, PortMapping, RearPort
+from dcim.models import Cable, CablePath, CableTermination, Device, FrontPort, Interface, RearPort
+from netbox_plant_graph.port_mapping_compat import PortMapping
 
 from netbox_plant_graph.models import Fabric
 

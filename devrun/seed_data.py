@@ -40,12 +40,12 @@ from dcim.models import (
     Interface,
     Location,
     Manufacturer,
-    PortMapping,
     Rack,
     RackRole,
     RearPort,
     Site,
 )
+from netbox_plant_graph.port_mapping_compat import PortMapping
 from netbox_plant_graph.models import Fabric
 from netbox_plant_graph.services.sync import rebuild_graph
 

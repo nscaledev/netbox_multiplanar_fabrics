@@ -1,9 +1,10 @@
 from dcim.choices import CableProfileChoices
-from dcim.models import Cable, Device, FrontPort, Interface, PortMapping, RearPort
+from dcim.models import Cable, Device, FrontPort, Interface, RearPort
 from dcim.tests.utils import CablePathTestCase
 
 from netbox_plant_graph.breakout_profiles import set_plugin_breakout_profile_for_cable
 from netbox_plant_graph.models import BreakoutProfile
+from netbox_plant_graph.port_mapping_compat import PortMapping
 
 
 class PlantGraphTopologyMixin(CablePathTestCase):

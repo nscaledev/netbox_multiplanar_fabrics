@@ -2,7 +2,8 @@ from collections import defaultdict
 
 from django.contrib.contenttypes.models import ContentType
 
-from dcim.models import FrontPort, Interface, PortMapping, RearPort
+from dcim.models import FrontPort, Interface, RearPort
+from netbox_plant_graph.port_mapping_compat import PortMapping
 
 from netbox_plant_graph.models import AttachmentUnit, Fabric, FineEdge, PlaneMembership, TransferMap
 

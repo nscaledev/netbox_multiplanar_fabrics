@@ -208,7 +208,8 @@ def stamp_passive_device(
     -------
     DeviceStampResult
     """
-    from dcim.models import Device, FrontPort, PortMapping, RearPort
+    from dcim.models import Device, FrontPort, RearPort
+    from ..port_mapping_compat import PortMapping
 
     a_connectors = list(template.a_connectors)
     b_connectors = list(template.b_connectors)
@@ -310,7 +311,7 @@ def _create_front_ports(device, b_connectors):
 def _create_port_mappings(device, mappings, rear_ports_by_connector, front_ports_by_connector,
                           a_connectors, b_connectors):
     """Create PortMapping records from AssemblyMappingTemplate rows."""
-    from dcim.models import PortMapping
+    from ..port_mapping_compat import PortMapping
 
     # Build lookup: connector pk → port name
     a_label_map = {c.pk: c.label or f'A{c.connector_number}' for c in a_connectors}

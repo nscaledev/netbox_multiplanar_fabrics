@@ -183,7 +183,7 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
                 src_attachment_unit=attachment_map[transfer_map_input['src_attachment_key']],
                 dst_attachment_unit=attachment_map[transfer_map_input['dst_attachment_key']],
                 mapping_type=transfer_map_input['mapping_type'],
-                source_port_mapping=transfer_map_input['source_port_mapping'],
+                source_port_mapping=transfer_map_input.get('source_port_mapping'),
                 metadata=transfer_map_input['metadata'],
             )
 

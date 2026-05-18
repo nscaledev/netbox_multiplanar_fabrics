@@ -8,12 +8,13 @@ from django.urls import reverse
 from django.utils import timezone
 from tenancy.models import Tenant
 
-from dcim.models import PortMapping, Site
+from dcim.models import Site
 
 from netbox_plant_graph.models import AttachmentUnit, AuditFinding, AuditFindingEvent, AuditRun, AuditSuppression, CoarseEdge, DisjointnessException, Fabric, FabricPlane, PlaneMembership, PlantNode, SignalLane, TerminationPoint, UnresolvedStateSummary
 from netbox_plant_graph.models import AssemblyConnectorTemplate, AssemblyTemplate, DeploymentPlan, RackPopulationTemplate, SpatialPlacement, SpatialTemplate, StampRecord
 from netbox_plant_graph.object_registry import get_object_spec
 from netbox_plant_graph.object_registry import VIEW_OBJECT_SPECS
+from netbox_plant_graph.port_mapping_compat import PortMapping
 from netbox_plant_graph.services import build_lane_workspace, run_persistent_plane_audit
 from netbox_plant_graph.services.sync import rebuild_graph
 from netbox_plant_graph import views as view_module

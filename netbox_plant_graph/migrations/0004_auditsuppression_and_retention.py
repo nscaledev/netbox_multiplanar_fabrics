@@ -2,11 +2,10 @@
 
 from django.conf import settings
 import django.db.models.deletion
-import netbox.models.deletion
+
 import taggit.managers
 import utilities.json
 from django.db import migrations, models
-
 
 class Migration(migrations.Migration):
 
@@ -34,7 +33,7 @@ class Migration(migrations.Migration):
             options={
                 'ordering': ('-created', '-pk'),
             },
-            bases=(netbox.models.deletion.DeleteMixin, models.Model),
+            bases=(models.Model,),
         ),
         migrations.AlterField(
             model_name='auditfinding',
