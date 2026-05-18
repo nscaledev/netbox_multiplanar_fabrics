@@ -39,6 +39,25 @@ from netbox_plant_graph.models import (
 from netbox_plant_graph.services.spatial_stamp import render_name_pattern
 
 
+def create_front_port_template(**kwargs):
+    field_names = {field.name for field in FrontPortTemplate._meta.fields}
+    front_positions = kwargs.get('positions', 1)
+    if 'positions' in kwargs and 'positions' not in field_names:
+        kwargs.pop('positions')
+    if 'rear_port' in field_names and 'rear_port' not in kwargs:
+        rear_port = RearPortTemplate.objects.filter(device_type=kwargs['device_type']).order_by('pk').first()
+        if rear_port is None:
+            rear_port = RearPortTemplate.objects.create(
+                device_type=kwargs['device_type'],
+                name=f"{kwargs['name']}-rear",
+                type=kwargs.get('type', 'other'),
+                positions=front_positions or 1,
+            )
+        kwargs['rear_port'] = rear_port
+        kwargs.setdefault('rear_port_position', 1)
+    return FrontPortTemplate.objects.create(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Model validation tests
 # ---------------------------------------------------------------------------
@@ -498,7 +517,7 @@ class AssemblyPassiveDeviceStampTestCase(TestCase):
         cls.rpt = RearPortTemplate.objects.create(
             device_type=cls.device_type, name='A1', type='mpo', positions=8,
         )
-        cls.fpt = FrontPortTemplate.objects.create(
+        cls.fpt = create_front_port_template(
             device_type=cls.device_type, name='B1', type='lc', positions=8,
         )
 
@@ -778,7 +797,7 @@ class AssemblyStampGraphRebuildTestCase(TestCase):
         RearPortTemplate.objects.create(
             device_type=cls.device_type, name='A1', type='mpo', positions=4,
         )
-        FrontPortTemplate.objects.create(
+        create_front_port_template(
             device_type=cls.device_type, name='B1', type='lc', positions=4,
         )
 
@@ -911,7 +930,7 @@ class PlanExecutionIntegrationTestCase(TestCase):
         RearPortTemplate.objects.create(
             device_type=cls.device_type, name='A1', type='mpo', positions=4,
         )
-        FrontPortTemplate.objects.create(
+        create_front_port_template(
             device_type=cls.device_type, name='B1', type='lc', positions=4,
         )
 
@@ -1079,7 +1098,7 @@ class CascadeStampTestCase(TestCase):
         )
 
         RearPortTemplate.objects.create(device_type=cls.device_type, name='A1', type='mpo', positions=4)
-        FrontPortTemplate.objects.create(device_type=cls.device_type, name='B1', type='lc', positions=4)
+        create_front_port_template(device_type=cls.device_type, name='B1', type='lc', positions=4)
 
         # Assembly template for passive device in each rack slot
         cls.assembly_template = AssemblyTemplate.objects.create(

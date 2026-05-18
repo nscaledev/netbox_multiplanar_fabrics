@@ -7,13 +7,20 @@ try:
 except ImportError:  # pragma: no cover
 	StrFilterLookup = FilterLookup
 
-from netbox.graphql.filters import NetBoxModelFilter
+try:
+	from netbox.graphql.filters import NetBoxModelFilter
+except ImportError:  # pragma: no cover - NetBox 4.2 fallback
+	from netbox.graphql.filter_mixins import BaseFilterMixin as NetBoxModelFilter
 
 from netbox_plant_graph.object_registry import GRAPHQL_OBJECT_SPECS
+
+_HAS_FILTER_TYPE = hasattr(strawberry_django, 'filter_type')
 
 
 def build_filter_annotation(field_spec):
 	if field_spec.filter_kind == 'str':
+		if not _HAS_FILTER_TYPE:
+			return str | None
 		return StrFilterLookup[str] | None
 	if field_spec.filter_kind == 'bool':
 		return FilterLookup[bool] | None
@@ -38,7 +45,10 @@ def build_filter_namespace(spec):
 
 def build_graphql_filter_class(spec):
 	filter_class = type(spec.graphql.filter.class_name, (NetBoxModelFilter,), build_filter_namespace(spec))
-	return strawberry_django.filter_type(spec.model, lookups=True)(filter_class)
+	filter_decorator = getattr(strawberry_django, 'filter_type', None)
+	if filter_decorator is None:
+		filter_decorator = getattr(strawberry_django, 'filter')
+	return filter_decorator(spec.model, lookups=True)(filter_class)
 
 
 GRAPHQL_FILTER_CLASS_MAP = {}

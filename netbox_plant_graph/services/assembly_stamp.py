@@ -107,16 +107,22 @@ def stamp_cable_assembly(
     with transaction.atomic():
         native_cable_profile = ''
         if template.cable_profile_hint:
-            from dcim.choices import CableProfileChoices
+            try:
+                from dcim.choices import CableProfileChoices
+            except ImportError:
+                CableProfileChoices = None
 
-            valid_profiles = {choice[0] for choice in CableProfileChoices.CHOICES}
-            if template.cable_profile_hint in valid_profiles:
-                native_cable_profile = template.cable_profile_hint
-        cable = Cable.objects.create(
-            label=label or str(template),
-            status=LinkStatusChoices.STATUS_CONNECTED,
-            profile=native_cable_profile,
-        )
+            if CableProfileChoices is not None:
+                valid_profiles = {choice[0] for choice in CableProfileChoices.CHOICES}
+                if template.cable_profile_hint in valid_profiles:
+                    native_cable_profile = template.cable_profile_hint
+        cable_kwargs = {
+            'label': label or str(template),
+            'status': LinkStatusChoices.STATUS_CONNECTED,
+        }
+        if hasattr(Cable, 'profile'):
+            cable_kwargs['profile'] = native_cable_profile
+        cable = Cable.objects.create(**cable_kwargs)
         if template.breakout_profile_id:
             set_plugin_breakout_profile_for_cable(cable, template.breakout_profile)
 

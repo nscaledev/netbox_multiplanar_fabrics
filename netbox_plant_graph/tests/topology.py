@@ -1,13 +1,40 @@
-from dcim.choices import CableProfileChoices
-from dcim.models import Cable, Device, FrontPort, Interface, RearPort
-from dcim.tests.utils import CablePathTestCase
+from dcim.models import Cable, Device, DeviceRole, DeviceType, FrontPort, Interface, Manufacturer, RearPort, Site
+from django.test import TestCase
 
 from netbox_plant_graph.breakout_profiles import set_plugin_breakout_profile_for_cable
 from netbox_plant_graph.models import BreakoutProfile
 from netbox_plant_graph.port_mapping_compat import PortMapping
 
+try:
+    from dcim.choices import CableProfileChoices
+except ImportError:  # NetBox 4.2.x has no native Cable.profile choices
+    CableProfileChoices = None
+
+try:
+    from dcim.tests.utils import CablePathTestCase
+except ImportError:
+    class CablePathTestCase(TestCase):
+        @classmethod
+        def setUpTestData(cls):
+            cls.site = Site.objects.create(name='Topology Site', slug='topology-site')
+            cls.manufacturer = Manufacturer.objects.create(name='Topology Mfr', slug='topology-mfr')
+            cls.device_type = DeviceType.objects.create(manufacturer=cls.manufacturer, model='Topology DeviceType')
+            cls.device_role = DeviceRole.objects.create(name='Topology Role', slug='topology-role')
+            cls.device = Device.objects.create(
+                site=cls.site,
+                device_type=cls.device_type,
+                role=cls.device_role,
+                name='Topology Device',
+            )
+
 
 class PlantGraphTopologyMixin(CablePathTestCase):
+    @staticmethod
+    def _default_breakout_profile():
+        if CableProfileChoices is None:
+            return None
+        return CableProfileChoices.BREAKOUT_1C4P_4C1P
+
     def make_plugin_breakout_profile(self, slug='breakout-800g-4x200g'):
         return BreakoutProfile.objects.get_or_create(
             slug=slug,
@@ -97,9 +124,13 @@ class PlantGraphTopologyMixin(CablePathTestCase):
         self,
         *,
         site=None,
-        host_profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
-        leaf_profile=CableProfileChoices.BREAKOUT_1C4P_4C1P,
+        host_profile=None,
+        leaf_profile=None,
     ):
+        if host_profile is None:
+            host_profile = self._default_breakout_profile()
+        if leaf_profile is None:
+            leaf_profile = self._default_breakout_profile()
         site = site or self.site
         if site == self.site:
             host_device = self.device
