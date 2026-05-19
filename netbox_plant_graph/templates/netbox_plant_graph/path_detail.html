@@ -71,6 +71,8 @@
         <dd class="col-sm-9">{{ result.summary.coarse_edges_crossed|default:"" }}</dd>
         <dt class="col-sm-3">Transfer Maps Crossed</dt>
         <dd class="col-sm-9">{{ result.summary.transfer_maps_crossed|default:"" }}</dd>
+        <dt class="col-sm-3">Optical Lane Maps Crossed</dt>
+        <dd class="col-sm-9">{{ result.summary.lane_maps_crossed|default:"" }}</dd>
         <dt class="col-sm-3">Shuffle Modules Crossed</dt>
         <dd class="col-sm-9">{{ result.summary.shuffle_modules_crossed|default:"" }}</dd>
         {% if result.summary.planes_touched %}
@@ -111,6 +113,9 @@
                   {% else %}
                     {{ step.kind }}
                   {% endif %}
+                  {% if step.endpoint_context %}
+                    <div class="text-muted small">{{ step.endpoint_context }}</div>
+                  {% endif %}
                 </td>
                 <td>
                   {% if step.kind %}
@@ -134,12 +139,20 @@
                     {% else %}
                       {{ step.attachment_unit.display }}
                     {% endif %}
+                    {% if step.attachment_unit.endpoint_context %}
+                      <br>
+                      <span class="text-muted small">{{ step.attachment_unit.endpoint_context }}</span>
+                    {% endif %}
                   {% elif step.termination_point %}
                     Termination:
                     {% if step.termination_point.url %}
                       <a href="{{ step.termination_point.url }}">{{ step.termination_point.display }}</a>
                     {% else %}
                       {{ step.termination_point.display }}
+                    {% endif %}
+                    {% if step.termination_point.endpoint_context %}
+                      <br>
+                      <span class="text-muted small">{{ step.termination_point.endpoint_context }}</span>
                     {% endif %}
                     {% if step.plant_node %}
                       <br>

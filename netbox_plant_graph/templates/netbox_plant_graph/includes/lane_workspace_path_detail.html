@@ -20,6 +20,9 @@
           {% else %}
             {{ path_view.source.display }}
           {% endif %}
+          {% if path_view.source.endpoint_context %}
+            <div class="text-muted small">{{ path_view.source.endpoint_context }}</div>
+          {% endif %}
         </dd>
         <dt class="col-sm-5">Destination</dt>
         <dd class="col-sm-7">
@@ -28,6 +31,9 @@
               <a href="{{ path_view.destination.url }}">{{ path_view.destination.display }}</a>
             {% else %}
               {{ path_view.destination.display }}
+            {% endif %}
+            {% if path_view.destination.endpoint_context %}
+              <div class="text-muted small">{{ path_view.destination.endpoint_context }}</div>
             {% endif %}
           {% else %}
             <span class="text-muted">Not resolved</span>
@@ -60,6 +66,9 @@
                     {% else %}
                       {{ step.display }}
                     {% endif %}
+                    {% if step.object.endpoint_context %}
+                      <div class="text-muted small">{{ step.object.endpoint_context }}</div>
+                    {% endif %}
                   </td>
                   <td>{{ step.step_kind }}</td>
                   <td>{% if step.edge_type %}{{ step.edge_type }}{% elif step.object %}{{ step.object.model }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
@@ -71,12 +80,20 @@
                       {% else %}
                         {{ step.attachment_unit.display }}
                       {% endif %}
+                      {% if step.attachment_unit.endpoint_context %}
+                        <br>
+                        <span class="text-muted small">{{ step.attachment_unit.endpoint_context }}</span>
+                      {% endif %}
                     {% elif step.plant_node %}
                       Node:
                       {% if step.plant_node.url %}
                         <a href="{{ step.plant_node.url }}">{{ step.plant_node.display }}</a>
                       {% else %}
                         {{ step.plant_node.display }}
+                      {% endif %}
+                      {% if step.plant_node.endpoint_context %}
+                        <br>
+                        <span class="text-muted small">{{ step.plant_node.endpoint_context }}</span>
                       {% endif %}
                     {% elif step.parent_coarse_edge %}
                       Parent:

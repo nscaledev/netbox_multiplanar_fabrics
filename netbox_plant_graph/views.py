@@ -13,10 +13,12 @@ from django.utils import timezone
 from django.views import View
 try:
     from netbox.object_actions import AddObject, BulkExport
+    HAS_OBJECT_ACTIONS = True
 except ImportError:  # pragma: no cover - only triggered on NetBox < 4.2
     # Compatibility stubs for NetBox versions that pre-date the object_actions
     # module.  The stubs carry the correct class names so that name-based
     # introspection (e.g. test assertions on __name__) still works.
+    HAS_OBJECT_ACTIONS = False
     class AddObject:  # type: ignore[no-redef]  # noqa: N801
         """Compatibility stub for NetBox versions without netbox.object_actions."""
 
@@ -903,6 +905,7 @@ def _build_supplementary_cards(instance):
             ),
             'links': (
                 {'label': 'Stamp Passive Device', 'url': reverse('plugins:netbox_plant_graph:assembly_stamp_wizard', kwargs={'pk': instance.pk})},
+                {'label': 'Stamp Graph Assembly', 'url': reverse('plugins:netbox_plant_graph:assembly_graph_stamp_wizard', kwargs={'pk': instance.pk})},
                 {'label': 'Template Builder', 'url': reverse('plugins:netbox_plant_graph:assembly_template_build', kwargs={'pk': instance.pk})},
             ),
         })
@@ -956,15 +959,15 @@ def _build_supplementary_cards(instance):
 
 
 def build_list_view_class(spec):
-    actions = [BulkExport]
-    if spec.view.supports_create:
-        actions.insert(0, AddObject)
-
-    def _get_permitted_actions(self, user, model=None):
-        configured_actions = getattr(self, 'actions', {})
-        if hasattr(configured_actions, 'get'):
-            return generic.ObjectListView.get_permitted_actions(self, user, model=model)
-        return ()
+    if HAS_OBJECT_ACTIONS:
+        actions = [BulkExport]
+        if spec.view.supports_create:
+            actions.insert(0, AddObject)
+        actions = tuple(actions)
+    else:
+        actions = {'export': {'view'}}
+        if spec.view.supports_create:
+            actions['add'] = {'add'}
 
     return type(spec.view.list_class_name, (generic.ObjectListView,), {
         '__module__': __name__,
@@ -972,8 +975,7 @@ def build_list_view_class(spec):
         'table': getattr(tables_module, spec.table.class_name),
         'filterset': getattr(filterset_module, spec.filterset.class_name),
         'filterset_form': getattr(forms_module, spec.filter_form.class_name),
-        'actions': tuple(actions),
-        'get_permitted_actions': _get_permitted_actions,
+        'actions': actions,
     })
 
 
@@ -2151,6 +2153,50 @@ class AssemblyStampWizardView(View):
                 except Exception as exc:
                     messages.error(request, f'Stamp failed: {exc}')
         return render(request, 'netbox_plant_graph/assembly_stamp_wizard.html', {
+            'template': template,
+            'form': form,
+            'result': result,
+        })
+
+
+class AssemblyGraphStampWizardView(View):
+    """GET/POST wizard for stamping an AssemblyTemplate into plugin-native graph objects."""
+
+    def get(self, request, pk):
+        from .forms import AssemblyGraphStampForm
+        template = get_object_or_404(AssemblyTemplate, pk=pk)
+        form = AssemblyGraphStampForm(template=template)
+        return render(request, 'netbox_plant_graph/assembly_graph_stamp_wizard.html', {
+            'template': template,
+            'form': form,
+            'result': None,
+        })
+
+    def post(self, request, pk):
+        from .forms import AssemblyGraphStampForm
+        from .services import stamp_graph_assembly
+        template = get_object_or_404(AssemblyTemplate, pk=pk)
+        form = AssemblyGraphStampForm(request.POST, template=template)
+        result = None
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                result = stamp_graph_assembly(
+                    template=template,
+                    fabric=data['fabric'],
+                    name=data['name'],
+                    node_type=data['node_type'],
+                    status=data.get('status') or 'planned',
+                    role=data.get('role') or '',
+                    tenant=data.get('tenant'),
+                    location=data.get('location') or data.get('site'),
+                    plan=data.get('plan'),
+                    user=request.user,
+                )
+                messages.success(request, f'Graph assembly "{result.plant_node}" stamped successfully.')
+            except Exception as exc:
+                messages.error(request, f'Graph stamp failed: {exc}')
+        return render(request, 'netbox_plant_graph/assembly_graph_stamp_wizard.html', {
             'template': template,
             'form': form,
             'result': result,

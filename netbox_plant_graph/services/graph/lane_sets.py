@@ -28,6 +28,15 @@ def _object_reference_payload(reference):
         signal_path_resolver_url=reference.get('signal_path_resolver_url'),
         signal_blast_radius_url=reference.get('signal_blast_radius_url'),
         health_url=reference.get('health_url'),
+        endpoint_label=reference.get('endpoint_label'),
+        endpoint_context=reference.get('endpoint_context'),
+        endpoint_device=reference.get('endpoint_device'),
+        endpoint_device_type=reference.get('endpoint_device_type'),
+        endpoint_role=reference.get('endpoint_role'),
+        endpoint_rack=reference.get('endpoint_rack'),
+        endpoint_source=reference.get('endpoint_source'),
+        endpoint_module=reference.get('endpoint_module'),
+        wavelength_nm=reference.get('wavelength_nm'),
     )
 
 
@@ -226,6 +235,19 @@ def _build_lane_set(
         member_id__in=attachment_ids,
     ).values_list('member_id', 'plane__plane_number'):
         plane_ids_by_attachment[member_id].add(plane_number)
+    signal_lane_type = ContentType.objects.get_for_model(SignalLane)
+    lane_attachment_lookup = {
+        lane.pk: lane.attachment_unit_id
+        for lane_group in lanes_by_attachment.values()
+        for lane in lane_group
+    }
+    for member_id, plane_number in PlaneMembership.objects.filter(
+        member_type=signal_lane_type,
+        member_id__in=lane_ids,
+    ).values_list('member_id', 'plane__plane_number'):
+        attachment_id = lane_attachment_lookup.get(member_id)
+        if attachment_id is not None:
+            plane_ids_by_attachment[attachment_id].add(plane_number)
 
     members = []
     for attachment_unit in attachment_units:

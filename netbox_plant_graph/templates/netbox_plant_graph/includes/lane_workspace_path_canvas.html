@@ -9,6 +9,9 @@
         <span class="badge text-bg-light lane-workspace-stage-item__index">{{ forloop.counter }}</span>
         <div class="lane-workspace-stage-item__body">
           <div class="fw-semibold" data-stage-label>{{ step.display }}</div>
+          {% if step.object.endpoint_context %}
+            <div class="small text-muted">{{ step.object.endpoint_context }}</div>
+          {% endif %}
           <div class="small text-muted">
             <span data-stage-kind>{{ step.step_kind }}</span>
             {% if step.edge_type %}
@@ -25,12 +28,18 @@
               {% else %}
                 <span data-stage-context>{{ step.attachment_unit.display }}</span>
               {% endif %}
+              {% if step.attachment_unit.endpoint_context %}
+                <div class="text-muted small">{{ step.attachment_unit.endpoint_context }}</div>
+              {% endif %}
             {% elif step.plant_node %}
               Node:
               {% if step.plant_node.url %}
                 <a href="{{ step.plant_node.url }}" data-stage-context>{{ step.plant_node.display }}</a>
               {% else %}
                 <span data-stage-context>{{ step.plant_node.display }}</span>
+              {% endif %}
+              {% if step.plant_node.endpoint_context %}
+                <div class="text-muted small">{{ step.plant_node.endpoint_context }}</div>
               {% endif %}
             {% elif step.parent_coarse_edge %}
               Parent:

@@ -327,6 +327,7 @@ def _materialize_signal_lane_inputs(attachment_inputs, fine_edges, transfer_maps
                 'signaling': 'pam4',
                 'nominal_rate_gbps': 50,
                 'direction_role': 'bidirectional',
+                'wavelength_nm': 1310,
                 'wavelength_group': '',
                 'source_anchor': attachment_input['name'],
                 'metadata': {'attachment_lane_index': lane_index},

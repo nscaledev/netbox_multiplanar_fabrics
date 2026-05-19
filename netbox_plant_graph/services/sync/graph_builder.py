@@ -141,6 +141,7 @@ def build_graph(inputs: GraphInputs, *, dry_run: bool = False) -> dict[str, int]
                 signaling=signal_lane_input['signaling'],
                 nominal_rate_gbps=signal_lane_input['nominal_rate_gbps'],
                 direction_role=signal_lane_input['direction_role'],
+                wavelength_nm=signal_lane_input.get('wavelength_nm', 1310),
                 wavelength_group=signal_lane_input['wavelength_group'],
                 source_anchor=signal_lane_input['source_anchor'],
                 metadata=signal_lane_input['metadata'],

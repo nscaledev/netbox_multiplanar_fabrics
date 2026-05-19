@@ -83,7 +83,7 @@ class GraphResolutionChoices(ChoiceSet):
     CHOICES = [
         ('container', 'Container'),
         ('attachment_unit', 'Attachment Unit'),
-        ('signal_lane', 'Signal Lane'),
+        ('signal_lane', 'Optical Lane'),
     ]
 
 

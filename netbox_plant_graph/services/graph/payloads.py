@@ -16,6 +16,15 @@ class ObjectReferencePayload:
     signal_path_resolver_url: str | None = None
     signal_blast_radius_url: str | None = None
     health_url: str | None = None
+    endpoint_label: str | None = None
+    endpoint_context: str | None = None
+    endpoint_device: str | None = None
+    endpoint_device_type: str | None = None
+    endpoint_role: str | None = None
+    endpoint_rack: str | None = None
+    endpoint_source: str | None = None
+    endpoint_module: str | None = None
+    wavelength_nm: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,7 @@ class FabricHealthPayload:
 class LanePathSummaryPayload:
     coarse_edges_crossed: int
     transfer_maps_crossed: int
+    lane_maps_crossed: int
     shuffle_modules_crossed: int
     planes_touched: tuple[int, ...]
 

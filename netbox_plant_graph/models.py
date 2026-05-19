@@ -263,6 +263,10 @@ class SignalLane(RegistryModelMixin):
     signaling = models.CharField(max_length=32, choices=SignalEncodingChoices, default='pam4')
     nominal_rate_gbps = models.PositiveIntegerField(null=True, blank=True)
     direction_role = models.CharField(max_length=50, blank=True)
+    wavelength_nm = models.PositiveIntegerField(
+        default=1310,
+        help_text='Nominal optical wavelength in nanometers. Defaults to 1310nm for DR-family optics.',
+    )
     wavelength_group = models.CharField(max_length=64, blank=True)
     source_anchor = models.CharField(max_length=128, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
@@ -270,6 +274,8 @@ class SignalLane(RegistryModelMixin):
     class Meta:
         ordering = ('attachment_unit', 'lane_index')
         unique_together = ('attachment_unit', 'lane_index')
+        verbose_name = 'Optical Lane'
+        verbose_name_plural = 'Optical Lanes'
 
     def __str__(self) -> str:
         return self.name

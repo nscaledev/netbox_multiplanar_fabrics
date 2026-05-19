@@ -194,6 +194,15 @@ def _object_reference_payload(reference):
         signal_path_resolver_url=reference.get('signal_path_resolver_url'),
         signal_blast_radius_url=reference.get('signal_blast_radius_url'),
         health_url=reference.get('health_url'),
+        endpoint_label=reference.get('endpoint_label'),
+        endpoint_context=reference.get('endpoint_context'),
+        endpoint_device=reference.get('endpoint_device'),
+        endpoint_device_type=reference.get('endpoint_device_type'),
+        endpoint_role=reference.get('endpoint_role'),
+        endpoint_rack=reference.get('endpoint_rack'),
+        endpoint_source=reference.get('endpoint_source'),
+        endpoint_module=reference.get('endpoint_module'),
+        wavelength_nm=reference.get('wavelength_nm'),
     )
 
 
@@ -416,6 +425,7 @@ def _path_group_summary(path: LanePathPayload) -> str:
     return (
         f'{summary.coarse_edges_crossed} coarse edge(s), '
         f'{summary.transfer_maps_crossed} transfer map(s), '
+        f'{summary.lane_maps_crossed} optical lane map(s), '
         f'{summary.shuffle_modules_crossed} shuffle module(s), '
         f'planes {planes}'
     )
@@ -845,7 +855,7 @@ def _workspace_next_actions(
     if target_reference.lane_drilldown_url:
         actions.append(('Lane Drilldown', target_reference.lane_drilldown_url))
     if target_reference.signal_blast_radius_url:
-        actions.append(('Signal Radius', target_reference.signal_blast_radius_url))
+        actions.append(('Optical Radius', target_reference.signal_blast_radius_url))
     elif target_reference.blast_radius_url:
         actions.append(('Physical Cable Blast Radius', target_reference.blast_radius_url))
     if compare_context is not None and compare_context.full_compare_action is not None:

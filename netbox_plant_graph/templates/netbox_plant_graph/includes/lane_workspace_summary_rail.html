@@ -9,6 +9,9 @@
         {% else %}
           {{ workspace.target.display }}
         {% endif %}
+        {% if workspace.target.endpoint_context %}
+          <div class="small text-muted">{{ workspace.target.endpoint_context }}</div>
+        {% endif %}
       </dd>
       <dt class="col-sm-5">Scope</dt>
       <dd class="col-sm-7">{{ lane_set.scope_kind }}</dd>
@@ -20,11 +23,11 @@
       <dd class="col-sm-7">{{ workspace.focus_label }}</dd>
       <dt class="col-sm-5">Attachment Units</dt>
       <dd class="col-sm-7">{{ lane_set.total_attachment_units }}</dd>
-      <dt class="col-sm-5">Lanes Present</dt>
+      <dt class="col-sm-5">Optical Lanes Present</dt>
       <dd class="col-sm-7">{{ lane_set.present_lane_total }} / {{ lane_set.expected_lane_total }}</dd>
-      <dt class="col-sm-5">Mapped Lanes</dt>
+      <dt class="col-sm-5">Mapped Optical Lanes</dt>
       <dd class="col-sm-7">{{ lane_set.mapped_lane_total }}</dd>
-      <dt class="col-sm-5">Missing Lanes</dt>
+      <dt class="col-sm-5">Missing Optical Lanes</dt>
       <dd class="col-sm-7">{{ lane_set.missing_lane_total }}</dd>
     </dl>
 
@@ -61,10 +64,10 @@
       {% endif %}
       <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:lane_compare' %}?baseline_registry_key={{ query.target_registry_key }}&baseline_id={{ query.target_id }}">Compare Mode</a>
       {% if workspace.target.signal_path_resolver_url %}
-        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_path_resolver_url }}">Signal Path</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_path_resolver_url }}">Optical Path</a>
       {% endif %}
       {% if workspace.target.signal_blast_radius_url %}
-        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_blast_radius_url }}">Signal Radius</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ workspace.target.signal_blast_radius_url }}">Optical Radius</a>
       {% endif %}
     </div>
   </div>

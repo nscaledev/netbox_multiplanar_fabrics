@@ -76,10 +76,32 @@ class ViewRegistrySmokeTestCase(TestCase):
 
             with self.subTest(spec=registry_key, url=url):
                 self.assertFalse(spec.view.supports_create)
-                self.assertNotIn('AddObject', {action.__name__ for action in view_class.actions})
+                if view_module.HAS_OBJECT_ACTIONS:
+                    self.assertNotIn('AddObject', {action.__name__ for action in view_class.actions})
+                else:
+                    self.assertNotIn('add', view_class.actions)
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, 200)
                 self.assertNotIn(b'href="None', response.content)
+
+    def test_writable_list_views_render_add_links(self):
+        self.client.force_login(self.user)
+
+        for spec in VIEW_OBJECT_SPECS:
+            if not spec.view.supports_create:
+                continue
+            view_class = getattr(view_module, spec.view.list_class_name)
+            url = reverse(spec.list_url_name)
+            add_url = reverse(spec.add_url_name)
+
+            with self.subTest(spec=spec.registry_key, url=url):
+                if view_module.HAS_OBJECT_ACTIONS:
+                    self.assertIn('AddObject', {action.__name__ for action in view_class.actions})
+                else:
+                    self.assertIn('add', view_class.actions)
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, add_url)
 
 
 class OperationalViewIntegrationTestCase(PlantGraphTopologyMixin):
@@ -169,7 +191,7 @@ class OperationalViewIntegrationTestCase(PlantGraphTopologyMixin):
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Signal-lane path resolution requires a channelized child interface')
+        self.assertContains(response, 'Optical-lane path resolution requires a channelized child interface')
         self.assertNotContains(response, 'No path was found for the requested inputs.')
 
     def test_plane_audit_view_renders_findings(self):
@@ -283,7 +305,7 @@ class OperationalViewIntegrationTestCase(PlantGraphTopologyMixin):
         self.assertContains(response, 'Lane Drilldown')
         self.assertContains(response, 'nic0/plane2')
         self.assertContains(response, 'nic0/plane2:l0')
-        self.assertContains(response, 'Signal Path')
+        self.assertContains(response, 'Optical Path')
         self.assertContains(response, 'Open In Workspace')
 
     def test_lane_workspace_view_renders_grouped_lane_summaries(self):

@@ -37,6 +37,22 @@ def _allowed_attachment_ids(plane) -> set[int] | None:
     )
 
 
+def _allowed_signal_lane_ids(plane) -> set[int] | None:
+    plane = _normalize_plane(plane)
+    if plane is None:
+        return None
+    signal_lane_type = ContentType.objects.get_for_model(SignalLane)
+    signal_lane_ids = set(
+        PlaneMembership.objects.filter(plane=plane, member_type=signal_lane_type).values_list('member_id', flat=True)
+    )
+    if signal_lane_ids:
+        return signal_lane_ids
+    allowed_attachment_ids = _allowed_attachment_ids(plane)
+    if allowed_attachment_ids is None:
+        return None
+    return set(SignalLane.objects.filter(attachment_unit_id__in=allowed_attachment_ids).values_list('pk', flat=True))
+
+
 def _normalize_attachment_targets(target) -> list[AttachmentUnit]:
     if target is None:
         return []
@@ -81,7 +97,7 @@ def _normalize_signal_targets(target) -> list[SignalLane]:
 
 def describe_signal_resolution_error(target) -> str | None:
     if target is None:
-        return 'Select a valid signal-lane-capable object.'
+        return 'Select a valid optical-lane-capable object.'
 
     if _normalize_signal_targets(target):
         return None
@@ -89,15 +105,15 @@ def describe_signal_resolution_error(target) -> str | None:
     if isinstance(target, Interface):
         if Interface.objects.filter(parent_id=target.pk).exists():
             return (
-                'Signal-lane path resolution requires a channelized child interface, not the parent 800G interface. '
+                'Optical-lane path resolution requires a channelized child interface, not the parent 800G interface. '
                 'Select one of the child interfaces for this port instead.'
             )
-        return 'The selected interface is not represented as a signal-lane endpoint in the plant graph.'
+        return 'The selected interface is not represented as an optical-lane endpoint in the plant graph.'
 
     if isinstance(target, (FrontPort, RearPort)):
-        return 'The selected passive port does not currently materialize any signal lanes in the plant graph.'
+        return 'The selected passive port does not currently materialize any optical lanes in the plant graph.'
 
-    return 'The selected object does not currently resolve to any signal lanes in the plant graph.'
+    return 'The selected object does not currently resolve to any optical lanes in the plant graph.'
 
 
 def _attachment_scope_filters(
@@ -170,13 +186,13 @@ def _signal_scope_filters(*, source_nodes: list[SignalLane], destination_nodes: 
         for lane in [*source_nodes, *destination_nodes]
         if lane.attachment_unit_id and lane.attachment_unit.termination_point_id and lane.attachment_unit.termination_point.plant_node_id
     }
-    allowed_attachment_ids = _allowed_attachment_ids(plane)
-    return (fabric_ids or None, allowed_attachment_ids)
+    allowed_signal_lane_ids = _allowed_signal_lane_ids(plane)
+    return (fabric_ids or None, allowed_signal_lane_ids)
 
 
 def _build_signal_adjacency(*, source_nodes: list[SignalLane], destination_nodes: list[SignalLane], plane=None):
     adjacency = defaultdict(list)
-    fabric_ids, allowed_attachment_ids = _signal_scope_filters(
+    fabric_ids, allowed_signal_lane_ids = _signal_scope_filters(
         source_nodes=source_nodes,
         destination_nodes=destination_nodes,
         plane=plane,
@@ -192,10 +208,10 @@ def _build_signal_adjacency(*, source_nodes: list[SignalLane], destination_nodes
             a_lane__attachment_unit__termination_point__plant_node__fabric_id__in=fabric_ids,
             b_lane__attachment_unit__termination_point__plant_node__fabric_id__in=fabric_ids,
         )
-    if allowed_attachment_ids is not None:
+    if allowed_signal_lane_ids is not None:
         fine_edges = fine_edges.filter(
-            a_lane__attachment_unit_id__in=allowed_attachment_ids,
-            b_lane__attachment_unit_id__in=allowed_attachment_ids,
+            a_lane_id__in=allowed_signal_lane_ids,
+            b_lane_id__in=allowed_signal_lane_ids,
         )
 
     for fine_edge in fine_edges:
@@ -215,10 +231,10 @@ def _build_signal_adjacency(*, source_nodes: list[SignalLane], destination_nodes
             src_lane__attachment_unit__termination_point__plant_node__fabric_id__in=fabric_ids,
             dst_lane__attachment_unit__termination_point__plant_node__fabric_id__in=fabric_ids,
         )
-    if allowed_attachment_ids is not None:
+    if allowed_signal_lane_ids is not None:
         lane_maps = lane_maps.filter(
-            src_lane__attachment_unit_id__in=allowed_attachment_ids,
-            dst_lane__attachment_unit_id__in=allowed_attachment_ids,
+            src_lane_id__in=allowed_signal_lane_ids,
+            dst_lane_id__in=allowed_signal_lane_ids,
         )
 
     for lane_map in lane_maps:
@@ -228,7 +244,20 @@ def _build_signal_adjacency(*, source_nodes: list[SignalLane], destination_nodes
     return adjacency
 
 
-def _path_plane_numbers(path_nodes: list[AttachmentUnit]) -> list[int]:
+def _path_plane_numbers(path_nodes: list[AttachmentUnit | SignalLane]) -> list[int]:
+    if path_nodes and isinstance(path_nodes[0], SignalLane):
+        member_type = ContentType.objects.get_for_model(SignalLane)
+        member_ids = [lane.pk for lane in path_nodes]
+        lane_plane_numbers = set(
+            PlaneMembership.objects.filter(
+                member_type=member_type,
+                member_id__in=member_ids,
+            ).values_list('plane__plane_number', flat=True)
+        )
+        if lane_plane_numbers:
+            return sorted(lane_plane_numbers)
+        path_nodes = [lane.attachment_unit for lane in path_nodes]
+
     attachment_type = ContentType.objects.get_for_model(AttachmentUnit)
     plane_numbers = set(
         PlaneMembership.objects.filter(
@@ -247,13 +276,28 @@ def _serialize_edge(edge_kind: str, edge) -> dict:
     }
     if isinstance(edge, FineEdge) and edge.parent_coarse_edge_id:
         payload['parent_coarse_edge'] = build_object_reference(edge.parent_coarse_edge)
+        if edge.granularity == 'signal_lane' and edge.a_lane_id and edge.b_lane_id:
+            payload['display'] = (
+                f"Optical lane segment "
+                f"{edge.a_lane.lane_index + 1} ({edge.a_lane.wavelength_nm}nm)"
+            )
+        else:
+            payload['display'] = 'Attachment segment'
     if isinstance(edge, TransferMap):
         payload['owner_node'] = build_object_reference(edge.owner_node)
+        payload['display'] = f'Transfer map: {edge.mapping_type}'
     if isinstance(edge, LaneMap):
         if edge.owner_node_id:
             payload['owner_node'] = build_object_reference(edge.owner_node)
         if edge.owner_edge_id:
             payload['owner_edge'] = build_object_reference(edge.owner_edge)
+        if edge.src_lane_id and edge.dst_lane_id:
+            payload['display'] = (
+                f"Optical lane map "
+                f"{edge.src_lane.lane_index + 1} -> {edge.dst_lane.lane_index + 1}"
+            )
+        else:
+            payload['display'] = f'Lane map: {edge.mapping_type}'
     return payload
 
 
@@ -287,6 +331,15 @@ def _object_reference_payload(reference):
         signal_path_resolver_url=reference.get('signal_path_resolver_url'),
         signal_blast_radius_url=reference.get('signal_blast_radius_url'),
         health_url=reference.get('health_url'),
+        endpoint_label=reference.get('endpoint_label'),
+        endpoint_context=reference.get('endpoint_context'),
+        endpoint_device=reference.get('endpoint_device'),
+        endpoint_device_type=reference.get('endpoint_device_type'),
+        endpoint_role=reference.get('endpoint_role'),
+        endpoint_rack=reference.get('endpoint_rack'),
+        endpoint_source=reference.get('endpoint_source'),
+        endpoint_module=reference.get('endpoint_module'),
+        wavelength_nm=reference.get('wavelength_nm'),
     )
 
 
@@ -470,10 +523,16 @@ def resolve_path(*, source, destination=None, plane=None, resolution='attachment
         for edge_kind, edge in edge_steps
         if isinstance(edge, TransferMap) and edge.owner_node_id
     }
+    transfer_owner_ids.update(
+        edge.owner_node_id
+        for edge_kind, edge in edge_steps
+        if isinstance(edge, LaneMap) and edge.owner_node_id
+    )
 
     summary = {
         'coarse_edges_crossed': len(coarse_edge_ids),
         'transfer_maps_crossed': sum(1 for edge_kind, edge in edge_steps if isinstance(edge, TransferMap)),
+        'lane_maps_crossed': sum(1 for edge_kind, edge in edge_steps if isinstance(edge, LaneMap)),
         'shuffle_modules_crossed': len(transfer_owner_ids),
     }
     if resolution == 'attachment_unit':
@@ -521,6 +580,7 @@ def resolve_typed_lane_path(
                 summary=LanePathSummaryPayload(
                     coarse_edges_crossed=0,
                     transfer_maps_crossed=0,
+                    lane_maps_crossed=0,
                     shuffle_modules_crossed=0,
                     planes_touched=(),
                 ),
@@ -540,6 +600,7 @@ def resolve_typed_lane_path(
             summary=LanePathSummaryPayload(
                 coarse_edges_crossed=0,
                 transfer_maps_crossed=0,
+                lane_maps_crossed=0,
                 shuffle_modules_crossed=0,
                 planes_touched=(),
             ),
@@ -565,6 +626,7 @@ def resolve_typed_lane_path(
         summary=LanePathSummaryPayload(
             coarse_edges_crossed=result_summary.get('coarse_edges_crossed', 0),
             transfer_maps_crossed=result_summary.get('transfer_maps_crossed', 0),
+            lane_maps_crossed=result_summary.get('lane_maps_crossed', 0),
             shuffle_modules_crossed=result_summary.get('shuffle_modules_crossed', 0),
             planes_touched=tuple(result_summary.get('planes_touched', ()) or ()),
         ),

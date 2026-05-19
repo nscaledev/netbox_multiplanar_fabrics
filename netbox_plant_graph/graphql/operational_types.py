@@ -54,6 +54,15 @@ class ObjectReferenceType:
     signal_path_resolver_url: str | None
     signal_blast_radius_url: str | None
     health_url: str | None
+    endpoint_label: str | None
+    endpoint_context: str | None
+    endpoint_device: str | None
+    endpoint_device_type: str | None
+    endpoint_role: str | None
+    endpoint_rack: str | None
+    endpoint_source: str | None
+    endpoint_module: str | None
+    wavelength_nm: int | None
 
 
 @strawberry.type
@@ -113,6 +122,7 @@ class FabricHealthType:
 class LanePathSummaryType:
     coarse_edges_crossed: int
     transfer_maps_crossed: int
+    lane_maps_crossed: int
     shuffle_modules_crossed: int
     planes_touched: list[int]
 
@@ -574,6 +584,7 @@ def lane_path_type(payload: LanePathPayload) -> LanePathType:
         summary=LanePathSummaryType(
             coarse_edges_crossed=payload.summary.coarse_edges_crossed,
             transfer_maps_crossed=payload.summary.transfer_maps_crossed,
+            lane_maps_crossed=payload.summary.lane_maps_crossed,
             shuffle_modules_crossed=payload.summary.shuffle_modules_crossed,
             planes_touched=list(payload.summary.planes_touched),
         ),

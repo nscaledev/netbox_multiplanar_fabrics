@@ -10,6 +10,7 @@ from .choices import (
     DisjointnessExceptionScopeChoices,
     DisjointnessExceptionTypeChoices,
     GraphResolutionChoices,
+    PlantNodeTypeChoices,
 )
 from .models import DeploymentPlan, Fabric, FabricPlane
 from .object_registry import FILTER_FORM_OBJECT_SPECS, FORM_OBJECT_SPECS
@@ -55,13 +56,25 @@ def _build_dynamic_choice_field(*, queryset, label, required, query_params=None,
 def _build_registry_object_field(*, registry_key, role):
     label = get_registry_label(registry_key)
     model = get_registry_model(registry_key)
-    return _build_dynamic_choice_field(
+    field = _build_dynamic_choice_field(
         queryset=model.objects.none(),
         label=f'{role} {label}',
         required=False,
         selector=True,
         help_text=f'Select a {label.lower()} as the {role.lower()} endpoint.',
     )
+    field.label_from_instance = _endpoint_choice_label
+    return field
+
+
+def _endpoint_choice_label(obj):
+    try:
+        from .services.netbox.adapters import build_object_reference
+
+        reference = build_object_reference(obj)
+    except Exception:
+        return str(obj)
+    return reference.get('endpoint_label') or reference.get('endpoint_context') or reference.get('display') or str(obj)
 
 
 def _get_generated_field_query_params(spec, model_field, form_field_names):
@@ -250,6 +263,83 @@ class AssemblyStampForm(forms.Form):
         if cleaned.get('action') == 'add_to_plan' and not cleaned.get('plan'):
             self.add_error('plan', 'A deployment plan must be selected when using "Add to plan".')
         return cleaned
+
+
+class AssemblyGraphStampForm(forms.Form):
+    """Form for stamping a cable/trunk assembly into the plugin-native graph."""
+    name = forms.CharField(
+        max_length=200,
+        label='Plant Node Name',
+        help_text='Name for the stamped cable/trunk assembly node.',
+    )
+    fabric = _build_dynamic_choice_field(
+        queryset=Fabric.objects.none(),
+        label='Fabric',
+        required=True,
+        selector=True,
+        help_text='Fabric that owns this cable/trunk assembly.',
+    )
+    node_type = forms.ChoiceField(
+        choices=[
+            choice for choice in PlantNodeTypeChoices.CHOICES
+            if choice[0] in {'cable_assembly', 'trunk_bundle'}
+        ],
+        label='Node Type',
+        required=True,
+    )
+    status = forms.CharField(
+        max_length=50,
+        initial='planned',
+        label='Status',
+        required=False,
+    )
+    role = forms.CharField(
+        max_length=50,
+        label='Role',
+        required=False,
+        help_text='Optional graph role. Defaults to the template assembly type.',
+    )
+    tenant = _build_dynamic_choice_field(
+        queryset=Tenant.objects.none(),
+        label='Tenant',
+        required=False,
+        help_text='Optional tenant override. Defaults to the template tenant.',
+    )
+    site = _build_dynamic_choice_field(
+        queryset=Site.objects.none(),
+        label='Location Site',
+        required=False,
+        selector=True,
+        help_text='Optional physical location for this graph node.',
+    )
+    location = _build_dynamic_choice_field(
+        queryset=Location.objects.none(),
+        label='Location',
+        required=False,
+        query_params={'site_id': '$site'},
+        help_text='Optional room/location. If omitted, the site is used as the graph location.',
+    )
+    plan = _build_dynamic_choice_field(
+        queryset=DeploymentPlan.objects.none(),
+        label='Deployment Plan',
+        required=False,
+        help_text='Optional deployment plan for provenance. The stamp executes immediately.',
+    )
+
+    def __init__(self, *args, template=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields['fabric'].queryset = Fabric.objects.order_by('name', 'pk')
+        self.fields['tenant'].queryset = Tenant.objects.order_by('name', 'pk')
+        self.fields['site'].queryset = Site.objects.order_by('name', 'pk')
+        self.fields['location'].queryset = Location.objects.order_by('name', 'pk')
+        self.fields['plan'].queryset = DeploymentPlan.objects.order_by('name', 'pk')
+
+        if template is not None and not self.is_bound:
+            self.fields['node_type'].initial = (
+                'trunk_bundle' if template.assembly_type == 'trunk_bundle' else 'cable_assembly'
+            )
+            self.fields['role'].initial = template.assembly_type
 
 
 class SpatialStampForm(forms.Form):

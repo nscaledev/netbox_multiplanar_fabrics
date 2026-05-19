@@ -10,7 +10,7 @@
           <th>Node</th>
           <th>Position</th>
           <th>Planes</th>
-          <th>Lanes</th>
+          <th>Optical Lanes</th>
           <th>Mapped</th>
           <th>Status</th>
           <th>Actions</th>
@@ -19,9 +19,24 @@
       <tbody>
         {% for member in rows %}
           <tr>
-            <td><a href="{{ member.attachment_unit.url }}">{{ member.attachment_unit.display }}</a></td>
-            <td><a href="{{ member.termination_point.url }}">{{ member.termination_point.display }}</a></td>
-            <td><a href="{{ member.plant_node.url }}">{{ member.plant_node.display }}</a></td>
+            <td>
+              <a href="{{ member.attachment_unit.url }}">{{ member.attachment_unit.display }}</a>
+              {% if member.attachment_unit.endpoint_context %}
+                <div class="small text-muted">{{ member.attachment_unit.endpoint_context }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ member.termination_point.url }}">{{ member.termination_point.display }}</a>
+              {% if member.termination_point.endpoint_context %}
+                <div class="small text-muted">{{ member.termination_point.endpoint_context }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ member.plant_node.url }}">{{ member.plant_node.display }}</a>
+              {% if member.plant_node.endpoint_context %}
+                <div class="small text-muted">{{ member.plant_node.endpoint_context }}</div>
+              {% endif %}
+            </td>
             <td>{% if member.position %}{{ member.position }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
             <td>{% if member.plane_ids %}{{ member.plane_ids|join:", " }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
             <td>{{ member.present_lane_count }} / {{ member.expected_lane_count }}</td>
@@ -33,7 +48,7 @@
                   <a class="btn btn-sm btn-outline-primary" href="{{ member.attachment_unit.lane_drilldown_url }}">Drilldown</a>
                 {% endif %}
                 {% if member.attachment_unit.signal_path_resolver_url %}
-                  <a class="btn btn-sm btn-outline-secondary" href="{{ member.attachment_unit.signal_path_resolver_url }}">Path</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ member.attachment_unit.signal_path_resolver_url }}">Optical Path</a>
                 {% endif %}
                 <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_workspace' %}?target_registry_key={{ query.target_registry_key }}&target_id={{ query.target_id }}&group_by={{ query.group_by }}&mode=grouped&group_key=attachment:{{ member.attachment_unit.pk }}&focus={{ query.focus }}{% if query.path_lane_index or query.path_lane_index == 0 %}&path_lane_index={{ query.path_lane_index }}{% endif %}{% if query.plane_id %}&plane_id={{ query.plane_id }}{% endif %}{% if query.compare_registry_key %}&compare_registry_key={{ query.compare_registry_key }}{% endif %}{% if query.compare_id %}&compare_id={{ query.compare_id }}{% endif %}{% if query.source_finding_id %}&source_finding_id={{ query.source_finding_id }}{% endif %}#lane-workspace-main">Select</a>
               </div>

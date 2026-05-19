@@ -44,10 +44,13 @@
           {% else %}
             {{ result.target.display }}
           {% endif %}
+          {% if result.target.endpoint_context %}
+            <div class="small text-muted">{{ result.target.endpoint_context }}</div>
+          {% endif %}
         </dd>
         <dt class="col-sm-3">Attachment Units</dt>
         <dd class="col-sm-9">{{ result.total_attachment_units }}</dd>
-        <dt class="col-sm-3">Signal Lanes</dt>
+        <dt class="col-sm-3">Optical Lanes</dt>
         <dd class="col-sm-9">{{ result.total_signal_lanes }}</dd>
         {% if result.available_lane_indexes %}
           <dt class="col-sm-3">Available Lane Indexes</dt>
@@ -65,7 +68,7 @@
           <tr>
             <th>Attachment Unit</th>
             <th>Lane Count</th>
-            <th>Lanes</th>
+            <th>Optical Lanes</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -78,6 +81,9 @@
                 {% else %}
                   {{ item.attachment_unit.display }}
                 {% endif %}
+                {% if item.attachment_unit.endpoint_context %}
+                  <div class="small text-muted">{{ item.attachment_unit.endpoint_context }}</div>
+                {% endif %}
               </td>
               <td>{{ item.lane_count }}</td>
               <td>
@@ -87,9 +93,12 @@
                   {% else %}
                     {{ lane.display }}
                   {% endif %}
+                  {% if lane.endpoint_context %}
+                    <div class="small text-muted">{{ lane.endpoint_context }}</div>
+                  {% endif %}
                   {% if not forloop.last %}<br>{% endif %}
                 {% empty %}
-                  <span class="text-muted">No lanes</span>
+                  <span class="text-muted">No optical lanes</span>
                 {% endfor %}
               </td>
               <td>
@@ -97,14 +106,14 @@
                   {% if item.attachment_unit.lane_workspace_url %}
                     <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.lane_workspace_url }}{% if result.lane_index or result.lane_index == 0 %}&mode=lane&lane_index={{ result.lane_index }}{% endif %}">Open In Workspace</a>
                   {% endif %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Signal Path</a>
-                  <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_blast_radius_url }}">Signal Radius</a>
+                  <a class="btn btn-sm btn-outline-primary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Optical Path</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_blast_radius_url }}">Optical Radius</a>
                 </div>
               </td>
             </tr>
           {% empty %}
             <tr>
-              <td colspan="4">No signal lanes are materialized for this target.</td>
+              <td colspan="4">No optical lanes are materialized for this target.</td>
             </tr>
           {% endfor %}
         </tbody>

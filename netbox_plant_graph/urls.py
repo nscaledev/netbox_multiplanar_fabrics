@@ -23,6 +23,7 @@ from .views import (
     DisjointnessExceptionExpireView,
     DisjointnessExceptionReactivateView,
     DisjointnessExceptionRequestView,
+    AssemblyGraphStampWizardView,
     AssemblyStampWizardView,
     AssemblyTemplateBuilderView,
     BreakoutStampWizardView,
@@ -107,6 +108,7 @@ urlpatterns = [
     path('disjointness-exceptions/request/', DisjointnessExceptionRequestView.as_view(), name='disjointness_exception_request'),
     # Planning wizard and action URLs
     path('assembly-templates/<int:pk>/stamp/', AssemblyStampWizardView.as_view(), name='assembly_stamp_wizard'),
+    path('assembly-templates/<int:pk>/stamp-graph/', AssemblyGraphStampWizardView.as_view(), name='assembly_graph_stamp_wizard'),
     path('assembly-templates/<int:pk>/build/', AssemblyTemplateBuilderView.as_view(), name='assembly_template_build'),
     path('device-breakout-templates/<int:pk>/stamp/', BreakoutStampWizardView.as_view(), name='breakout_stamp_wizard'),
     path('spatial-templates/<int:pk>/stamp/', SpatialStampWizardView.as_view(), name='spatial_stamp_wizard'),

@@ -11,8 +11,8 @@
       <thead>
         <tr>
           <th>Attachment Unit</th>
-          <th>Lane Count</th>
-          <th>Exact Lanes</th>
+          <th>Optical Lane Count</th>
+          <th>Exact Optical Lanes</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -25,6 +25,9 @@
               {% else %}
                 {{ item.attachment_unit.display }}
               {% endif %}
+              {% if item.attachment_unit.endpoint_context %}
+                <div class="small text-muted">{{ item.attachment_unit.endpoint_context }}</div>
+              {% endif %}
             </td>
             <td>{{ item.lane_count }}</td>
             <td>
@@ -34,18 +37,21 @@
                 {% else %}
                   {{ lane.display }}
                 {% endif %}
+                {% if lane.endpoint_context %}
+                  <div class="small text-muted">{{ lane.endpoint_context }}</div>
+                {% endif %}
                 {% if not forloop.last %}<br>{% endif %}
               {% endfor %}
             </td>
             <td>
               {% if item.attachment_unit.signal_path_resolver_url %}
-                <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Signal Path</a>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ item.attachment_unit.signal_path_resolver_url }}">Optical Path</a>
               {% endif %}
             </td>
           </tr>
         {% empty %}
           <tr>
-            <td colspan="4">No lane rows match the current workspace scope.</td>
+            <td colspan="4">No optical lane rows match the current workspace scope.</td>
           </tr>
         {% endfor %}
       </tbody>

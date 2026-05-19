@@ -27,14 +27,24 @@ from netbox_plant_graph.models import (
     AssemblyConnectorTemplate,
     AssemblyMappingTemplate,
     AssemblyTemplate,
+    AttachmentUnit,
+    CoarseEdge,
     DeploymentPlan,
     Fabric,
+    FabricPlane,
+    FineEdge,
+    LaneMap,
+    PlaneMembership,
+    PlantNode,
     RackPopulationSlot,
     RackPopulationTemplate,
     SpatialPlacement,
     SpatialTemplate,
     SpatialTemplateNode,
     StampRecord,
+    SignalLane,
+    TerminationPoint,
+    TransferMap,
 )
 from netbox_plant_graph.services.spatial_stamp import render_name_pattern
 
@@ -586,6 +596,442 @@ class AssemblyPassiveDeviceStampTestCase(TestCase):
         )
         self.assertIsNone(result.device)
         self.assertEqual(len(result.rear_ports), 0)
+
+
+class AssemblyGraphStampTestCase(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.fabric = Fabric.objects.create(name='Graph Stamp Fabric')
+
+    def _make_trunk_template(self):
+        template = AssemblyTemplate.objects.create(
+            name='Graph 16f MPO8 Trunk',
+            slug='graph-16f-mpo8-trunk',
+            assembly_type='trunk_bundle',
+            metadata={'fiber_count': 16},
+        )
+        a1 = AssemblyConnectorTemplate.objects.create(
+            template=template, side='A', connector_number=1,
+            connector_type='mpo-8', position_count=1, label='A1',
+        )
+        a2 = AssemblyConnectorTemplate.objects.create(
+            template=template, side='A', connector_number=2,
+            connector_type='mpo-8', position_count=1, label='A2',
+        )
+        b1 = AssemblyConnectorTemplate.objects.create(
+            template=template, side='B', connector_number=1,
+            connector_type='mpo-8', position_count=1, label='B1',
+        )
+        b2 = AssemblyConnectorTemplate.objects.create(
+            template=template, side='B', connector_number=2,
+            connector_type='mpo-8', position_count=1, label='B2',
+        )
+        AssemblyMappingTemplate.objects.create(
+            template=template,
+            a_connector=a1, a_position=1,
+            b_connector=b1, b_position=1,
+            mapping_type='identity',
+        )
+        AssemblyMappingTemplate.objects.create(
+            template=template,
+            a_connector=a2, a_position=1,
+            b_connector=b2, b_position=1,
+            mapping_type='identity',
+        )
+        return template
+
+    def test_graph_stamp_creates_plugin_objects_without_native_cable(self):
+        from dcim.models import Cable
+        from netbox_plant_graph.services import stamp_graph_assembly
+
+        template = self._make_trunk_template()
+        native_cable_count = Cable.objects.count()
+        result = stamp_graph_assembly(
+            template=template,
+            fabric=self.fabric,
+            name='SU1-Trunk-001',
+        )
+
+        self.assertEqual(Cable.objects.count(), native_cable_count)
+        self.assertEqual(result.plant_node.node_type, 'trunk_bundle')
+        self.assertEqual(result.plant_node.status, 'planned')
+        self.assertEqual(len(result.termination_points), 4)
+        self.assertEqual(len(result.attachment_units), 4)
+        self.assertEqual(len(result.transfer_maps), 2)
+        self.assertEqual(
+            TerminationPoint.objects.filter(plant_node=result.plant_node, connector_type='mpo-8').count(),
+            4,
+        )
+        self.assertEqual(
+            AttachmentUnit.objects.filter(termination_point__plant_node=result.plant_node).count(),
+            4,
+        )
+        self.assertEqual(TransferMap.objects.filter(owner_node=result.plant_node).count(), 2)
+        self.assertIsNotNone(result.stamp_record)
+        self.assertEqual(result.stamp_record.result, result.plant_node)
+        self.assertEqual(result.stamp_record.parameters['stamp_type'], 'graph_assembly')
+
+    def test_graph_stamp_replaces_only_managed_children_on_restamp(self):
+        from netbox_plant_graph.services import stamp_graph_assembly
+
+        template = self._make_trunk_template()
+        first = stamp_graph_assembly(
+            template=template,
+            fabric=self.fabric,
+            name='SU1-Trunk-002',
+        )
+        TerminationPoint.objects.create(
+            plant_node=first.plant_node,
+            name='manual-note',
+            tp_type='connector',
+            metadata={'graph_assembly_stamp': False},
+        )
+
+        second = stamp_graph_assembly(
+            template=template,
+            fabric=self.fabric,
+            name='SU1-Trunk-002',
+        )
+
+        self.assertEqual(second.plant_node.pk, first.plant_node.pk)
+        self.assertEqual(TerminationPoint.objects.filter(plant_node=first.plant_node).count(), 5)
+        self.assertTrue(
+            TerminationPoint.objects.filter(plant_node=first.plant_node, name='manual-note').exists()
+        )
+        self.assertEqual(TransferMap.objects.filter(owner_node=first.plant_node).count(), 2)
+
+
+class GraphExternalEdgeStampTestCase(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.fabric = Fabric.objects.create(name='External Edge Fabric')
+        cls.plane = FabricPlane.objects.create(fabric=cls.fabric, plane_number=1)
+
+    def _make_attachment_unit(self, node_name, termination_name='mpo-1'):
+        node = PlantNode.objects.create(
+            fabric=self.fabric,
+            name=node_name,
+            node_type='device',
+            status='planned',
+        )
+        termination = TerminationPoint.objects.create(
+            plant_node=node,
+            name=termination_name,
+            tp_type='connector',
+            connector_type='mpo-8',
+            channel_capacity=1,
+        )
+        return AttachmentUnit.objects.create(
+            termination_point=termination,
+            name=f'{termination_name}:1',
+            ordinal=1,
+            unit_type='passive_group',
+        )
+
+    def _make_laned_attachment_unit(self, node_name, termination_name='mpo-1'):
+        attachment_unit = self._make_attachment_unit(node_name, termination_name)
+        for lane_index in range(8):
+            SignalLane.objects.create(
+                attachment_unit=attachment_unit,
+                lane_index=lane_index,
+                name=f'{termination_name}:strand-{lane_index + 1:02d}',
+                lane_kind='optical_tx',
+                direction_role='passive_strand',
+            )
+        return attachment_unit
+
+    def test_external_edge_stamp_creates_plugin_edges_without_native_cable(self):
+        from dcim.models import Cable
+        from netbox_plant_graph.services import resolve_path, stamp_graph_external_edge
+
+        gb300_au = self._make_attachment_unit('gb300-tray-01', 'OSFP-1.MPO-1')
+        cassette_au = self._make_attachment_unit('shuffle-cassette-01', 'rear-mpo-01')
+        native_cable_count = Cable.objects.count()
+
+        result = stamp_graph_external_edge(
+            a_endpoint=gb300_au,
+            b_endpoint=cassette_au,
+            fabric=self.fabric,
+            plane_number=1,
+            staging_key='madison-su1-gb300-to-cassette-001',
+            path_key='madison-su1-path-001',
+            segment_role='gb300_to_shuffle_cassette',
+        )
+
+        self.assertEqual(Cable.objects.count(), native_cable_count)
+        self.assertIsNotNone(result.coarse_edge)
+        self.assertIsNotNone(result.fine_edge)
+        self.assertEqual(result.coarse_edge.edge_type, 'cable')
+        self.assertEqual(result.fine_edge.edge_type, 'derived_cable_segment')
+        self.assertEqual(result.fine_edge.granularity, 'attachment_unit')
+        self.assertEqual(result.fine_edge.parent_coarse_edge, result.coarse_edge)
+        self.assertEqual(result.coarse_edge.metadata['path_key'], 'madison-su1-path-001')
+        self.assertEqual(result.coarse_edge.metadata['plane_number'], 1)
+        self.assertEqual(PlaneMembership.objects.filter(plane=self.plane).count(), 2)
+
+        resolved = resolve_path(source=gb300_au, destination=cassette_au)
+        self.assertTrue(resolved['path_found'])
+        self.assertEqual(resolved['summary']['coarse_edges_crossed'], 1)
+
+    def test_external_path_stamp_resolves_named_endpoints_and_replaces_path(self):
+        from netbox_plant_graph.services import stamp_graph_external_path
+
+        gb300_au = self._make_attachment_unit('gb300-tray-02', 'OSFP-1.MPO-1')
+        cassette_rear_au = self._make_attachment_unit('shuffle-cassette-02', 'rear-mpo-01')
+        cassette_front_au = self._make_attachment_unit('shuffle-cassette-02-front', 'front-mpo-01')
+        leaf_au = self._make_attachment_unit('leaf-01', 'Ethernet1/1.MPO-1')
+
+        segments = [
+            {
+                'a': {
+                    'plant_node_name': gb300_au.termination_point.plant_node.name,
+                    'termination_point_name': gb300_au.termination_point.name,
+                },
+                'b': {
+                    'plant_node_name': cassette_rear_au.termination_point.plant_node.name,
+                    'termination_point_name': cassette_rear_au.termination_point.name,
+                },
+                'plane_number': 1,
+                'segment_role': 'gb300_to_shuffle_cassette',
+            },
+            {
+                'a': cassette_front_au,
+                'b': leaf_au,
+                'plane_number': 1,
+                'segment_role': 'shuffle_cassette_to_leaf',
+            },
+        ]
+
+        first = stamp_graph_external_path(
+            fabric=self.fabric,
+            path_key='madison-su1-full-path-001',
+            segments=segments,
+        )
+        second = stamp_graph_external_path(
+            fabric=self.fabric,
+            path_key='madison-su1-full-path-001',
+            segments=segments,
+        )
+
+        self.assertEqual(len(first.coarse_edges), 2)
+        self.assertEqual(len(second.coarse_edges), 2)
+        self.assertEqual(
+            CoarseEdge.objects.filter(metadata__path_key='madison-su1-full-path-001').count(),
+            2,
+        )
+        self.assertEqual(
+            FineEdge.objects.filter(metadata__path_key='madison-su1-full-path-001').count(),
+            2,
+        )
+
+    def test_external_edge_stamp_creates_signal_lane_edges_when_lanes_exist(self):
+        from netbox_plant_graph.services import stamp_graph_external_edge
+
+        gb300_au = self._make_laned_attachment_unit('gb300-tray-03', 'OSFP-1.MPO-1')
+        cassette_au = self._make_laned_attachment_unit('shuffle-cassette-03', 'rear-mpo-01')
+
+        result = stamp_graph_external_edge(
+            a_endpoint=gb300_au,
+            b_endpoint=cassette_au,
+            fabric=self.fabric,
+            plane_number=1,
+            staging_key='madison-su1-gb300-to-cassette-lane-001',
+            path_key='madison-su1-path-lane-001',
+            segment_role='gb300_to_shuffle_cassette',
+        )
+
+        self.assertEqual(len(result.lane_edges), 8)
+        self.assertEqual(
+            FineEdge.objects.filter(
+                metadata__path_key='madison-su1-path-lane-001',
+                granularity='attachment_unit',
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            FineEdge.objects.filter(
+                metadata__path_key='madison-su1-path-lane-001',
+                granularity='signal_lane',
+            ).count(),
+            8,
+        )
+        self.assertTrue(all(edge.parent_coarse_edge == result.coarse_edge for edge in result.lane_edges))
+        self.assertEqual(
+            sorted((edge.a_lane.lane_index, edge.b_lane.lane_index) for edge in result.lane_edges),
+            [(index, index) for index in range(8)],
+        )
+
+
+class AssemblyTransferPolicyStampTestCase(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.site = Site.objects.create(name='Asm Topology Site', slug='asm-topology-site')
+        cls.manufacturer = Manufacturer.objects.create(name='Asm Topology Mfr', slug='asm-topology-mfr')
+        cls.device_type = DeviceType.objects.create(
+            manufacturer=cls.manufacturer,
+            model='2x2 MPO Shuffle Cassette',
+            slug='2x2-mpo-shuffle-cassette',
+        )
+        cls.device_role = DeviceRole.objects.create(name='Shuffle Cassette', slug='shuffle-cassette')
+        cls.fabric = Fabric.objects.create(name='Asm Topology Fabric')
+
+    def _make_template(self):
+        template = AssemblyTemplate.objects.create(
+            name='2x2 MPO Shuffle Cassette',
+            slug='shuffle-cassette-2x2-mpo',
+            assembly_type='shuffle_board',
+            device_type=self.device_type,
+            metadata={
+                'transfer_policy': {
+                    'policy_type': 'two_independent_2x2_full_fanout',
+                    'groups': [
+                        {
+                            'name': 'shuffle-1',
+                            'front_mpos': [1, 2],
+                            'rear_mpos': [1, 2],
+                            'transfer_maps': [
+                                {'front_mpo': 1, 'rear_mpo': 1},
+                                {'front_mpo': 1, 'rear_mpo': 2},
+                                {'front_mpo': 2, 'rear_mpo': 1},
+                                {'front_mpo': 2, 'rear_mpo': 2},
+                            ],
+                        },
+                        {
+                            'name': 'shuffle-2',
+                            'front_mpos': [3, 4],
+                            'rear_mpos': [3, 4],
+                            'transfer_maps': [
+                                {'front_mpo': 3, 'rear_mpo': 3},
+                                {'front_mpo': 3, 'rear_mpo': 4},
+                                {'front_mpo': 4, 'rear_mpo': 3},
+                                {'front_mpo': 4, 'rear_mpo': 4},
+                            ],
+                        },
+                    ],
+                }
+            },
+        )
+        for number in range(1, 5):
+            AssemblyConnectorTemplate.objects.create(
+                template=template,
+                side='A',
+                connector_number=number,
+                connector_type='mpo-8',
+                position_count=1,
+                label=f'rear-mpo-{number:02d}',
+            )
+            AssemblyConnectorTemplate.objects.create(
+                template=template,
+                side='B',
+                connector_number=number,
+                connector_type='mpo-8',
+                position_count=1,
+                label=f'front-mpo-{number:02d}',
+            )
+        return template
+
+    def _make_cassette(self):
+        device = Device.objects.create(
+            site=self.site,
+            device_type=self.device_type,
+            role=self.device_role,
+            name='cassette-01',
+        )
+        for number in range(1, 5):
+            rear_port = RearPort.objects.create(
+                device=device,
+                name=f'rear-mpo-{number:02d}',
+                type='mpo',
+                positions=1,
+            )
+            FrontPort.objects.create(
+                device=device,
+                name=f'front-mpo-{number:02d}',
+                type='mpo',
+                rear_port=rear_port,
+                rear_port_position=1,
+            )
+        return device
+
+    def test_stamp_materializes_cassette_transfer_policy(self):
+        from netbox_plant_graph.services import stamp_assembly_transfer_policy
+
+        template = self._make_template()
+        device = self._make_cassette()
+
+        result = stamp_assembly_transfer_policy(template, device, self.fabric)
+
+        self.assertEqual(result.termination_points, 8)
+        self.assertEqual(result.attachment_units, 8)
+        self.assertEqual(result.transfer_maps, 8)
+        self.assertEqual(result.signal_lanes, 64)
+        self.assertEqual(result.lane_maps, 64)
+        node = PlantNode.objects.get(fabric=self.fabric, name=device.name)
+        self.assertEqual(node.node_type, 'cassette')
+        self.assertEqual(TerminationPoint.objects.filter(plant_node=node).count(), 8)
+        self.assertEqual(AttachmentUnit.objects.filter(termination_point__plant_node=node).count(), 8)
+        self.assertEqual(SignalLane.objects.filter(attachment_unit__termination_point__plant_node=node).count(), 64)
+        self.assertEqual(LaneMap.objects.filter(owner_node=node).count(), 64)
+
+        transfer_pairs = {
+            (
+                item.metadata['front_mpo'],
+                item.metadata['rear_mpo'],
+                item.metadata['group'],
+            )
+            for item in TransferMap.objects.filter(owner_node=node)
+        }
+        self.assertEqual(
+            transfer_pairs,
+            {
+                (1, 1, 'shuffle-1'),
+                (1, 2, 'shuffle-1'),
+                (2, 1, 'shuffle-1'),
+                (2, 2, 'shuffle-1'),
+                (3, 3, 'shuffle-2'),
+                (3, 4, 'shuffle-2'),
+                (4, 3, 'shuffle-2'),
+                (4, 4, 'shuffle-2'),
+            },
+        )
+        lane_pair = LaneMap.objects.get(
+            owner_node=node,
+            metadata__front_mpo=1,
+            metadata__rear_mpo=2,
+            metadata__front_lane_index=3,
+        )
+        self.assertEqual(lane_pair.metadata['rear_lane_index'], 3)
+        self.assertEqual(lane_pair.metadata['strand_mapping'], 'inferred_identity_pending_vendor_pinout')
+
+    def test_stamp_is_idempotent_for_managed_transfer_maps(self):
+        from netbox_plant_graph.services import stamp_assembly_transfer_policy
+
+        template = self._make_template()
+        device = self._make_cassette()
+
+        stamp_assembly_transfer_policy(template, device, self.fabric)
+        stamp_assembly_transfer_policy(template, device, self.fabric)
+
+        node = PlantNode.objects.get(fabric=self.fabric, name=device.name)
+        self.assertEqual(TerminationPoint.objects.filter(plant_node=node).count(), 8)
+        self.assertEqual(AttachmentUnit.objects.filter(termination_point__plant_node=node).count(), 8)
+        self.assertEqual(SignalLane.objects.filter(attachment_unit__termination_point__plant_node=node).count(), 64)
+        self.assertEqual(
+            TransferMap.objects.filter(
+                owner_node=node,
+                metadata__assembly_transfer_policy=True,
+                metadata__assembly_template=template.slug,
+            ).count(),
+            8,
+        )
+        self.assertEqual(
+            LaneMap.objects.filter(
+                owner_node=node,
+                metadata__assembly_transfer_policy=True,
+                metadata__assembly_template=template.slug,
+            ).count(),
+            64,
+        )
 
 
 # ---------------------------------------------------------------------------

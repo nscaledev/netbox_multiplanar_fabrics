@@ -1,9 +1,10 @@
 """
 Assembly stamp services.
 
-Two stamp operations:
+Three stamp operations:
   1. stamp_cable_assembly — creates a Cable + CableTerminations from an AssemblyTemplate
-  2. stamp_passive_device — creates a Device + FrontPorts + RearPorts + PortMappings
+  2. stamp_graph_assembly — creates plugin-native Plant Graph objects only
+  3. stamp_passive_device — creates a Device + FrontPorts + RearPorts + PortMappings
 
 Both optionally record a StampRecord for provenance tracking.
 """
@@ -44,6 +45,15 @@ class DeviceStampResult:
     rear_ports: list = field(default_factory=list)
     front_ports: list = field(default_factory=list)
     port_mappings: list = field(default_factory=list)
+    stamp_record: object = None
+
+
+@dataclass
+class GraphAssemblyStampResult:
+    plant_node: object = None
+    termination_points: list = field(default_factory=list)
+    attachment_units: list = field(default_factory=list)
+    transfer_maps: list = field(default_factory=list)
     stamp_record: object = None
 
 
@@ -164,6 +174,188 @@ def stamp_cable_assembly(
     return CableStampResult(
         cable=cable,
         cable_terminations=terminations,
+        stamp_record=stamp_record,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph-only assembly stamp  (plugin-native trunk/cable assemblies)
+# ---------------------------------------------------------------------------
+
+def stamp_graph_assembly(
+    template: AssemblyTemplate,
+    *,
+    fabric: object,
+    name: str,
+    node_type: str | None = None,
+    status: str = 'planned',
+    role: str = '',
+    tenant: object | None = None,
+    location: object | None = None,
+    plan: DeploymentPlan | None = None,
+    user: AbstractUser | None = None,
+    dry_run: bool = False,
+    prune_existing: bool = True,
+    metadata: dict | None = None,
+) -> GraphAssemblyStampResult:
+    """
+    Stamp an AssemblyTemplate into the plugin-native graph model.
+
+    This creates a PlantNode for the cable/trunk assembly, connector
+    TerminationPoints, per-position AttachmentUnits, and internal TransferMaps.
+    It deliberately does not create native dcim.Cable rows.
+    """
+    from ..models import AttachmentUnit, PlantNode, TerminationPoint, TransferMap
+
+    if not name:
+        raise ValueError('name is required')
+    if fabric is None:
+        raise ValueError('fabric is required')
+
+    a_connectors = list(template.a_connectors)
+    b_connectors = list(template.b_connectors)
+    connectors = a_connectors + b_connectors
+    mappings = list(template.mappings.select_related('a_connector', 'b_connector'))
+
+    if not connectors:
+        raise ValueError('AssemblyTemplate has no connectors to stamp')
+
+    inferred_node_type = 'trunk_bundle' if template.assembly_type == 'trunk_bundle' else 'cable_assembly'
+    node_type = node_type or inferred_node_type
+    stamp_metadata = {
+        **(template.metadata or {}),
+        **(metadata or {}),
+        'graph_assembly_stamp': True,
+        'assembly_template_id': template.pk,
+        'assembly_template_slug': template.slug,
+        'assembly_type': template.assembly_type,
+        'connector_count': len(connectors),
+        'mapping_count': len(mappings),
+    }
+
+    if dry_run:
+        return GraphAssemblyStampResult()
+
+    with transaction.atomic():
+        location_fields = {'location_type': None, 'location_id': None}
+        if location is not None:
+            location_fields.update(_generic_fk_fields(location, 'location'))
+        plant_node, _created = PlantNode.objects.update_or_create(
+            fabric=fabric,
+            name=name,
+            defaults={
+                'node_type': node_type,
+                'role': role or template.assembly_type,
+                'status': status,
+                'tenant': tenant or template.tenant,
+                'metadata': stamp_metadata,
+                **_generic_fk_fields(template, 'source'),
+                **location_fields,
+            },
+        )
+
+        if prune_existing:
+            _delete_managed_graph_children(plant_node)
+
+        termination_points = []
+        attachment_units = []
+        attachment_lookup = {}
+
+        for connector in connectors:
+            tp_name = connector.label or f'{connector.side}{connector.connector_number}'
+            tp = TerminationPoint.objects.create(
+                plant_node=plant_node,
+                name=tp_name,
+                tp_type='connector',
+                connector_type=connector.connector_type,
+                channel_capacity=connector.position_count,
+                metadata={
+                    **(connector.metadata or {}),
+                    'graph_assembly_stamp': True,
+                    'assembly_connector_template_id': connector.pk,
+                    'side': connector.side,
+                    'connector_number': connector.connector_number,
+                    'position_count': connector.position_count,
+                },
+                **_generic_fk_fields(connector, 'source'),
+            )
+            termination_points.append(tp)
+
+            for position in range(1, connector.position_count + 1):
+                au = AttachmentUnit.objects.create(
+                    termination_point=tp,
+                    name=f'{tp_name}:{position}',
+                    ordinal=position,
+                    unit_type='passive_group',
+                    topology_role=f'{connector.side}-connector',
+                    metadata={
+                        'graph_assembly_stamp': True,
+                        'assembly_connector_template_id': connector.pk,
+                        'side': connector.side,
+                        'connector_number': connector.connector_number,
+                        'position': position,
+                    },
+                    **_generic_fk_fields(connector, 'source'),
+                )
+                attachment_units.append(au)
+                attachment_lookup[(connector.pk, position)] = au
+
+        transfer_maps = []
+        for mapping in mappings:
+            src = attachment_lookup.get((mapping.a_connector_id, mapping.a_position))
+            dst = attachment_lookup.get((mapping.b_connector_id, mapping.b_position))
+            if src is None or dst is None:
+                raise ValueError(f'Assembly mapping {mapping.pk} references a missing stamped attachment unit')
+            transfer_maps.append(
+                TransferMap.objects.create(
+                    owner_node=plant_node,
+                    src_attachment_unit=src,
+                    dst_attachment_unit=dst,
+                    mapping_type=mapping.mapping_type,
+                    metadata={
+                        **(mapping.metadata or {}),
+                        'graph_assembly_stamp': True,
+                        'assembly_mapping_template_id': mapping.pk,
+                        'a_connector_number': mapping.a_connector.connector_number,
+                        'a_position': mapping.a_position,
+                        'b_connector_number': mapping.b_connector.connector_number,
+                        'b_position': mapping.b_position,
+                    },
+                )
+            )
+
+        stamp_record = _create_stamp_record(
+            template=template,
+            result=plant_node,
+            plan=plan,
+            user=user,
+        )
+        if stamp_record is not None:
+            stamp_record.parameters = {
+                'stamp_type': 'graph_assembly',
+                'template_id': template.pk,
+                'fabric_id': fabric.pk,
+                'name': name,
+                'node_type': node_type,
+                'status': status,
+            }
+            stamp_record.metadata = {
+                'termination_point_count': len(termination_points),
+                'attachment_unit_count': len(attachment_units),
+                'transfer_map_count': len(transfer_maps),
+            }
+            stamp_record.save(update_fields=('parameters', 'metadata'))
+
+        logger.info(
+            'Stamped graph assembly %s → PlantNode pk=%s (%d TPs, %d AUs, %d maps)',
+            template, plant_node.pk, len(termination_points), len(attachment_units), len(transfer_maps),
+        )
+
+    return GraphAssemblyStampResult(
+        plant_node=plant_node,
+        termination_points=termination_points,
+        attachment_units=attachment_units,
+        transfer_maps=transfer_maps,
         stamp_record=stamp_record,
     )
 
@@ -359,6 +551,34 @@ def _connector_type_to_port_type(connector_type: str) -> str:
         'custom': 'other',
     }
     return mapping.get(connector_type, 'other')
+
+
+def _generic_fk_fields(obj, prefix: str) -> dict:
+    """Return GenericForeignKey content-type/id fields for *obj*."""
+    if obj is None:
+        return {}
+    return {
+        f'{prefix}_type': ContentType.objects.get_for_model(obj, for_concrete_model=False),
+        f'{prefix}_id': obj.pk,
+    }
+
+
+def _delete_managed_graph_children(plant_node) -> None:
+    """Delete child graph rows previously created by stamp_graph_assembly."""
+    managed_tp_ids = [
+        tp.pk
+        for tp in plant_node.termination_points.all()
+        if (tp.metadata or {}).get('graph_assembly_stamp') is True
+    ]
+    managed_map_ids = [
+        transfer.pk
+        for transfer in plant_node.transfer_maps.all()
+        if (transfer.metadata or {}).get('graph_assembly_stamp') is True
+    ]
+    if managed_map_ids:
+        plant_node.transfer_maps.filter(pk__in=managed_map_ids).delete()
+    if managed_tp_ids:
+        plant_node.termination_points.filter(pk__in=managed_tp_ids).delete()
 
 
 def _create_stamp_record(*, template, result, plan, user):

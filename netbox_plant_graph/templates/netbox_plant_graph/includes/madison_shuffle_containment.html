@@ -1,0 +1,73 @@
+<div class="card">
+  <h2 class="card-header">Shuffle Containment</h2>
+  <div class="card-body">
+    <div class="mb-3 small">
+      <span class="text-muted">Viewing {{ containment.current_role }}:</span>
+      {% if containment.current_device_url %}
+        <a href="{{ containment.current_device_url }}">{{ containment.current_device }}</a>
+      {% else %}
+        {{ containment.current_device }}
+      {% endif %}
+    </div>
+    <div class="d-flex flex-wrap gap-2 mb-3 small">
+      <span class="badge text-bg-primary">
+        {{ containment.populated_tray_count }}/{{ containment.total_tray_bay_count }} tray groups populated
+      </span>
+      <span class="badge text-bg-secondary">
+        {{ containment.populated_cassette_count }}/{{ containment.total_cassette_bay_count }} cassettes
+      </span>
+    </div>
+
+    <div class="small">
+      <div class="fw-bold{% if containment.box_is_current %} bg-primary-subtle rounded px-2 py-1{% endif %}">
+        {% if containment.box_url %}
+          <a href="{{ containment.box_url }}">{{ containment.box }}</a>
+        {% else %}
+          {{ containment.box }}
+        {% endif %}
+      </div>
+      <div class="border-start ps-3 mt-2">
+        {% for tray in containment.trays %}
+          <div class="mb-3">
+            <div class="fw-semibold">
+              {{ tray.name }}
+              {% if not tray.is_populated %}
+                <span class="text-muted fw-normal">empty</span>
+              {% endif %}
+            </div>
+            <div class="border-start ps-3 mt-2">
+              {% for cassette in tray.cassettes %}
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-1{% if cassette.is_current %} bg-primary-subtle rounded px-2 py-1{% endif %}">
+                  <span class="text-muted">{{ cassette.bay.name }}:</span>
+                  {% if cassette.device %}
+                    {% if cassette.device_url %}
+                      <a href="{{ cassette.device_url }}">{{ cassette.device }}</a>
+                    {% else %}
+                      {{ cassette.device }}
+                    {% endif %}
+                    {% if cassette.is_expected_type %}
+                      <span class="badge text-bg-light">
+                        front MPO {{ cassette.front_ports.total }} / linked {{ cassette.front_ports.linked }}
+                      </span>
+                      <span class="badge text-bg-light">
+                        rear MPO {{ cassette.rear_ports.total }} / linked {{ cassette.rear_ports.linked }}
+                      </span>
+                    {% else %}
+                      <span class="badge text-bg-warning">unexpected type</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="text-muted">empty</span>
+                  {% endif %}
+                </div>
+              {% empty %}
+                <div class="text-muted">No cassette bays found for this tray group.</div>
+              {% endfor %}
+            </div>
+          </div>
+        {% empty %}
+          <div class="text-muted">No cassette bays found on this shuffle box.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
