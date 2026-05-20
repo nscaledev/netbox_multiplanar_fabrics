@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from django.db import models as django_models
 
 from .models import (
     AllocationRuleSet,
@@ -36,6 +37,12 @@ class V2ObjectSpec:
     fields: tuple[str, ...]
     brief_fields: tuple[str, ...]
     detail_fields: tuple[str, ...] | None = None
+    form_fields: tuple[str, ...] | None = None
+    filter_fields: tuple[str, ...] | None = None
+    search_fields: tuple[str, ...] | None = None
+    table_fields: tuple[str, ...] | None = None
+    default_columns: tuple[str, ...] | None = None
+    linkify_field: str | None = None
 
     @property
     def serializer_name(self) -> str:
@@ -44,6 +51,50 @@ class V2ObjectSpec:
     @property
     def viewset_name(self) -> str:
         return f'{self.class_prefix}ViewSet'
+
+    @property
+    def table_name(self) -> str:
+        return f'{self.class_prefix}Table'
+
+    @property
+    def form_name(self) -> str:
+        return f'{self.class_prefix}Form'
+
+    @property
+    def filterset_name(self) -> str:
+        return f'{self.class_prefix}FilterSet'
+
+    @property
+    def filter_form_name(self) -> str:
+        return f'{self.class_prefix}FilterForm'
+
+    @property
+    def list_view_name(self) -> str:
+        return f'{self.class_prefix}ListView'
+
+    @property
+    def detail_view_name(self) -> str:
+        return f'{self.class_prefix}View'
+
+    @property
+    def edit_view_name(self) -> str:
+        return f'{self.class_prefix}EditView'
+
+    @property
+    def delete_view_name(self) -> str:
+        return f'{self.class_prefix}DeleteView'
+
+    @property
+    def changelog_view_name(self) -> str:
+        return f'{self.class_prefix}ChangeLogView'
+
+    @property
+    def journal_view_name(self) -> str:
+        return f'{self.class_prefix}JournalView'
+
+    @property
+    def path_prefix(self) -> str:
+        return self.api_basename
 
     @property
     def api_fields(self) -> tuple[str, ...]:
@@ -60,6 +111,80 @@ class V2ObjectSpec:
     @property
     def resolved_detail_fields(self) -> tuple[str, ...]:
         return self.detail_fields or self.fields
+
+    @property
+    def resolved_form_fields(self) -> tuple[str, ...]:
+        return self.form_fields or self.fields
+
+    @property
+    def resolved_filter_fields(self) -> tuple[str, ...]:
+        if self.filter_fields is not None:
+            return self.filter_fields
+        return ('id',) + tuple(
+            field_name
+            for field_name in self.fields
+            if _is_filterable_model_field(self.model, field_name)
+        )
+
+    @property
+    def resolved_search_fields(self) -> tuple[str, ...]:
+        if self.search_fields is not None:
+            return self.search_fields
+        return tuple(
+            f'{field_name}__icontains'
+            for field_name in self.fields
+            if _is_searchable_model_field(self.model, field_name)
+        )
+
+    @property
+    def resolved_table_fields(self) -> tuple[str, ...]:
+        return self.table_fields or ('pk', 'id') + self.fields
+
+    @property
+    def resolved_default_columns(self) -> tuple[str, ...]:
+        return self.default_columns or self.brief_fields[3:] or self.fields[:4]
+
+    @property
+    def resolved_linkify_field(self) -> str:
+        if self.linkify_field:
+            return self.linkify_field
+        for candidate in ('name', 'address', 'label', 'slug', 'plane_number', 'lane_index', 'status'):
+            if candidate in self.fields:
+                return candidate
+        return 'pk'
+
+
+def _get_model_field(model: type, field_name: str):
+    try:
+        return model._meta.get_field(field_name)
+    except Exception:
+        return None
+
+
+def _is_filterable_model_field(model: type, field_name: str) -> bool:
+    field = _get_model_field(model, field_name)
+    if field is None:
+        return False
+    return isinstance(
+        field,
+        (
+            django_models.AutoField,
+            django_models.BigAutoField,
+            django_models.BooleanField,
+            django_models.CharField,
+            django_models.DecimalField,
+            django_models.ForeignKey,
+            django_models.IntegerField,
+            django_models.PositiveIntegerField,
+            django_models.PositiveBigIntegerField,
+            django_models.SlugField,
+        ),
+    )
+
+
+def _is_searchable_model_field(model: type, field_name: str) -> bool:
+    field = _get_model_field(model, field_name)
+    return isinstance(field, (django_models.CharField, django_models.SlugField, django_models.TextField))
 
 
 V2_OBJECT_SPECS = (

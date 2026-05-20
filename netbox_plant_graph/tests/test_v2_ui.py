@@ -2,10 +2,10 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from netbox_plant_graph.models import Fabric, OpticalLane
+from netbox_plant_graph.models import Fabric, OpticalLane, PathIntent
 from netbox_plant_graph.navigation import menu
-from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
+from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
 
 
 @override_settings(ALLOWED_HOSTS=['localhost', 'testserver'])
@@ -18,6 +18,20 @@ class V2UITestCase(TestCase):
         )
         self.client = Client(HTTP_HOST='localhost')
         self.client.force_login(self.user)
+
+    def _stamp_with_path_intent(self):
+        result = stamp_roce_4plane_mini_fabric()
+        PathIntent.objects.create(
+            fabric=result.fabric,
+            name='Proof path intent',
+            plane=result.source_lanes[0].plane,
+            source_channel=result.source_lanes[0].channel,
+            destination_channel=result.destination_lanes[0].channel,
+            source_endpoint=result.source_lanes[0].endpoint,
+            destination_endpoint=result.destination_lanes[0].endpoint,
+            selector={'pair_key': result.source_lanes[0].pair_key},
+        )
+        return result
 
     def test_plugin_menu_is_registered_as_single_netbox_menu_resource(self):
         self.assertEqual(menu.label, 'Multiplanar Fabrics')
@@ -46,17 +60,14 @@ class V2UITestCase(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn('text/html', response['content-type'])
 
-    def test_v2_object_list_pages_render_table_action_routes_with_rows(self):
-        fixture = ensure_roce_4plane_shuffle_architecture()
-        stamp = stamp_roce_4plane_mini_fabric()
+    def test_every_v2_object_list_page_renders_table_action_routes_with_rows(self):
+        self._stamp_with_path_intent()
 
-        route_objects = (
-            ('architecture_list', 'fabricarchitecture', fixture.architecture),
-            ('fabric_list', 'fabric', stamp.fabric),
-        )
-        for list_route_name, object_route_name, obj in route_objects:
-            with self.subTest(list_route_name=list_route_name):
-                response = self.client.get(reverse(f'plugins:netbox_plant_graph:{list_route_name}'))
+        for spec in V2_OBJECT_SPECS:
+            with self.subTest(spec=spec.registry_key):
+                obj = spec.model.objects.first()
+                object_route_name = spec.model._meta.model_name
+                response = self.client.get(reverse(f'plugins:netbox_plant_graph:{object_route_name}_list'))
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(
                     response,
@@ -67,19 +78,35 @@ class V2UITestCase(TestCase):
                     reverse(f'plugins:netbox_plant_graph:{object_route_name}_delete', kwargs={'pk': obj.pk}),
                 )
 
-    def test_v2_object_detail_pages_render_standard_netbox_actions(self):
-        fixture = ensure_roce_4plane_shuffle_architecture()
-        stamp = stamp_roce_4plane_mini_fabric()
+    def test_every_v2_object_detail_page_renders_standard_netbox_actions(self):
+        self._stamp_with_path_intent()
 
-        route_objects = (
-            ('fabricarchitecture', fixture.architecture),
-            ('fabric', stamp.fabric),
-        )
-        for route_name, obj in route_objects:
-            with self.subTest(route_name=route_name):
+        for spec in V2_OBJECT_SPECS:
+            with self.subTest(spec=spec.registry_key):
+                obj = spec.model.objects.first()
+                route_name = spec.model._meta.model_name
                 response = self.client.get(reverse(f'plugins:netbox_plant_graph:{route_name}', kwargs={'pk': obj.pk}))
                 self.assertEqual(response.status_code, 200)
-                self.assertContains(response, reverse(f'plugins:netbox_plant_graph:{route_name}_delete', kwargs={'pk': obj.pk}))
+                self.assertContains(
+                    response,
+                    reverse(f'plugins:netbox_plant_graph:{route_name}_delete', kwargs={'pk': obj.pk}),
+                )
+
+    def test_every_v2_object_add_and_edit_page_renders(self):
+        self._stamp_with_path_intent()
+
+        for spec in V2_OBJECT_SPECS:
+            with self.subTest(spec=spec.registry_key):
+                obj = spec.model.objects.first()
+                route_name = spec.model._meta.model_name
+
+                add_response = self.client.get(reverse(f'plugins:netbox_plant_graph:{route_name}_add'))
+                self.assertEqual(add_response.status_code, 200)
+
+                edit_response = self.client.get(
+                    reverse(f'plugins:netbox_plant_graph:{route_name}_edit', kwargs={'pk': obj.pk})
+                )
+                self.assertEqual(edit_response.status_code, 200)
 
     def test_home_seed_action_stamps_v2_proof_fabric(self):
         response = self.client.post(reverse('plugins:netbox_plant_graph:seed_v2_proof'), follow=True)

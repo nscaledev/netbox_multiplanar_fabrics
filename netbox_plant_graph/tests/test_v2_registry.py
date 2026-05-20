@@ -1,7 +1,8 @@
 from django.test import SimpleTestCase
 from django.urls import reverse
 
-from netbox_plant_graph.api import serializers, views
+from netbox_plant_graph import filtersets, forms, tables, views
+from netbox_plant_graph.api import serializers, views as api_views
 from netbox_plant_graph.models import (
     AllocationRuleSet,
     ArchitectureRole,
@@ -64,13 +65,42 @@ class V2RegistryContractTestCase(SimpleTestCase):
         for spec in V2_OBJECT_SPECS:
             with self.subTest(spec=spec.registry_key):
                 serializer_class = getattr(serializers, spec.serializer_name)
-                viewset_class = getattr(views, spec.viewset_name)
+                viewset_class = getattr(api_views, spec.viewset_name)
 
                 self.assertEqual(serializer_class.Meta.model, spec.model)
                 self.assertEqual(serializer_class.Meta.fields, spec.api_fields)
                 self.assertEqual(serializer_class.Meta.brief_fields, spec.brief_fields)
                 self.assertEqual(viewset_class.serializer_class, serializer_class)
                 self.assertEqual(viewset_class.queryset.model, spec.model)
+
+    def test_generated_standard_ui_classes_match_registry(self):
+        for spec in V2_OBJECT_SPECS:
+            with self.subTest(spec=spec.registry_key):
+                table_class = getattr(tables, spec.table_name)
+                form_class = getattr(forms, spec.form_name)
+                filter_form_class = getattr(forms, spec.filter_form_name)
+                filterset_class = getattr(filtersets, spec.filterset_name)
+                list_view_class = getattr(views, spec.list_view_name)
+                detail_view_class = getattr(views, spec.detail_view_name)
+                edit_view_class = getattr(views, spec.edit_view_name)
+                delete_view_class = getattr(views, spec.delete_view_name)
+                changelog_view_class = getattr(views, spec.changelog_view_name)
+                journal_view_class = getattr(views, spec.journal_view_name)
+
+                self.assertEqual(table_class.Meta.model, spec.model)
+                self.assertEqual(table_class.Meta.fields, spec.resolved_table_fields)
+                self.assertEqual(table_class.Meta.default_columns, spec.resolved_default_columns)
+                self.assertEqual(form_class.Meta.model, spec.model)
+                self.assertEqual(form_class.Meta.fields, spec.resolved_form_fields)
+                self.assertEqual(filter_form_class.model, spec.model)
+                self.assertEqual(filterset_class.Meta.model, spec.model)
+                self.assertEqual(filterset_class.Meta.fields, spec.resolved_filter_fields)
+                self.assertEqual(list_view_class.queryset.model, spec.model)
+                self.assertEqual(detail_view_class.queryset.model, spec.model)
+                self.assertEqual(edit_view_class.queryset.model, spec.model)
+                self.assertEqual(delete_view_class.queryset.model, spec.model)
+                self.assertEqual(changelog_view_class.queryset.model, spec.model)
+                self.assertEqual(journal_view_class.queryset.model, spec.model)
 
     def test_generated_api_routes_reverse_for_every_registered_v2_object(self):
         for spec in V2_OBJECT_SPECS:

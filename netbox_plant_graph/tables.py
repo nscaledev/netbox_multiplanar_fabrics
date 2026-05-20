@@ -1,22 +1,29 @@
 import django_tables2 as tables
 from netbox.tables import NetBoxTable
 
-from .models import Fabric, FabricArchitecture
+from .v2_registry import V2_OBJECT_SPECS
 
 
-class FabricArchitectureTable(NetBoxTable):
-    name = tables.Column(linkify=True)
+def _build_table(spec):
+    meta = type(
+        'Meta',
+        (NetBoxTable.Meta,),
+        {
+            'model': spec.model,
+            'fields': spec.resolved_table_fields,
+            'default_columns': spec.resolved_default_columns,
+        },
+    )
+    attrs = {
+        '__module__': __name__,
+        'Meta': meta,
+        spec.resolved_linkify_field: tables.Column(linkify=True),
+    }
+    return type(spec.table_name, (NetBoxTable,), attrs)
 
-    class Meta(NetBoxTable.Meta):
-        model = FabricArchitecture
-        fields = ('pk', 'id', 'name', 'slug', 'version', 'status', 'plane_count', 'description')
-        default_columns = ('name', 'slug', 'version', 'status', 'plane_count')
+
+for _spec in V2_OBJECT_SPECS:
+    globals()[_spec.table_name] = _build_table(_spec)
 
 
-class FabricTable(NetBoxTable):
-    name = tables.Column(linkify=True)
-
-    class Meta(NetBoxTable.Meta):
-        model = Fabric
-        fields = ('pk', 'id', 'name', 'slug', 'architecture', 'status', 'tenant', 'scope_site', 'scope_location')
-        default_columns = ('name', 'slug', 'architecture', 'status', 'tenant')
+__all__ = tuple(spec.table_name for spec in V2_OBJECT_SPECS)

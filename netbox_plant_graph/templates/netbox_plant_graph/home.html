@@ -67,10 +67,11 @@
   <div class="row g-3">
     <div class="col-md-4">
       <div class="card">
-        <div class="card-header"><strong>Core Objects</strong></div>
+        <div class="card-header"><strong>Standard Objects</strong></div>
         <div class="list-group list-group-flush">
-          <a class="list-group-item list-group-item-action" href="{% url 'plugins:netbox_plant_graph:architecture_list' %}">Architectures</a>
-          <a class="list-group-item list-group-item-action" href="{% url 'plugins:netbox_plant_graph:fabric_list' %}">Fabrics</a>
+          {% for object_link in v2_object_links %}
+            <a class="list-group-item list-group-item-action" href="{% url object_link.url_name %}">{{ object_link.label }}</a>
+          {% endfor %}
         </div>
       </div>
     </div>

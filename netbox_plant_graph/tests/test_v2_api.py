@@ -105,3 +105,32 @@ class V2APISerializerTestCase(TestCase):
                 )
                 self.assertEqual(detail_response.status_code, 200)
                 self.assertEqual(detail_response.json()['id'], instance.pk)
+
+    def test_path_query_api_resolves_selected_lanes(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        source = result.source_lanes[0]
+        destination = result.destination_lanes[0]
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:path-query'),
+            {
+                'source_lane': source.pk,
+                'destination_lane': destination.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['path_found'], payload['error'])
+        self.assertEqual(payload['source_lane_id'], source.pk)
+        self.assertEqual(payload['destination_lane_id'], destination.pk)
+        self.assertIn('transfer_map', [step['step_type'] for step in payload['steps']])
+
+    def test_path_query_api_requires_source_lane(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('plugins-api:netbox_plant_graph-api:path-query'))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['detail'], 'source_lane query parameter is required.')

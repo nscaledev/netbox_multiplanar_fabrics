@@ -1,23 +1,35 @@
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
 
-from .models import Fabric, FabricArchitecture
+from .v2_registry import V2_OBJECT_SPECS
 
 
-class FabricArchitectureForm(NetBoxModelForm):
-    class Meta:
-        model = FabricArchitecture
-        fields = ('name', 'slug', 'version', 'status', 'plane_count', 'description', 'metadata')
+def _build_model_form(spec):
+    meta = type(
+        'Meta',
+        (),
+        {
+            'model': spec.model,
+            'fields': spec.resolved_form_fields,
+        },
+    )
+    return type(spec.form_name, (NetBoxModelForm,), {'__module__': __name__, 'Meta': meta})
 
 
-class FabricArchitectureFilterForm(NetBoxModelFilterSetForm):
-    model = FabricArchitecture
+def _build_filter_form(spec):
+    attrs = {
+        '__module__': __name__,
+        'model': spec.model,
+    }
+    return type(spec.filter_form_name, (NetBoxModelFilterSetForm,), attrs)
 
 
-class FabricForm(NetBoxModelForm):
-    class Meta:
-        model = Fabric
-        fields = ('architecture', 'name', 'slug', 'status', 'tenant', 'scope_site', 'scope_location', 'metadata')
+for _spec in V2_OBJECT_SPECS:
+    globals()[_spec.form_name] = _build_model_form(_spec)
+    globals()[_spec.filter_form_name] = _build_filter_form(_spec)
 
 
-class FabricFilterForm(NetBoxModelFilterSetForm):
-    model = Fabric
+__all__ = tuple(
+    name
+    for spec in V2_OBJECT_SPECS
+    for name in (spec.form_name, spec.filter_form_name)
+)

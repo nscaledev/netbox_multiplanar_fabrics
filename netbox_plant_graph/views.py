@@ -1,16 +1,14 @@
 from django.contrib import messages
 from django.shortcuts import redirect
-from django.views.generic import TemplateView
 from django.views import View
+from django.views.generic import TemplateView
 from netbox.views import generic
 
-from .filtersets import FabricArchitectureFilterSet, FabricFilterSet
-from .forms import FabricArchitectureFilterForm, FabricArchitectureForm, FabricFilterForm, FabricForm
+from . import filtersets, forms, tables
 from .models import Fabric, FabricArchitecture, OpticalLane, Plane, TransferMap
-from .tables import FabricArchitectureTable, FabricTable
 from .services.resolver import resolve_optical_lane_path
 from .services.stamping import stamp_roce_4plane_mini_fabric
-from .v2_registry import get_v2_object_spec_for_model
+from .v2_registry import V2_OBJECT_SPECS, get_v2_object_spec_for_model
 
 
 class V2RegisteredObjectView(generic.ObjectView):
@@ -44,6 +42,13 @@ class HomeView(TemplateView):
             'plane_count': Plane.objects.count(),
             'optical_lane_count': OpticalLane.objects.count(),
             'transfer_map_count': TransferMap.objects.count(),
+            'v2_object_links': tuple(
+                {
+                    'label': spec.label_plural,
+                    'url_name': f'plugins:netbox_plant_graph:{spec.model._meta.model_name}_list',
+                }
+                for spec in V2_OBJECT_SPECS
+            ),
         })
         return context
 
@@ -59,60 +64,63 @@ class SeedV2ProofView(View):
         return redirect('plugins:netbox_plant_graph:home')
 
 
-class FabricArchitectureListView(generic.ObjectListView):
-    queryset = FabricArchitecture.objects.all()
-    table = FabricArchitectureTable
-    filterset = FabricArchitectureFilterSet
-    filterset_form = FabricArchitectureFilterForm
+def _build_list_view(spec):
+    return type(
+        spec.list_view_name,
+        (generic.ObjectListView,),
+        {
+            '__module__': __name__,
+            'queryset': spec.model.objects.all(),
+            'table': getattr(tables, spec.table_name),
+            'filterset': getattr(filtersets, spec.filterset_name),
+            'filterset_form': getattr(forms, spec.filter_form_name),
+        },
+    )
 
 
-class FabricArchitectureView(V2RegisteredObjectView):
-    queryset = FabricArchitecture.objects.all()
+def _build_detail_view(spec):
+    return type(
+        spec.detail_view_name,
+        (V2RegisteredObjectView,),
+        {
+            '__module__': __name__,
+            'queryset': spec.model.objects.all(),
+        },
+    )
 
 
-class FabricArchitectureEditView(generic.ObjectEditView):
-    queryset = FabricArchitecture.objects.all()
-    form = FabricArchitectureForm
+def _build_edit_view(spec):
+    return type(
+        spec.edit_view_name,
+        (generic.ObjectEditView,),
+        {
+            '__module__': __name__,
+            'queryset': spec.model.objects.all(),
+            'form': getattr(forms, spec.form_name),
+        },
+    )
 
 
-class FabricArchitectureDeleteView(generic.ObjectDeleteView):
-    queryset = FabricArchitecture.objects.all()
+def _build_queryset_view(spec, view_name, base_class):
+    return type(
+        view_name,
+        (base_class,),
+        {
+            '__module__': __name__,
+            'queryset': spec.model.objects.all(),
+        },
+    )
 
 
-class FabricArchitectureChangeLogView(generic.ObjectChangeLogView):
-    queryset = FabricArchitecture.objects.all()
-
-
-class FabricArchitectureJournalView(generic.ObjectJournalView):
-    queryset = FabricArchitecture.objects.all()
-
-
-class FabricListView(generic.ObjectListView):
-    queryset = Fabric.objects.all()
-    table = FabricTable
-    filterset = FabricFilterSet
-    filterset_form = FabricFilterForm
-
-
-class FabricView(V2RegisteredObjectView):
-    queryset = Fabric.objects.all()
-
-
-class FabricEditView(generic.ObjectEditView):
-    queryset = Fabric.objects.all()
-    form = FabricForm
-
-
-class FabricDeleteView(generic.ObjectDeleteView):
-    queryset = Fabric.objects.all()
-
-
-class FabricChangeLogView(generic.ObjectChangeLogView):
-    queryset = Fabric.objects.all()
-
-
-class FabricJournalView(generic.ObjectJournalView):
-    queryset = Fabric.objects.all()
+for _spec in V2_OBJECT_SPECS:
+    globals()[_spec.list_view_name] = _build_list_view(_spec)
+    globals()[_spec.detail_view_name] = _build_detail_view(_spec)
+    globals()[_spec.edit_view_name] = _build_edit_view(_spec)
+    globals()[_spec.delete_view_name] = _build_queryset_view(_spec, _spec.delete_view_name, generic.ObjectDeleteView)
+    globals()[_spec.changelog_view_name] = _build_queryset_view(
+        _spec, _spec.changelog_view_name, generic.ObjectChangeLogView
+    )
+    globals()[_spec.journal_view_name] = _build_queryset_view(_spec, _spec.journal_view_name, generic.ObjectJournalView)
 
 
 class PathQueryView(TemplateView):
