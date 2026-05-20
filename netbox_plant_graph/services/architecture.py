@@ -153,6 +153,11 @@ ALLOCATION_RULE_DEFINITIONS = (
 
 STAMP_TEMPLATE = {
     'kind': 'mini_proof',
+    'executor': {
+        'mode': 'hybrid',
+        'primitive': 'roce_4plane_mini_proof',
+        'version': 1,
+    },
     'architecture_slug': ARCHITECTURE_SLUG,
     'architecture_version': ARCHITECTURE_VERSION,
     'planes': [1, 2, 3, 4],

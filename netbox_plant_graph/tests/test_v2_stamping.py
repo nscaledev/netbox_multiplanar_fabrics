@@ -14,11 +14,48 @@ from netbox_plant_graph.models import (
     StrandTermination,
     TransferMap,
 )
+from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import resolve_optical_lane_path
-from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
+from netbox_plant_graph.services.stamping import HYBRID_STAMP_EXECUTORS, execute_stamp_template, stamp_roce_4plane_mini_fabric
 
 
 class V2MiniFabricStampTestCase(TestCase):
+    def test_hybrid_stamp_executor_registry_exposes_roce_mini_proof(self):
+        self.assertIn('roce_4plane_mini_proof', HYBRID_STAMP_EXECUTORS)
+
+    def test_execute_stamp_template_dispatches_hybrid_executor(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Template-dispatched proof',
+            fabric_slug='template-dispatched-proof',
+        )
+
+        self.assertEqual(result.fabric.slug, 'template-dispatched-proof')
+        self.assertEqual(result.fabric.metadata['stamp_executor'], 'roce_4plane_mini_proof')
+        self.assertEqual(result.stamp_run.parameters['executor'], 'roce_4plane_mini_proof')
+        self.assertEqual(len(result.resolved_paths), 4)
+
+    def test_execute_stamp_template_rejects_unknown_hybrid_executor(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        fixture.stamp_template.template = {
+            **fixture.stamp_template.template,
+            'executor': {
+                'mode': 'hybrid',
+                'primitive': 'missing_executor',
+            },
+        }
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Bad proof',
+                fabric_slug='bad-proof',
+            )
+
+        self.assertIn('Unknown hybrid stamp executor', str(raised.exception))
+
     def test_mini_stamp_creates_resolvable_four_plane_shuffle(self):
         result = stamp_roce_4plane_mini_fabric()
         fabric = result.fabric

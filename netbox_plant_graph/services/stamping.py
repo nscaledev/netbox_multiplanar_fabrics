@@ -19,7 +19,7 @@ from netbox_plant_graph.models import (
     TransferMap,
     TransportChannel,
 )
-from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
+from netbox_plant_graph.services.architecture import ArchitectureFixtureResult, ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import OpticalLanePath, resolve_optical_lane_path
 
 
@@ -38,6 +38,36 @@ class MiniFabricStampResult:
     source_lanes: tuple[OpticalLane, ...]
     destination_lanes: tuple[OpticalLane, ...]
     resolved_paths: tuple[OpticalLanePath, ...]
+
+
+@dataclass(frozen=True)
+class StampExecutionContext:
+    fixture: ArchitectureFixtureResult
+    template: object
+    template_spec: dict
+    fabric_name: str
+    fabric_slug: str
+
+
+HYBRID_STAMP_EXECUTORS = {}
+
+
+def register_stamp_executor(name):
+    def decorator(func):
+        HYBRID_STAMP_EXECUTORS[name] = func
+        return func
+
+    return decorator
+
+
+def _stamp_executor_name(template_spec: dict) -> str:
+    executor = template_spec.get('executor') or {}
+    if executor.get('mode') != 'hybrid':
+        raise ValueError('StampTemplate.template.executor.mode must be "hybrid".')
+    primitive = executor.get('primitive')
+    if not primitive:
+        raise ValueError('StampTemplate.template.executor.primitive is required.')
+    return primitive
 
 
 def _node(
@@ -238,15 +268,14 @@ def _path_summary(path: OpticalLanePath) -> dict:
     }
 
 
-@transaction.atomic
-def stamp_roce_4plane_mini_fabric(
-    *,
-    fabric_name: str = 'RoCE 4-plane mini proof',
-    fabric_slug: str = 'roce-4-plane-mini-proof',
-) -> MiniFabricStampResult:
-    fixture = ensure_roce_4plane_shuffle_architecture()
-    template = fixture.stamp_template
-    template_spec = template.template
+@register_stamp_executor('roce_4plane_mini_proof')
+def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabricStampResult:
+    fixture = context.fixture
+    template = context.template
+    template_spec = context.template_spec
+
+    fabric_name = context.fabric_name
+    fabric_slug = context.fabric_slug
 
     fabric, _ = Fabric.objects.update_or_create(
         slug=fabric_slug,
@@ -257,6 +286,7 @@ def stamp_roce_4plane_mini_fabric(
             'metadata': {
                 'fixture': True,
                 'template_slug': template.slug,
+                'stamp_executor': _stamp_executor_name(template_spec),
                 'netbox_cables': 'forbidden_for_modeled_fabric',
             },
         },
@@ -502,6 +532,7 @@ def stamp_roce_4plane_mini_fabric(
             'fabric_name': fabric_name,
             'fabric_slug': fabric_slug,
             'template_slug': template.slug,
+            'executor': _stamp_executor_name(template_spec),
         },
         result={
             'fabric_id': fabric.pk,
@@ -518,4 +549,44 @@ def stamp_roce_4plane_mini_fabric(
         source_lanes=tuple(source_lanes),
         destination_lanes=tuple(destination_lanes),
         resolved_paths=tuple(resolved_paths),
+    )
+
+
+@transaction.atomic
+def execute_stamp_template(
+    *,
+    template,
+    fabric_name: str,
+    fabric_slug: str,
+) -> MiniFabricStampResult:
+    fixture = ensure_roce_4plane_shuffle_architecture()
+    if template.architecture_id and template.architecture_id != fixture.architecture.pk:
+        raise ValueError('StampTemplate belongs to an unsupported architecture for this V2 runner.')
+
+    template_spec = template.template or {}
+    executor_name = _stamp_executor_name(template_spec)
+    executor = HYBRID_STAMP_EXECUTORS.get(executor_name)
+    if executor is None:
+        raise ValueError(f'Unknown hybrid stamp executor: {executor_name!r}.')
+
+    context = StampExecutionContext(
+        fixture=fixture,
+        template=template,
+        template_spec=template_spec,
+        fabric_name=fabric_name,
+        fabric_slug=fabric_slug,
+    )
+    return executor(context)
+
+
+def stamp_roce_4plane_mini_fabric(
+    *,
+    fabric_name: str = 'RoCE 4-plane mini proof',
+    fabric_slug: str = 'roce-4-plane-mini-proof',
+) -> MiniFabricStampResult:
+    fixture = ensure_roce_4plane_shuffle_architecture()
+    return execute_stamp_template(
+        template=fixture.stamp_template,
+        fabric_name=fabric_name,
+        fabric_slug=fabric_slug,
     )

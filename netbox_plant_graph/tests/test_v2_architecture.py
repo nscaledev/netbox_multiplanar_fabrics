@@ -48,6 +48,8 @@ class V2ArchitectureFixtureTestCase(TestCase):
             'leaf_plane_striping',
         })
         self.assertEqual(result.stamp_template.slug, STAMP_TEMPLATE_SLUG)
+        self.assertEqual(result.stamp_template.template['executor']['mode'], 'hybrid')
+        self.assertEqual(result.stamp_template.template['executor']['primitive'], 'roce_4plane_mini_proof')
         self.assertEqual(len(result.stamp_template.template['proof_paths']), 4)
 
     def test_roce_4plane_fixture_is_idempotent(self):
