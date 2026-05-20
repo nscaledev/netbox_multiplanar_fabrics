@@ -1,11 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 
 from netbox_plant_graph.models import Endpoint, Fabric, FabricNode, OpticalLane, PathIntent, StampRun
 from netbox_plant_graph.navigation import menu
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
+from netbox_plant_graph.services.resolver import resolve_optical_lane_path
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
 from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
 
@@ -311,3 +312,43 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'First Fabric')
         self.assertNotContains(response, f'value="{second.source_lanes[0].pk}"')
         self.assertNotContains(response, f'value="{second.destination_lanes[0].pk}"')
+
+    def test_acceptance_gate_mini_fabric_workflow(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        gpu_device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        leaf_device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Leaf Switch', slug='leaf-switch')
+        gpu_role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        leaf_role = DeviceRole.objects.create(name='Leaf Switch', slug='leaf-role', color='00ff00')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+        execute_url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        response = self.client.post(
+            execute_url,
+            {
+                'fabric_name': 'Acceptance Fabric',
+                'fabric_slug': 'acceptance-fabric',
+                'create_active_devices': 'on',
+                'create_site': site.pk,
+                'create_gpu_device_type': gpu_device_type.pk,
+                'create_gpu_role': gpu_role.pk,
+                'create_leaf_device_type': leaf_device_type.pk,
+                'create_leaf_role': leaf_role.pk,
+                'create_name_prefix': 'acceptance-fabric',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fabric = Fabric.objects.get(slug='acceptance-fabric')
+        stamp_run = StampRun.objects.filter(fabric=fabric).latest('created')
+        self.assertEqual(Cable.objects.count(), 0)
+        self.assertTrue(stamp_run.result['managed_objects']['optical_lanes'])
+        self.assertEqual(len(stamp_run.result['netbox_created_objects']['devices']), 5)
+        self.assertEqual(len(stamp_run.result['netbox_created_objects']['interfaces']), 8)
+
+        for source_lane in OpticalLane.objects.filter(fabric=fabric, direction='send').order_by('pk'):
+            path = resolve_optical_lane_path(source=source_lane)
+            self.assertTrue(path.path_found, path.error)
+            self.assertIsNotNone(path.destination_lane_id)
+            self.assertIn('transfer_map', [step.step_type for step in path.steps])
