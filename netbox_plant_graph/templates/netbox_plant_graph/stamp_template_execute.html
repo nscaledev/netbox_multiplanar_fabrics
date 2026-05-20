@@ -1,0 +1,79 @@
+{% extends 'base/layout.html' %}
+{% load form_helpers %}
+
+{% block title %}Stamp {{ template.name }}{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Stamp {{ template.name }}</h1>
+    <div class="btn-list">
+      <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="card-header"><strong>Template</strong></div>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <tbody>
+              <tr><th>Name</th><td>{{ template.name }}</td></tr>
+              <tr><th>Slug</th><td>{{ template.slug }}</td></tr>
+              <tr><th>Architecture</th><td>{{ template.architecture|default:"None" }}</td></tr>
+              <tr><th>Executor</th><td>{{ preview.executor }}</td></tr>
+              <tr><th>Proof Paths</th><td>{{ preview.proof_path_count }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><strong>Preview</strong></div>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Object</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in preview.objects_to_create %}
+                <tr>
+                  <td>{{ item.type }}</td>
+                  <td>{{ item.count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header"><strong>Fabric Parameters</strong></div>
+        <div class="card-body">
+          <form method="post">
+            {% csrf_token %}
+            <div class="row g-3">
+              <div class="col-md-6">
+                {% render_field form.fabric_name %}
+              </div>
+              <div class="col-md-6">
+                {% render_field form.fabric_slug %}
+              </div>
+            </div>
+            <div class="btn-list mt-3">
+              <button type="submit" class="btn btn-primary">
+                <i class="mdi mdi-play" aria-hidden="true"></i> Execute Stamp
+              </button>
+              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

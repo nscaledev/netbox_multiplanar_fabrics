@@ -5,9 +5,10 @@ from django.views.generic import TemplateView
 from netbox.views import generic
 
 from . import filtersets, forms, tables
-from .models import Fabric, FabricArchitecture, OpticalLane, Plane, TransferMap
+from .models import Fabric, FabricArchitecture, OpticalLane, Plane, StampTemplate, TransferMap
 from .services.resolver import resolve_optical_lane_path
-from .services.stamping import stamp_roce_4plane_mini_fabric
+from .services.stamp_preview import build_v2_stamp_template_preview
+from .services.stamping import execute_stamp_template, stamp_roce_4plane_mini_fabric
 from .v2_registry import V2_OBJECT_SPECS, get_v2_object_spec_for_model
 
 
@@ -28,6 +29,11 @@ class V2RegisteredObjectView(generic.ObjectView):
         return {
             'object_spec': spec,
             'detail_fields': detail_fields,
+            'stamp_template_execute_url': (
+                'plugins:netbox_plant_graph:stamptemplate_execute'
+                if spec.registry_key == 'stamptemplate'
+                else None
+            ),
         }
 
 
@@ -62,6 +68,59 @@ class SeedV2ProofView(View):
         else:
             messages.success(request, f'Stamped {result.fabric.name} with {len(result.resolved_paths)} resolved paths.')
         return redirect('plugins:netbox_plant_graph:home')
+
+
+class StampTemplateExecuteView(TemplateView):
+    template_name = 'netbox_plant_graph/stamp_template_execute.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        self.template = StampTemplate.objects.get(pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def _form(self, data=None):
+        return forms.StampTemplateExecuteForm(
+            data=data,
+            initial=forms.StampTemplateExecuteForm.initial_from_template(self.template),
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        form = kwargs.get('form') or self._form()
+        preview_parameters = {
+            'fabric_name': form.initial.get('fabric_name'),
+            'fabric_slug': form.initial.get('fabric_slug'),
+        }
+        if form.is_bound and form.is_valid():
+            preview_parameters = {
+                'fabric_name': form.cleaned_data['fabric_name'],
+                'fabric_slug': form.cleaned_data['fabric_slug'],
+            }
+        context.update({
+            'template': self.template,
+            'form': form,
+            'preview': build_v2_stamp_template_preview(self.template, preview_parameters),
+        })
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = self._form(data=request.POST)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        result = execute_stamp_template(
+            template=self.template,
+            fabric_name=form.cleaned_data['fabric_name'],
+            fabric_slug=form.cleaned_data['fabric_slug'],
+        )
+        failures = [path for path in result.resolved_paths if not path.path_found]
+        if failures:
+            messages.error(request, f'Stamped {result.fabric.name}, but {len(failures)} proof paths failed.')
+        else:
+            messages.success(
+                request,
+                f'Stamped {result.fabric.name} with {len(result.resolved_paths)} resolved paths.',
+            )
+        return redirect(result.fabric.get_absolute_url())
 
 
 def _build_list_view(spec):

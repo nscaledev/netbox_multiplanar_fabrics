@@ -7,6 +7,69 @@ from __future__ import annotations
 from typing import Any
 
 
+def build_v2_stamp_template_preview(template, parameters: dict[str, Any]) -> dict[str, Any]:
+    """
+    Return a lightweight preview for a V2 StampTemplate.
+
+    V2 stamping is hybrid: the template declares structure and names a plugin
+    primitive for inference-heavy work. The preview mirrors that contract by
+    deriving counts from declarative template fields and surfacing the primitive
+    that will execute the stamp.
+    """
+    template_spec = template.template or {}
+    executor = template_spec.get('executor') or {}
+    primitive = executor.get('primitive') or 'unknown'
+    planes = template_spec.get('planes') or []
+    proof_paths = template_spec.get('proof_paths') or []
+    gpu_spec = template_spec.get('gpu_tray') or {}
+    shuffle_spec = template_spec.get('shuffle_cassettes') or {}
+    leaf_spec = template_spec.get('leaf_ports') or {}
+
+    gpu_osfps = int(gpu_spec.get('osfp_count') or 0)
+    mpo_per_osfp = int(gpu_spec.get('mpo_per_osfp') or 0)
+    positions_per_mpo = int(gpu_spec.get('positions_per_mpo') or 0)
+    shuffle_count = int(shuffle_spec.get('count') or 0)
+    shuffle_mpos = shuffle_count * (
+        int(shuffle_spec.get('front_mpo_count') or 0) + int(shuffle_spec.get('rear_mpo_count') or 0)
+    )
+    leaf_count = int(leaf_spec.get('count') or 0)
+
+    gpu_mpos = gpu_osfps * mpo_per_osfp
+    leaf_mpos = leaf_count * mpo_per_osfp
+    mpo_endpoint_count = gpu_mpos + shuffle_mpos + leaf_mpos
+    optical_path_count = len(proof_paths)
+
+    objects_to_create = (
+        {'type': 'fabric', 'count': 1},
+        {'type': 'plane', 'count': len(planes)},
+        {'type': 'fabric_node', 'count': 1 + shuffle_count + leaf_count},
+        {'type': 'endpoint', 'count': gpu_osfps + gpu_mpos + shuffle_mpos + leaf_count + leaf_mpos},
+        {'type': 'connector_position', 'count': mpo_endpoint_count * positions_per_mpo},
+        {'type': 'transport_channel', 'count': optical_path_count * 2},
+        {'type': 'fiber_segment', 'count': optical_path_count * 2},
+        {'type': 'fiber_strand', 'count': optical_path_count * 2},
+        {'type': 'strand_termination', 'count': optical_path_count * 4},
+        {'type': 'transfer_map', 'count': optical_path_count},
+        {'type': 'optical_lane', 'count': optical_path_count * 2},
+        {'type': 'stamp_run', 'count': 1},
+    )
+
+    return {
+        'template_type': 'v2_stamp_template',
+        'template_id': template.pk,
+        'template_name': template.name,
+        'executor': primitive,
+        'fabric_name': parameters.get('fabric_name'),
+        'fabric_slug': parameters.get('fabric_slug'),
+        'proof_path_count': optical_path_count,
+        'description': (
+            f'Stamping will execute {primitive} for fabric '
+            f'"{parameters.get("fabric_name")}" ({parameters.get("fabric_slug")}).'
+        ),
+        'objects_to_create': objects_to_create,
+    }
+
+
 def build_stamp_preview(template_type: str, template_id: int, parameters: dict[str, Any]) -> dict[str, Any]:
     """
     Return a description of what would be created by stamping the given template.

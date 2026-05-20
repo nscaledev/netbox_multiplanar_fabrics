@@ -12,12 +12,14 @@ class V2URLContractTestCase(SimpleTestCase):
             'architecture_list': '/plugins/plant-graph/architectures/',
             'fabricarchitecture_list': '/plugins/plant-graph/architectures/',
             'fabric_list': '/plugins/plant-graph/fabrics/',
+            'stamptemplate_execute': '/plugins/plant-graph/stamp-templates/1/execute/',
             'path_query': '/plugins/plant-graph/path-query/',
         }
 
         for route_name, expected_url in expected_urls.items():
             with self.subTest(route_name=route_name):
-                self.assertEqual(reverse(f'plugins:netbox_plant_graph:{route_name}'), expected_url)
+                kwargs = {'pk': 1} if route_name == 'stamptemplate_execute' else None
+                self.assertEqual(reverse(f'plugins:netbox_plant_graph:{route_name}', kwargs=kwargs), expected_url)
 
     def test_standard_netbox_object_urls_reverse_for_every_v2_object(self):
         suffixes = {

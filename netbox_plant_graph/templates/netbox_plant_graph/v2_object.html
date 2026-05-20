@@ -1,6 +1,14 @@
 {% extends 'generic/object.html' %}
 
 {% block content %}
+  {% if stamp_template_execute_url %}
+    <div class="d-flex justify-content-end mb-3">
+      <a href="{% url stamp_template_execute_url pk=object.pk %}" class="btn btn-primary">
+        <i class="mdi mdi-play" aria-hidden="true"></i> Stamp Fabric
+      </a>
+    </div>
+  {% endif %}
+
   <div class="card">
     <div class="card-header">
       <strong>{{ object_spec.label_singular }}</strong>

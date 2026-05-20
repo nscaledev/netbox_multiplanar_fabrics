@@ -37,6 +37,7 @@ urlpatterns = [
     path('', views.HomeView.as_view(), name='home'),
     path('seed-v2-proof/', views.SeedV2ProofView.as_view(), name='seed_v2_proof'),
     path('architectures/', views.FabricArchitectureListView.as_view(), name='architecture_list'),
+    path('stamp-templates/<int:pk>/execute/', views.StampTemplateExecuteView.as_view(), name='stamptemplate_execute'),
     path('path-query/', views.PathQueryView.as_view(), name='path_query'),
 ]
 

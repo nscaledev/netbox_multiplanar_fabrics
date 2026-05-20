@@ -4,6 +4,7 @@ from django.urls import reverse
 
 from netbox_plant_graph.models import Fabric, OpticalLane, PathIntent
 from netbox_plant_graph.navigation import menu
+from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
 from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
 
@@ -114,6 +115,43 @@ class V2UITestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(Fabric.objects.filter(slug='roce-4-plane-mini-proof').exists())
         self.assertContains(response, 'Stamped RoCE 4-plane mini proof with 4 resolved paths.')
+
+    def test_stamp_template_detail_links_to_execute_workflow(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:stamptemplate', kwargs={'pk': fixture.stamp_template.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk}),
+        )
+
+    def test_stamp_template_execute_workflow_previews_and_stamps_fabric(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        get_response = self.client.get(url)
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertContains(get_response, 'roce_4plane_mini_proof')
+        self.assertContains(get_response, 'optical_lane')
+
+        post_response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Workflow stamped proof',
+                'fabric_slug': 'workflow-stamped-proof',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(post_response.status_code, 200)
+        fabric = Fabric.objects.get(slug='workflow-stamped-proof')
+        self.assertEqual(post_response.redirect_chain[-1][0], fabric.get_absolute_url())
+        self.assertContains(post_response, 'Stamped Workflow stamped proof with 4 resolved paths.')
 
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()
