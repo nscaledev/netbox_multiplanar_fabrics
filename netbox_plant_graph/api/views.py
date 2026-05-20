@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 
-from netbox_plant_graph.api.serializers import FabricArchitectureSerializer, FabricSerializer
-from netbox_plant_graph.models import Fabric, FabricArchitecture
+from netbox_plant_graph.api import serializers as api_serializers
+from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
 
 
 class RootView(APIRootView):
@@ -12,14 +12,20 @@ class RootView(APIRootView):
         return 'multiplanar-fabrics'
 
 
-class FabricArchitectureViewSet(NetBoxModelViewSet):
-    queryset = FabricArchitecture.objects.all()
-    serializer_class = FabricArchitectureSerializer
+def _build_viewset(spec):
+    serializer_class = getattr(api_serializers, spec.serializer_name)
+    return type(
+        spec.viewset_name,
+        (NetBoxModelViewSet,),
+        {
+            'queryset': spec.model.objects.all(),
+            'serializer_class': serializer_class,
+        },
+    )
 
 
-class FabricViewSet(NetBoxModelViewSet):
-    queryset = Fabric.objects.all()
-    serializer_class = FabricSerializer
+for _spec in V2_OBJECT_SPECS:
+    globals()[_spec.viewset_name] = _build_viewset(_spec)
 
 
 class PathQueryAPIView(APIView):
@@ -28,3 +34,6 @@ class PathQueryAPIView(APIView):
             'status': 'not_implemented',
             'detail': 'V2 path resolution API scaffold is installed.',
         })
+
+
+__all__ = ('RootView', 'PathQueryAPIView') + tuple(spec.viewset_name for spec in V2_OBJECT_SPECS)

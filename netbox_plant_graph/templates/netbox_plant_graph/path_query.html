@@ -3,12 +3,79 @@
 {% block title %}Path Query{% endblock %}
 
 {% block content %}
-  <h1>Path Query</h1>
-  <div class="card">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Path Query</h1>
+  </div>
+
+  <div class="card mb-3">
     <div class="card-body">
-      <p class="text-secondary mb-0">
-        The V2 resolver is installed. The operator query form will land with the first stamped shuffle fixture.
-      </p>
+      <form method="get" class="row g-3 align-items-end">
+        <div class="col-md-5">
+          <label class="form-label" for="source_lane">Source Lane</label>
+          <select id="source_lane" name="source_lane" class="form-select">
+            <option value="">---------</option>
+            {% for lane in source_lanes %}
+              <option value="{{ lane.pk }}"{% if selected_source and lane.pk == selected_source.pk %} selected{% endif %}>
+                {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label" for="destination_lane">Destination Lane</label>
+          <select id="destination_lane" name="destination_lane" class="form-select">
+            <option value="">Any compatible receive lane</option>
+            {% for lane in destination_lanes %}
+              <option value="{{ lane.pk }}"{% if selected_destination and lane.pk == selected_destination.pk %} selected{% endif %}>
+                {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="mdi mdi-route" aria-hidden="true"></i> Resolve
+          </button>
+        </div>
+      </form>
     </div>
   </div>
+
+  {% if resolved_path %}
+    <div class="card">
+      <div class="card-header">
+        {% if resolved_path.path_found %}
+          <strong>Path Found</strong>
+        {% else %}
+          <strong>No Path Found</strong>
+        {% endif %}
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Object</th>
+              <th>Label</th>
+              <th>Metadata</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for step in resolved_path.steps %}
+              <tr>
+                <td>{{ step.step_type }}</td>
+                <td>{{ step.object_type }} #{{ step.object_id }}</td>
+                <td>{{ step.label }}</td>
+                <td><code>{{ step.metadata }}</code></td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="4" class="text-secondary">{{ resolved_path.error }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
 {% endblock %}

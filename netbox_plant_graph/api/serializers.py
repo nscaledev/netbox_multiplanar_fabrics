@@ -1,40 +1,23 @@
 from netbox.api.serializers import NetBoxModelSerializer
 
-from netbox_plant_graph.models import Fabric, FabricArchitecture
+from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
 
 
-class FabricArchitectureSerializer(NetBoxModelSerializer):
-    class Meta:
-        model = FabricArchitecture
-        fields = (
-            'id',
-            'url',
-            'display',
-            'name',
-            'slug',
-            'version',
-            'status',
-            'plane_count',
-            'description',
-            'metadata',
-        )
-        brief_fields = ('id', 'url', 'display', 'name', 'slug', 'version')
+def _build_serializer(spec):
+    meta = type(
+        'Meta',
+        (),
+        {
+            'model': spec.model,
+            'fields': spec.api_fields,
+            'brief_fields': spec.brief_fields,
+        },
+    )
+    return type(spec.serializer_name, (NetBoxModelSerializer,), {'Meta': meta})
 
 
-class FabricSerializer(NetBoxModelSerializer):
-    class Meta:
-        model = Fabric
-        fields = (
-            'id',
-            'url',
-            'display',
-            'architecture',
-            'name',
-            'slug',
-            'status',
-            'tenant',
-            'scope_site',
-            'scope_location',
-            'metadata',
-        )
-        brief_fields = ('id', 'url', 'display', 'name', 'slug', 'status')
+for _spec in V2_OBJECT_SPECS:
+    globals()[_spec.serializer_name] = _build_serializer(_spec)
+
+
+__all__ = tuple(spec.serializer_name for spec in V2_OBJECT_SPECS)

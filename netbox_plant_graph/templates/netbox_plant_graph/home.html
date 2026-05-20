@@ -6,6 +6,12 @@
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="mb-0">Multiplanar Fabrics</h1>
     <div class="btn-list">
+      <form method="post" action="{% url 'plugins:netbox_plant_graph:seed_v2_proof' %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-success">
+          <i class="mdi mdi-database-plus" aria-hidden="true"></i> Seed V2 Proof
+        </button>
+      </form>
       <a href="{% url 'plugins:netbox_plant_graph:fabric_add' %}" class="btn btn-primary">
         <i class="mdi mdi-plus-thick" aria-hidden="true"></i> Add Fabric
       </a>
