@@ -1,6 +1,6 @@
 from django import forms
 from django.utils.text import slugify
-from dcim.models import Device, Interface
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Site
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
 
 from .v2_registry import V2_OBJECT_SPECS
@@ -50,6 +50,42 @@ class StampTemplateExecuteForm(forms.Form):
         max_length=200,
         label='Fabric Slug',
     )
+    create_active_devices = forms.BooleanField(
+        required=False,
+        label='Create Active NetBox Devices',
+    )
+    create_site = forms.ModelChoiceField(
+        queryset=Site.objects.order_by('name', 'pk'),
+        required=False,
+        label='Creation Site',
+    )
+    create_gpu_device_type = forms.ModelChoiceField(
+        queryset=DeviceType.objects.select_related('manufacturer').order_by('manufacturer__name', 'model', 'pk'),
+        required=False,
+        label='GPU Device Type',
+    )
+    create_gpu_role = forms.ModelChoiceField(
+        queryset=DeviceRole.objects.order_by('name', 'pk'),
+        required=False,
+        label='GPU Device Role',
+    )
+    create_leaf_device_type = forms.ModelChoiceField(
+        queryset=DeviceType.objects.select_related('manufacturer').order_by('manufacturer__name', 'model', 'pk'),
+        required=False,
+        label='Leaf Device Type',
+        help_text='Optional override. Defaults to GPU Device Type.',
+    )
+    create_leaf_role = forms.ModelChoiceField(
+        queryset=DeviceRole.objects.order_by('name', 'pk'),
+        required=False,
+        label='Leaf Device Role',
+        help_text='Optional override. Defaults to GPU Device Role.',
+    )
+    create_name_prefix = forms.CharField(
+        max_length=200,
+        required=False,
+        label='Device Name Prefix',
+    )
     def __init__(self, *args, template=None, **kwargs):
         self.template = template
         super().__init__(*args, **kwargs)
@@ -77,6 +113,7 @@ class StampTemplateExecuteForm(forms.Form):
         return {
             'fabric_name': fabric_name,
             'fabric_slug': slugify(fabric_name),
+            'create_name_prefix': slugify(fabric_name),
         }
 
     def _source_binding_queryset(self, definition):
@@ -91,8 +128,30 @@ class StampTemplateExecuteForm(forms.Form):
     def source_binding_bound_fields(self):
         return [self[field_name] for field_name in self.source_binding_field_names]
 
+    @property
+    def creation_bound_fields(self):
+        field_names = (
+            'create_active_devices',
+            'create_site',
+            'create_gpu_device_type',
+            'create_gpu_role',
+            'create_leaf_device_type',
+            'create_leaf_role',
+            'create_name_prefix',
+        )
+        return [self[field_name] for field_name in field_names]
+
     def clean(self):
         cleaned_data = super().clean()
+        if cleaned_data.get('create_active_devices'):
+            required_fields = (
+                'create_site',
+                'create_gpu_device_type',
+                'create_gpu_role',
+            )
+            for field_name in required_fields:
+                if cleaned_data.get(field_name) is None:
+                    self.add_error(field_name, 'This field is required when active device creation is enabled.')
         for definition in self.source_binding_definitions:
             device_binding_address = definition.get('device_binding_address')
             if not device_binding_address:
@@ -112,6 +171,21 @@ class StampTemplateExecuteForm(forms.Form):
                     f'Select an interface that belongs to {device_source}.',
                 )
         return cleaned_data
+
+    def creation_options(self):
+        if not self.is_valid():
+            return {}
+        if not self.cleaned_data.get('create_active_devices'):
+            return {}
+        return {
+            'enabled': True,
+            'site': self.cleaned_data['create_site'],
+            'gpu_device_type': self.cleaned_data['create_gpu_device_type'],
+            'gpu_role': self.cleaned_data['create_gpu_role'],
+            'leaf_device_type': self.cleaned_data.get('create_leaf_device_type'),
+            'leaf_role': self.cleaned_data.get('create_leaf_role'),
+            'name_prefix': self.cleaned_data.get('create_name_prefix') or self.cleaned_data['fabric_slug'],
+        }
 
     def source_bindings(self):
         if not self.is_valid():

@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.utils.text import slugify
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Site
 
 from netbox_plant_graph.models import (
     ConnectorPosition,
@@ -50,6 +52,7 @@ class StampExecutionContext:
     fabric_name: str
     fabric_slug: str
     source_bindings: dict
+    netbox_created_objects: dict
 
 
 HYBRID_STAMP_EXECUTORS = {}
@@ -87,6 +90,120 @@ def _source_defaults(source) -> dict:
 
 def _source_binding(context: StampExecutionContext, binding_kind: str, address: str):
     return (context.source_bindings.get(binding_kind) or {}).get(address)
+
+
+def _merge_source_bindings(*bindings: dict) -> dict:
+    merged = {
+        'nodes': {},
+        'endpoints': {},
+    }
+    for binding in bindings:
+        if not binding:
+            continue
+        merged['nodes'].update(binding.get('nodes') or {})
+        merged['endpoints'].update(binding.get('endpoints') or {})
+    return merged
+
+
+def _netbox_name(prefix: str, address: str) -> str:
+    return f'{prefix}-{slugify(address)}'
+
+
+def _create_or_bind_netbox_sources(
+    *,
+    template_spec: dict,
+    fabric_slug: str,
+    creation_options: dict,
+) -> tuple[dict, dict]:
+    if not creation_options.get('enabled'):
+        return {'nodes': {}, 'endpoints': {}}, {'devices': [], 'interfaces': []}
+
+    site = creation_options.get('site')
+    gpu_device_type = creation_options.get('gpu_device_type')
+    gpu_role = creation_options.get('gpu_role')
+    leaf_device_type = creation_options.get('leaf_device_type') or gpu_device_type
+    leaf_role = creation_options.get('leaf_role') or gpu_role
+    name_prefix = creation_options.get('name_prefix') or fabric_slug
+    if not isinstance(site, Site):
+        raise ValueError('creation_options.site must be a Site when creation_options.enabled is true.')
+    if not isinstance(gpu_device_type, DeviceType):
+        raise ValueError('creation_options.gpu_device_type must be a DeviceType when enabled.')
+    if not isinstance(gpu_role, DeviceRole):
+        raise ValueError('creation_options.gpu_role must be a DeviceRole when enabled.')
+    if not isinstance(leaf_device_type, DeviceType):
+        raise ValueError('creation_options.leaf_device_type must be a DeviceType when enabled.')
+    if not isinstance(leaf_role, DeviceRole):
+        raise ValueError('creation_options.leaf_role must be a DeviceRole when enabled.')
+
+    devices_created = []
+    interfaces_created = []
+    source_bindings = {
+        'nodes': {},
+        'endpoints': {},
+    }
+
+    gpu_count = template_spec['gpu_tray']['count']
+    gpu_osfp_count = template_spec['gpu_tray']['osfp_count']
+    leaf_count = template_spec['leaf_ports']['count']
+
+    for index in range(1, gpu_count + 1):
+        address = f'GB300-TRAY-{index}'
+        device_name = _netbox_name(name_prefix, address)
+        device, created = Device.objects.get_or_create(
+            name=device_name,
+            defaults={
+                'site': site,
+                'device_type': gpu_device_type,
+                'role': gpu_role,
+            },
+        )
+        if created:
+            devices_created.append(device.pk)
+        source_bindings['nodes'][address] = device
+
+        for osfp_index in range(1, gpu_osfp_count + 1):
+            interface_name = f'OSFP-{osfp_index}'
+            interface, created = Interface.objects.get_or_create(
+                device=device,
+                name=interface_name,
+                defaults={
+                    'type': '800gbase-x-osfp',
+                },
+            )
+            if created:
+                interfaces_created.append(interface.pk)
+            source_bindings['endpoints'][f'{address}.OSFP-{osfp_index}'] = interface
+
+    for index in range(1, leaf_count + 1):
+        address = f'LEAF-{index}'
+        device_name = _netbox_name(name_prefix, address)
+        device, created = Device.objects.get_or_create(
+            name=device_name,
+            defaults={
+                'site': site,
+                'device_type': leaf_device_type,
+                'role': leaf_role,
+            },
+        )
+        if created:
+            devices_created.append(device.pk)
+        source_bindings['nodes'][address] = device
+
+        interface, created = Interface.objects.get_or_create(
+            device=device,
+            name='OSFP-1',
+            defaults={
+                'type': '800gbase-x-osfp',
+            },
+        )
+        if created:
+            interfaces_created.append(interface.pk)
+        source_bindings['endpoints'][f'{address}.OSFP-1'] = interface
+
+    return source_bindings, {
+        'devices': devices_created,
+        'interfaces': interfaces_created,
+    }
 
 
 def _node(
@@ -623,6 +740,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             'fabric_id': fabric.pk,
             'managed_objects': managed_objects,
             'object_counts': _managed_object_counts(managed_objects),
+            'netbox_created_objects': context.netbox_created_objects,
             'source_lane_ids': [lane.pk for lane in source_lanes],
             'destination_lane_ids': [lane.pk for lane in destination_lanes],
             'resolved_paths': [_path_summary(path) for path in resolved_paths],
@@ -646,6 +764,7 @@ def execute_stamp_template(
     fabric_name: str,
     fabric_slug: str,
     source_bindings: dict | None = None,
+    creation_options: dict | None = None,
 ) -> MiniFabricStampResult:
     fixture = ensure_roce_4plane_shuffle_architecture()
     if template.architecture_id and template.architecture_id != fixture.architecture.pk:
@@ -658,13 +777,24 @@ def execute_stamp_template(
     if executor is None:
         raise ValueError(f'Unknown hybrid stamp executor: {executor_name!r}.')
 
+    netbox_source_bindings, netbox_created_objects = _create_or_bind_netbox_sources(
+        template_spec=template_spec,
+        fabric_slug=fabric_slug,
+        creation_options=creation_options or {},
+    )
+    resolved_source_bindings = _merge_source_bindings(
+        netbox_source_bindings,
+        source_bindings or {},
+    )
+
     context = StampExecutionContext(
         fixture=fixture,
         template=template,
         template_spec=template_spec,
         fabric_name=fabric_name,
         fabric_slug=fabric_slug,
-        source_bindings=source_bindings or {},
+        source_bindings=resolved_source_bindings,
+        netbox_created_objects=netbox_created_objects,
     )
     return executor(context)
 

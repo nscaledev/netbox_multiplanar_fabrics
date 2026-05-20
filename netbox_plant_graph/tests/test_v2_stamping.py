@@ -161,6 +161,93 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertFalse(Fabric.objects.filter(slug='invalid-source-binding-proof').exists())
         self.assertEqual(StampRun.objects.count(), 0)
 
+    def test_execute_stamp_template_can_create_and_bind_netbox_active_devices(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        gpu_device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        leaf_device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='Leaf Switch',
+            slug='leaf-switch',
+        )
+        gpu_role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        leaf_role = DeviceRole.objects.create(name='Leaf Switch', slug='leaf-switch', color='00ff00')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Created proof',
+            fabric_slug='created-proof',
+            creation_options={
+                'enabled': True,
+                'site': site,
+                'gpu_device_type': gpu_device_type,
+                'gpu_role': gpu_role,
+                'leaf_device_type': leaf_device_type,
+                'leaf_role': leaf_role,
+                'name_prefix': 'created-proof',
+            },
+        )
+
+        self.assertEqual(Device.objects.count(), 5)
+        self.assertEqual(Interface.objects.count(), 8)
+        self.assertEqual(
+            sorted(device.name for device in Device.objects.order_by('name')),
+            [
+                'created-proof-gb300-tray-1',
+                'created-proof-leaf-1',
+                'created-proof-leaf-2',
+                'created-proof-leaf-3',
+                'created-proof-leaf-4',
+            ],
+        )
+        gpu_node = FabricNode.objects.get(fabric=result.fabric, address='GB300-TRAY-1')
+        leaf_node = FabricNode.objects.get(fabric=result.fabric, address='LEAF-1')
+        self.assertEqual(gpu_node.source.name, 'created-proof-gb300-tray-1')
+        self.assertEqual(leaf_node.source.name, 'created-proof-leaf-1')
+        self.assertEqual(
+            Endpoint.objects.get(fabric=result.fabric, address='GB300-TRAY-1.OSFP-1').source.name,
+            'OSFP-1',
+        )
+        self.assertEqual(
+            Endpoint.objects.get(fabric=result.fabric, address='LEAF-1.OSFP-1').source.name,
+            'OSFP-1',
+        )
+        self.assertEqual(len(result.stamp_run.result['netbox_created_objects']['devices']), 5)
+        self.assertEqual(len(result.stamp_run.result['netbox_created_objects']['interfaces']), 8)
+
+        second = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Created proof',
+            fabric_slug='created-proof',
+            creation_options={
+                'enabled': True,
+                'site': site,
+                'gpu_device_type': gpu_device_type,
+                'gpu_role': gpu_role,
+                'leaf_device_type': leaf_device_type,
+                'leaf_role': leaf_role,
+                'name_prefix': 'created-proof',
+            },
+        )
+        self.assertEqual(second.fabric.pk, result.fabric.pk)
+        self.assertEqual(second.stamp_run.result['netbox_created_objects'], {'devices': [], 'interfaces': []})
+
+    def test_execute_stamp_template_rejects_invalid_creation_options(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Bad create proof',
+                fabric_slug='bad-create-proof',
+                creation_options={'enabled': True},
+            )
+
+        self.assertIn('creation_options.site must be a Site', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='bad-create-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
     def test_execute_stamp_template_rejects_incomplete_leaf_plane_assignment(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
         template = dict(fixture.stamp_template.template)

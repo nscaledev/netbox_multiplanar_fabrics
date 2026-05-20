@@ -223,6 +223,58 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Select an interface that belongs to GPU-REAL-1.')
         self.assertFalse(Fabric.objects.filter(slug='invalid-anchored-proof').exists())
 
+    def test_stamp_template_execute_workflow_can_create_active_netbox_devices(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        gpu_device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        leaf_device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Leaf Switch', slug='leaf-switch')
+        gpu_role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        leaf_role = DeviceRole.objects.create(name='Leaf Switch', slug='leaf-role', color='00ff00')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Workflow created proof',
+                'fabric_slug': 'workflow-created-proof',
+                'create_active_devices': 'on',
+                'create_site': site.pk,
+                'create_gpu_device_type': gpu_device_type.pk,
+                'create_gpu_role': gpu_role.pk,
+                'create_leaf_device_type': leaf_device_type.pk,
+                'create_leaf_role': leaf_role.pk,
+                'create_name_prefix': 'workflow-created-proof',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fabric = Fabric.objects.get(slug='workflow-created-proof')
+        gpu_node = FabricNode.objects.get(fabric=fabric, address='GB300-TRAY-1')
+        leaf_node = FabricNode.objects.get(fabric=fabric, address='LEAF-1')
+        self.assertEqual(gpu_node.source.name, 'workflow-created-proof-gb300-tray-1')
+        self.assertEqual(leaf_node.source.name, 'workflow-created-proof-leaf-1')
+        self.assertEqual(Device.objects.count(), 5)
+        self.assertEqual(Interface.objects.count(), 8)
+
+    def test_stamp_template_execute_workflow_requires_creation_fields_when_enabled(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Workflow invalid create proof',
+                'fabric_slug': 'workflow-invalid-create-proof',
+                'create_active_devices': 'on',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'This field is required when active device creation is enabled.')
+        self.assertFalse(Fabric.objects.filter(slug='workflow-invalid-create-proof').exists())
+
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()
         source = result.source_lanes[0]

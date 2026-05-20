@@ -118,6 +118,7 @@ class StampTemplateExecuteView(TemplateView):
             fabric_name=form.cleaned_data['fabric_name'],
             fabric_slug=form.cleaned_data['fabric_slug'],
             source_bindings=form.source_bindings(),
+            creation_options=form.creation_options(),
         )
         failures = [path for path in result.resolved_paths if not path.path_found]
         if failures:
