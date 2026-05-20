@@ -103,6 +103,64 @@ class V2MiniFabricStampTestCase(TestCase):
 
         self.assertIn('Unknown hybrid stamp executor', str(raised.exception))
 
+    def test_execute_stamp_template_rejects_template_missing_required_keys(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        invalid_template = dict(fixture.stamp_template.template)
+        invalid_template.pop('source_bindings')
+        fixture.stamp_template.template = invalid_template
+
+        before_fabric_count = Fabric.objects.count()
+        before_stamp_run_count = StampRun.objects.count()
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid proof',
+                fabric_slug='invalid-proof',
+            )
+
+        self.assertIn('StampTemplate.template.source_bindings is required.', str(raised.exception))
+        self.assertEqual(Fabric.objects.count(), before_fabric_count)
+        self.assertEqual(StampRun.objects.count(), before_stamp_run_count)
+
+    def test_execute_stamp_template_rejects_proof_path_outside_plane_set(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        proof_paths = [dict(item) for item in template['proof_paths']]
+        proof_paths[0]['plane'] = 99
+        template['proof_paths'] = proof_paths
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid plane proof',
+                fabric_slug='invalid-plane-proof',
+            )
+
+        self.assertIn('must reference a plane in StampTemplate.template.planes', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-plane-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
+    def test_execute_stamp_template_rejects_unsupported_source_binding_model(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        source_bindings = [dict(item) for item in template['source_bindings']]
+        source_bindings[0]['model'] = 'dcim.nonexistent'
+        template['source_bindings'] = source_bindings
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid source binding proof',
+                fabric_slug='invalid-source-binding-proof',
+            )
+
+        self.assertIn('must be one of: dcim.device, dcim.interface', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-source-binding-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
     def test_mini_stamp_creates_resolvable_four_plane_shuffle(self):
         result = stamp_roce_4plane_mini_fabric()
         fabric = result.fabric

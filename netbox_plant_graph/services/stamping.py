@@ -22,6 +22,7 @@ from netbox_plant_graph.models import (
 )
 from netbox_plant_graph.services.architecture import ArchitectureFixtureResult, ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import OpticalLanePath, resolve_optical_lane_path
+from netbox_plant_graph.services.stamp_template_validation import validate_stamp_template_spec
 
 
 DEFAULT_WAVELENGTHS_NM = {
@@ -651,6 +652,7 @@ def execute_stamp_template(
         raise ValueError('StampTemplate belongs to an unsupported architecture for this V2 runner.')
 
     template_spec = template.template or {}
+    validate_stamp_template_spec(template_spec)
     executor_name = _stamp_executor_name(template_spec)
     executor = HYBRID_STAMP_EXECUTORS.get(executor_name)
     if executor is None:
