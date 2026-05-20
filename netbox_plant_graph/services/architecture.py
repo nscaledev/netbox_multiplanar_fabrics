@@ -194,6 +194,7 @@ STAMP_TEMPLATE = {
             'label': 'GPU OSFP-1 Interface',
             'model': 'dcim.interface',
             'required': False,
+            'device_binding_address': 'GB300-TRAY-1',
             'help_text': 'Optional NetBox Interface to anchor the stamped GB300 OSFP-1 endpoint.',
         },
     ],

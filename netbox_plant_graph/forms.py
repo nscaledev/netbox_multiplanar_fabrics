@@ -64,6 +64,10 @@ class StampTemplateExecuteForm(forms.Form):
                 help_text=definition.get('help_text', ''),
             )
             self.source_binding_field_names.append(field_name)
+        self.source_binding_definition_by_address = {
+            definition['address']: definition
+            for definition in self.source_binding_definitions
+        }
 
     @classmethod
     def initial_from_template(cls, template):
@@ -86,6 +90,28 @@ class StampTemplateExecuteForm(forms.Form):
     @property
     def source_binding_bound_fields(self):
         return [self[field_name] for field_name in self.source_binding_field_names]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        for definition in self.source_binding_definitions:
+            device_binding_address = definition.get('device_binding_address')
+            if not device_binding_address:
+                continue
+            endpoint_source = cleaned_data.get(definition['field_name'])
+            if endpoint_source is None:
+                continue
+            device_definition = self.source_binding_definition_by_address.get(device_binding_address)
+            if device_definition is None:
+                continue
+            device_source = cleaned_data.get(device_definition['field_name'])
+            if device_source is None:
+                continue
+            if getattr(endpoint_source, 'device_id', None) != device_source.pk:
+                self.add_error(
+                    definition['field_name'],
+                    f'Select an interface that belongs to {device_source}.',
+                )
+        return cleaned_data
 
     def source_bindings(self):
         if not self.is_valid():

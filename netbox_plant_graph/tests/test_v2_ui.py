@@ -188,6 +188,41 @@ class V2UITestCase(TestCase):
         self.assertContains(endpoint_response, 'Source')
         self.assertContains(endpoint_response, osfp.name)
 
+    def test_stamp_template_execute_rejects_interface_anchor_from_different_device(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+        selected_device = Device.objects.create(
+            name='GPU-REAL-1',
+            device_type=device_type,
+            role=role,
+            site=site,
+        )
+        other_device = Device.objects.create(
+            name='GPU-REAL-2',
+            device_type=device_type,
+            role=role,
+            site=site,
+        )
+        wrong_osfp = Interface.objects.create(device=other_device, name='OSFP-1', type='800gbase-x-osfp')
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Invalid anchored proof',
+                'fabric_slug': 'invalid-anchored-proof',
+                'gpu_tray_device': selected_device.pk,
+                'gpu_osfp_1_interface': wrong_osfp.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Select an interface that belongs to GPU-REAL-1.')
+        self.assertFalse(Fabric.objects.filter(slug='invalid-anchored-proof').exists())
+
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()
         source = result.source_lanes[0]
