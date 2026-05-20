@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 from netbox_plant_graph.models import (
@@ -47,6 +48,7 @@ class StampExecutionContext:
     template_spec: dict
     fabric_name: str
     fabric_slug: str
+    source_bindings: dict
 
 
 HYBRID_STAMP_EXECUTORS = {}
@@ -70,6 +72,22 @@ def _stamp_executor_name(template_spec: dict) -> str:
     return primitive
 
 
+def _source_defaults(source) -> dict:
+    if source is None:
+        return {
+            'source_type': None,
+            'source_id': None,
+        }
+    return {
+        'source_type': ContentType.objects.get_for_model(source, for_concrete_model=False),
+        'source_id': source.pk,
+    }
+
+
+def _source_binding(context: StampExecutionContext, binding_kind: str, address: str):
+    return (context.source_bindings.get(binding_kind) or {}).get(address)
+
+
 def _node(
     *,
     fabric: Fabric,
@@ -79,6 +97,7 @@ def _node(
     node_kind: str,
     local_index: int | None = None,
     parent: FabricNode | None = None,
+    source=None,
     metadata: dict | None = None,
 ) -> FabricNode:
     node, _ = FabricNode.objects.update_or_create(
@@ -90,6 +109,7 @@ def _node(
             'name': name,
             'node_kind': node_kind,
             'local_index': local_index,
+            **_source_defaults(source),
             'metadata': metadata or {},
         },
     )
@@ -106,6 +126,7 @@ def _endpoint(
     connector_kind: str,
     position_count: int = 0,
     parent: Endpoint | None = None,
+    source=None,
     metadata: dict | None = None,
 ) -> Endpoint:
     endpoint, _ = Endpoint.objects.update_or_create(
@@ -118,6 +139,7 @@ def _endpoint(
             'endpoint_kind': endpoint_kind,
             'connector_kind': connector_kind,
             'position_count': position_count,
+            **_source_defaults(source),
             'metadata': metadata or {},
         },
     )
@@ -311,6 +333,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
         address='GB300-TRAY-1',
         node_kind='active_device',
         local_index=1,
+        source=_source_binding(context, 'nodes', 'GB300-TRAY-1'),
         metadata={'fixture': True},
     )
 
@@ -325,6 +348,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             address=f'{gpu_tray.address}.OSFP-{osfp_index}',
             endpoint_kind='plugin_port',
             connector_kind='osfp',
+            source=_source_binding(context, 'endpoints', f'{gpu_tray.address}.OSFP-{osfp_index}'),
             metadata={'fixture': True, 'role_slug': 'gpu_osfp'},
         )
         gpu_osfps[osfp_index] = osfp
@@ -391,6 +415,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             address=f'LEAF-{leaf_index}',
             node_kind='active_device',
             local_index=leaf_index,
+            source=_source_binding(context, 'nodes', f'LEAF-{leaf_index}'),
             metadata={'fixture': True, 'plane_number': leaf_index},
         )
         leaf_nodes[leaf_index] = leaf
@@ -401,6 +426,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             address=f'{leaf.address}.OSFP-1',
             endpoint_kind='plugin_port',
             connector_kind='osfp',
+            source=_source_binding(context, 'endpoints', f'{leaf.address}.OSFP-1'),
             metadata={'fixture': True, 'role_slug': 'leaf_osfp'},
         )
         leaf_osfps[leaf_index] = osfp
@@ -533,6 +559,10 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             'fabric_slug': fabric_slug,
             'template_slug': template.slug,
             'executor': _stamp_executor_name(template_spec),
+            'source_binding_counts': {
+                'nodes': len(context.source_bindings.get('nodes') or {}),
+                'endpoints': len(context.source_bindings.get('endpoints') or {}),
+            },
         },
         result={
             'fabric_id': fabric.pk,
@@ -558,6 +588,7 @@ def execute_stamp_template(
     template,
     fabric_name: str,
     fabric_slug: str,
+    source_bindings: dict | None = None,
 ) -> MiniFabricStampResult:
     fixture = ensure_roce_4plane_shuffle_architecture()
     if template.architecture_id and template.architecture_id != fixture.architecture.pk:
@@ -575,6 +606,7 @@ def execute_stamp_template(
         template_spec=template_spec,
         fabric_name=fabric_name,
         fabric_slug=fabric_slug,
+        source_bindings=source_bindings or {},
     )
     return executor(context)
 

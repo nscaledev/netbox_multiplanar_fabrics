@@ -1,5 +1,7 @@
 from django.core.management import call_command
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 
 from netbox_plant_graph.models import (
     ConnectorPosition,
@@ -36,6 +38,50 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertEqual(result.fabric.metadata['stamp_executor'], 'roce_4plane_mini_proof')
         self.assertEqual(result.stamp_run.parameters['executor'], 'roce_4plane_mini_proof')
         self.assertEqual(len(result.resolved_paths), 4)
+
+    def test_execute_stamp_template_anchors_nodes_and_ports_to_netbox_objects(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+        device = Device.objects.create(
+            name='GPU-REAL-1',
+            device_type=device_type,
+            role=role,
+            site=site,
+        )
+        osfp = Interface.objects.create(
+            device=device,
+            name='OSFP-1',
+            type='800gbase-x-osfp',
+        )
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Anchored proof',
+            fabric_slug='anchored-proof',
+            source_bindings={
+                'nodes': {
+                    'GB300-TRAY-1': device,
+                },
+                'endpoints': {
+                    'GB300-TRAY-1.OSFP-1': osfp,
+                },
+            },
+        )
+
+        node = FabricNode.objects.get(fabric=result.fabric, address='GB300-TRAY-1')
+        endpoint = Endpoint.objects.get(fabric=result.fabric, address='GB300-TRAY-1.OSFP-1')
+        device_content_type = ContentType.objects.get_for_model(Device)
+        interface_content_type = ContentType.objects.get_for_model(Interface)
+        self.assertEqual(node.source_type, device_content_type)
+        self.assertEqual(node.source_id, device.pk)
+        self.assertEqual(node.source, device)
+        self.assertEqual(endpoint.source_type, interface_content_type)
+        self.assertEqual(endpoint.source_id, osfp.pk)
+        self.assertEqual(endpoint.source, osfp)
+        self.assertEqual(result.stamp_run.parameters['source_binding_counts'], {'nodes': 1, 'endpoints': 1})
 
     def test_execute_stamp_template_rejects_unknown_hybrid_executor(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
