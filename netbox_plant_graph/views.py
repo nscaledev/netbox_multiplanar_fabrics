@@ -86,6 +86,7 @@ class StampTemplateExecuteView(TemplateView):
         return forms.StampTemplateExecuteForm(
             data=data,
             initial=forms.StampTemplateExecuteForm.initial_from_template(self.template),
+            template=self.template,
         )
 
     def get_context_data(self, **kwargs):

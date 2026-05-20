@@ -177,6 +177,26 @@ STAMP_TEMPLATE = {
         'count': 4,
         'plane_assignment': {'1': 1, '2': 2, '3': 3, '4': 4},
     },
+    'source_bindings': [
+        {
+            'kind': 'node',
+            'address': 'GB300-TRAY-1',
+            'field_name': 'gpu_tray_device',
+            'label': 'GPU Tray Device',
+            'model': 'dcim.device',
+            'required': False,
+            'help_text': 'Optional NetBox Device to anchor the stamped GB300 tray node.',
+        },
+        {
+            'kind': 'endpoint',
+            'address': 'GB300-TRAY-1.OSFP-1',
+            'field_name': 'gpu_osfp_1_interface',
+            'label': 'GPU OSFP-1 Interface',
+            'model': 'dcim.interface',
+            'required': False,
+            'help_text': 'Optional NetBox Interface to anchor the stamped GB300 OSFP-1 endpoint.',
+        },
+    ],
     'proof_paths': [
         {'plane': 1, 'gpu_osfp': 1, 'cassette': 1, 'front_position': 1, 'rear_position': 9, 'leaf': 1},
         {'plane': 2, 'gpu_osfp': 2, 'cassette': 1, 'front_position': 2, 'rear_position': 10, 'leaf': 2},

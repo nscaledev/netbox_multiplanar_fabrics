@@ -6,6 +6,16 @@ from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
 from .v2_registry import V2_OBJECT_SPECS
 
 
+SOURCE_BINDING_MODELS = {
+    'dcim.device': Device,
+    'dcim.interface': Interface,
+}
+SOURCE_BINDING_PLURALS = {
+    'node': 'nodes',
+    'endpoint': 'endpoints',
+}
+
+
 def _build_model_form(spec):
     meta = type(
         'Meta',
@@ -40,18 +50,20 @@ class StampTemplateExecuteForm(forms.Form):
         max_length=200,
         label='Fabric Slug',
     )
-    gpu_tray_device = forms.ModelChoiceField(
-        queryset=Device.objects.order_by('name', 'pk'),
-        required=False,
-        label='GPU Tray Device',
-        help_text='Optional NetBox Device to anchor the stamped GB300 tray node.',
-    )
-    gpu_osfp_1_interface = forms.ModelChoiceField(
-        queryset=Interface.objects.select_related('device').order_by('device__name', 'name', 'pk'),
-        required=False,
-        label='GPU OSFP-1 Interface',
-        help_text='Optional NetBox Interface to anchor the stamped GB300 OSFP-1 endpoint.',
-    )
+    def __init__(self, *args, template=None, **kwargs):
+        self.template = template
+        super().__init__(*args, **kwargs)
+        self.source_binding_definitions = tuple((getattr(template, 'template', {}) or {}).get('source_bindings') or ())
+        self.source_binding_field_names = []
+        for definition in self.source_binding_definitions:
+            field_name = definition['field_name']
+            self.fields[field_name] = forms.ModelChoiceField(
+                queryset=self._source_binding_queryset(definition),
+                required=definition.get('required', False),
+                label=definition.get('label') or definition['address'],
+                help_text=definition.get('help_text', ''),
+            )
+            self.source_binding_field_names.append(field_name)
 
     @classmethod
     def initial_from_template(cls, template):
@@ -63,15 +75,33 @@ class StampTemplateExecuteForm(forms.Form):
             'fabric_slug': slugify(fabric_name),
         }
 
+    def _source_binding_queryset(self, definition):
+        model = SOURCE_BINDING_MODELS.get(definition.get('model'))
+        if model is Device:
+            return model.objects.order_by('name', 'pk')
+        if model is Interface:
+            return model.objects.select_related('device').order_by('device__name', 'name', 'pk')
+        raise ValueError(f'Unsupported source binding model: {definition.get("model")!r}.')
+
+    @property
+    def source_binding_bound_fields(self):
+        return [self[field_name] for field_name in self.source_binding_field_names]
+
     def source_bindings(self):
         if not self.is_valid():
             return {}
         nodes = {}
         endpoints = {}
-        if self.cleaned_data.get('gpu_tray_device'):
-            nodes['GB300-TRAY-1'] = self.cleaned_data['gpu_tray_device']
-        if self.cleaned_data.get('gpu_osfp_1_interface'):
-            endpoints['GB300-TRAY-1.OSFP-1'] = self.cleaned_data['gpu_osfp_1_interface']
+        binding_groups = {
+            'nodes': nodes,
+            'endpoints': endpoints,
+        }
+        for definition in self.source_binding_definitions:
+            selected = self.cleaned_data.get(definition['field_name'])
+            if selected is None:
+                continue
+            binding_kind = SOURCE_BINDING_PLURALS[definition['kind']]
+            binding_groups[binding_kind][definition['address']] = selected
         return {
             'nodes': nodes,
             'endpoints': endpoints,

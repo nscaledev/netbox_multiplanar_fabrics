@@ -64,12 +64,11 @@
               <div class="col-md-6">
                 {% render_field form.fabric_slug %}
               </div>
-              <div class="col-md-6">
-                {% render_field form.gpu_tray_device %}
-              </div>
-              <div class="col-md-6">
-                {% render_field form.gpu_osfp_1_interface %}
-              </div>
+              {% for binding_field in form.source_binding_bound_fields %}
+                <div class="col-md-6">
+                  {% render_field binding_field %}
+                </div>
+              {% endfor %}
             </div>
             <div class="btn-list mt-3">
               <button type="submit" class="btn btn-primary">
