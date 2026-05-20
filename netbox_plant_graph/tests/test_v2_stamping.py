@@ -161,6 +161,63 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertFalse(Fabric.objects.filter(slug='invalid-source-binding-proof').exists())
         self.assertEqual(StampRun.objects.count(), 0)
 
+    def test_execute_stamp_template_rejects_incomplete_leaf_plane_assignment(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        leaf_ports = dict(template['leaf_ports'])
+        leaf_ports['plane_assignment'] = {'1': 1, '2': 2, '3': 3}
+        template['leaf_ports'] = leaf_ports
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid assignment proof',
+                fabric_slug='invalid-assignment-proof',
+            )
+
+        self.assertIn('plane_assignment must define exactly one entry for each leaf index', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-assignment-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
+    def test_execute_stamp_template_rejects_missing_device_binding_reference(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        source_bindings = [dict(item) for item in template['source_bindings']]
+        source_bindings[1]['device_binding_address'] = 'MISSING-DEVICE-BINDING'
+        template['source_bindings'] = source_bindings
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid binding reference proof',
+                fabric_slug='invalid-binding-reference-proof',
+            )
+
+        self.assertIn('device_binding_address must reference an existing source binding address', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-binding-reference-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
+    def test_execute_stamp_template_rejects_interface_binding_without_interface_model(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        source_bindings = [dict(item) for item in template['source_bindings']]
+        source_bindings[1]['model'] = 'dcim.device'
+        template['source_bindings'] = source_bindings
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid interface model proof',
+                fabric_slug='invalid-interface-model-proof',
+            )
+
+        self.assertIn('model must be "dcim.interface" when device_binding_address is set', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-interface-model-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
     def test_mini_stamp_creates_resolvable_four_plane_shuffle(self):
         result = stamp_roce_4plane_mini_fabric()
         fabric = result.fabric

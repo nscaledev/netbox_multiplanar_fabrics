@@ -7,6 +7,9 @@ SUPPORTED_SOURCE_BINDING_MODELS = frozenset({
 })
 
 _REQUIRED_TEMPLATE_KEYS = (
+    'kind',
+    'architecture_slug',
+    'architecture_version',
     'executor',
     'planes',
     'gpu_tray',
@@ -77,6 +80,12 @@ def _validate_executor(template_spec: dict) -> None:
         raise ValueError('StampTemplate.template.executor.primitive is required.')
 
 
+def _validate_template_identity(template_spec: dict) -> None:
+    _require_non_empty_string(template_spec['kind'], 'StampTemplate.template.kind')
+    _require_non_empty_string(template_spec['architecture_slug'], 'StampTemplate.template.architecture_slug')
+    _require_non_empty_string(template_spec['architecture_version'], 'StampTemplate.template.architecture_version')
+
+
 def _validate_planes(template_spec: dict) -> list[int]:
     planes = _require_sequence(template_spec['planes'], 'StampTemplate.template.planes')
     if not planes:
@@ -98,6 +107,7 @@ def _validate_group_spec(group_spec: dict, group_name: str, keys: tuple[str, ...
 
 def _validate_source_bindings(template_spec: dict) -> None:
     source_bindings = _require_sequence(template_spec['source_bindings'], 'StampTemplate.template.source_bindings')
+    by_address = {}
     addresses = set()
     field_names = set()
     for index, binding_spec in enumerate(source_bindings, start=1):
@@ -135,6 +145,85 @@ def _validate_source_bindings(template_spec: dict) -> None:
             )
         addresses.add(address)
         field_names.add(field_name)
+        by_address[address] = binding
+
+    for index, binding_spec in enumerate(source_bindings, start=1):
+        binding = _require_mapping(binding_spec, f'StampTemplate.template.source_bindings[{index}]')
+        device_binding_address = binding.get('device_binding_address')
+        if device_binding_address is None:
+            continue
+        if binding.get('kind') != 'endpoint':
+            raise ValueError(
+                f'StampTemplate.template.source_bindings[{index}].device_binding_address '
+                'is only valid for endpoint bindings.'
+            )
+        if binding.get('model') != 'dcim.interface':
+            raise ValueError(
+                f'StampTemplate.template.source_bindings[{index}].model must be "dcim.interface" '
+                'when device_binding_address is set.'
+            )
+        device_binding_address = _require_non_empty_string(
+            device_binding_address,
+            f'StampTemplate.template.source_bindings[{index}].device_binding_address',
+        )
+        device_binding = by_address.get(device_binding_address)
+        if device_binding is None:
+            raise ValueError(
+                f'StampTemplate.template.source_bindings[{index}].device_binding_address '
+                'must reference an existing source binding address.'
+            )
+        if device_binding.get('kind') != 'node' or device_binding.get('model') != 'dcim.device':
+            raise ValueError(
+                f'StampTemplate.template.source_bindings[{index}].device_binding_address '
+                'must reference a node binding with model "dcim.device".'
+            )
+
+
+def _coerce_positive_int(raw_value, path: str) -> int:
+    if _is_positive_int(raw_value):
+        return raw_value
+    if isinstance(raw_value, str) and raw_value.strip().isdigit():
+        parsed = int(raw_value.strip(), 10)
+        if parsed > 0:
+            return parsed
+    raise ValueError(f'{path} must be a positive integer.')
+
+
+def _validate_leaf_plane_assignment(template_spec: dict, planes: list[int]) -> None:
+    leaf_spec = _require_mapping(template_spec['leaf_ports'], 'StampTemplate.template.leaf_ports')
+    assignment = _require_mapping(
+        leaf_spec.get('plane_assignment'),
+        'StampTemplate.template.leaf_ports.plane_assignment',
+    )
+    leaf_count = _require_positive_int(leaf_spec['count'], 'StampTemplate.template.leaf_ports.count')
+    valid_planes = set(planes)
+
+    normalized = {}
+    for raw_leaf_index, raw_plane in assignment.items():
+        leaf_index = _coerce_positive_int(
+            raw_leaf_index,
+            'StampTemplate.template.leaf_ports.plane_assignment key',
+        )
+        plane = _coerce_positive_int(
+            raw_plane,
+            f'StampTemplate.template.leaf_ports.plane_assignment[{raw_leaf_index}]',
+        )
+        if plane not in valid_planes:
+            raise ValueError(
+                f'StampTemplate.template.leaf_ports.plane_assignment[{raw_leaf_index}] '
+                'must reference a plane in StampTemplate.template.planes.'
+            )
+        if leaf_index in normalized:
+            raise ValueError(
+                f'StampTemplate.template.leaf_ports.plane_assignment has duplicate leaf index {leaf_index}.'
+            )
+        normalized[leaf_index] = plane
+
+    required_leaf_indexes = set(range(1, leaf_count + 1))
+    if set(normalized) != required_leaf_indexes:
+        raise ValueError(
+            'StampTemplate.template.leaf_ports.plane_assignment must define exactly one entry for each leaf index.'
+        )
 
 
 def _validate_proof_paths(template_spec: dict, planes: list[int]) -> None:
@@ -228,6 +317,7 @@ def validate_stamp_template_spec(template_spec: dict) -> None:
     if not isinstance(template_spec, dict):
         raise ValueError('StampTemplate.template must be an object.')
     _require_keys(template_spec, _REQUIRED_TEMPLATE_KEYS, 'StampTemplate.template')
+    _validate_template_identity(template_spec)
     _validate_executor(template_spec)
     planes = _validate_planes(template_spec)
     _validate_group_spec(
@@ -245,5 +335,6 @@ def validate_stamp_template_spec(template_spec: dict) -> None:
         'leaf_ports',
         ('count',),
     )
+    _validate_leaf_plane_assignment(template_spec, planes)
     _validate_source_bindings(template_spec)
     _validate_proof_paths(template_spec, planes)
