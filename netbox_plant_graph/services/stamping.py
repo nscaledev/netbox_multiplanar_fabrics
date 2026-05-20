@@ -290,6 +290,59 @@ def _path_summary(path: OpticalLanePath) -> dict:
     }
 
 
+def _managed_object_ids(fabric: Fabric) -> dict[str, list[int]]:
+    return {
+        'fabrics': [fabric.pk],
+        'planes': list(
+            Plane.objects.filter(fabric=fabric).order_by('plane_number').values_list('pk', flat=True)
+        ),
+        'nodes': list(
+            FabricNode.objects.filter(fabric=fabric).order_by('address').values_list('pk', flat=True)
+        ),
+        'endpoints': list(
+            Endpoint.objects.filter(fabric=fabric).order_by('address').values_list('pk', flat=True)
+        ),
+        'connector_positions': list(
+            ConnectorPosition.objects.filter(endpoint__fabric=fabric)
+            .order_by('endpoint__address', 'position_number')
+            .values_list('pk', flat=True)
+        ),
+        'transport_channels': list(
+            TransportChannel.objects.filter(fabric=fabric)
+            .order_by('endpoint__address', 'channel_index')
+            .values_list('pk', flat=True)
+        ),
+        'fiber_segments': list(
+            FiberSegment.objects.filter(fabric=fabric).order_by('name').values_list('pk', flat=True)
+        ),
+        'fiber_strands': list(
+            FiberStrand.objects.filter(segment__fabric=fabric)
+            .order_by('segment__name', 'strand_index')
+            .values_list('pk', flat=True)
+        ),
+        'strand_terminations': list(
+            StrandTermination.objects.filter(strand__segment__fabric=fabric)
+            .order_by('strand__segment__name', 'strand__strand_index', 'termination_index', 'pk')
+            .values_list('pk', flat=True)
+        ),
+        'transfer_maps': list(
+            TransferMap.objects.filter(fabric=fabric).order_by('pk').values_list('pk', flat=True)
+        ),
+        'optical_lanes': list(
+            OpticalLane.objects.filter(fabric=fabric)
+            .order_by('endpoint__address', 'lane_index', 'direction', 'pk')
+            .values_list('pk', flat=True)
+        ),
+    }
+
+
+def _managed_object_counts(managed_objects: dict[str, list[int]]) -> dict[str, int]:
+    return {
+        object_type: len(object_ids)
+        for object_type, object_ids in managed_objects.items()
+    }
+
+
 @register_stamp_executor('roce_4plane_mini_proof')
 def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabricStampResult:
     fixture = context.fixture
@@ -550,6 +603,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
         destination_lanes.append(destination_lane)
         resolved_paths.append(path)
 
+    managed_objects = _managed_object_ids(fabric)
     stamp_run = StampRun.objects.create(
         template=template,
         fabric=fabric,
@@ -566,6 +620,8 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
         },
         result={
             'fabric_id': fabric.pk,
+            'managed_objects': managed_objects,
+            'object_counts': _managed_object_counts(managed_objects),
             'source_lane_ids': [lane.pk for lane in source_lanes],
             'destination_lane_ids': [lane.pk for lane in destination_lanes],
             'resolved_paths': [_path_summary(path) for path in resolved_paths],

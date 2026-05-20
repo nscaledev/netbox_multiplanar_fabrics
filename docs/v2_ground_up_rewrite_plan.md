@@ -1,7 +1,9 @@
 # V2 Ground-Up Rewrite Plan
 
-Status: move-fast implementation plan, intended to become executable work on
+Status: active move-fast implementation plan on
 `codex-mencken/v2-ground-up-rewrite`.
+
+Last updated: 2026-05-20.
 
 ## Intent
 
@@ -38,6 +40,49 @@ The first usable V2 should do one thing very well:
 
 Everything else waits.
 
+## Current State
+
+The V2 rewrite is now past the pure skeleton phase. The branch has a working
+plugin boot path, greenfield V2 models, a bounded graph resolver, a RoCE
+four-plane mini fixture, registry-backed standard object/API pages, and a
+hand-wired stamp execution workflow.
+
+Completed:
+
+- Greenfield `0001_initial.py` for the V2 model set.
+- Core models for architecture, roles, transfer patterns, allocation rules,
+  fabrics, planes, nodes, endpoints, connector positions, transport channels,
+  fiber segments, strands, strand terminations, optical lanes, transfer maps,
+  path intents, stamp templates, and stamp runs.
+- Resolver over connector-position adjacency, with arbitrary-hop BFS and
+  wavelength/plane/direction matching.
+- Executable RoCE four-plane mini architecture fixture.
+- Hybrid stamp executor registry and a `roce_4plane_mini_proof` primitive.
+- Idempotent stamping of one GB300 tray, two shuffle cassettes, and four leaf
+  ports.
+- Standard object UI/API generated from the V2 registry.
+- Hand-wired V2 home, path query, seed proof, and stamp-template execution
+  workflow pages.
+- Template-driven source binding fields for stamp execution.
+- NetBox source anchoring for stamped `FabricNode` and `Endpoint` objects via
+  generic source pointers.
+- Validation that an interface source binding belongs to its selected device
+  binding.
+- Stamp-run result provenance for the managed V2 object inventory.
+
+In progress:
+
+- The stamp runner still uses a mini-proof Python primitive. It is intentionally
+  hybrid, but the next iterations should move more role/endpoint/allocation
+  shape into validated template data.
+- NetBox device creation from template rules is not implemented yet; current
+  source binding supports existing devices/ports.
+
+Deferred:
+
+- Full-suite testing. Focused V2 tests are being run slice-by-slice until
+  several more implementation slices land.
+
 ## Hard Cuts From V1
 
 The following V1 surfaces are out of the first V2 slice:
@@ -49,7 +94,9 @@ The following V1 surfaces are out of the first V2 slice:
 - Policy dashboards and contamination-domain reporting.
 - Floorplan integration.
 - Madison seed/report scripts as core plugin behavior.
-- Large generic generated CRUD registry.
+- V1 generated CRUD registry patterns. V2 now uses a deliberately small
+  registry for standard table/object/API pages only; workflow pages remain
+  hand-wired.
 - Lane workspace UI.
 - GraphQL beyond minimal object/path query proof.
 
@@ -270,6 +317,8 @@ Minimum fixture content:
 
 ### Slice 0: In-Place Skeleton
 
+Status: completed.
+
 Goal: replace the V1 plugin boot path with a minimal V2 kernel.
 
 - Strip V1 custom-field, CablePath, audit, floorplan, and generated-registry
@@ -286,6 +335,8 @@ Exit criteria:
 - No V2 boot path imports V1 sync/audit/floorplan/cabling code.
 
 ### Slice 1: Kernel Models
+
+Status: completed.
 
 Goal: persist the V2 graph vocabulary.
 
@@ -304,6 +355,8 @@ Exit criteria:
   strand, including distinct wavelengths on the same strand.
 
 ### Slice 2: In-Memory Resolver
+
+Status: completed for the MVP graph semantics.
 
 Goal: prove semantics before building a big UI.
 
@@ -325,6 +378,9 @@ Exit criteria:
 
 ### Slice 3: Four-Plane Shuffle Fixture
 
+Status: completed for the mini proof fixture; full NVL72-scale template shape
+is still deferred.
+
 Goal: make the Notion architecture executable.
 
 - Add fixture/builder for one GB300 tray, two shuffle cassettes, and four leaf
@@ -339,6 +395,8 @@ Exit criteria:
 - Per-lane path tests prove the stagger+shuffle mapping.
 
 ### Slice 4: Stamping Engine MVP
+
+Status: in progress.
 
 Goal: turn architecture data into repeatable instances.
 
@@ -358,7 +416,22 @@ Exit criteria:
 - A small fabric instance can be stamped from one parameter payload.
 - Stamp run records all created object IDs.
 
+Completed:
+
+- Hybrid executor dispatch.
+- Idempotent mini-proof stamp runner.
+- Existing NetBox device/interface source bindings.
+- Template-driven source binding fields on the workflow form.
+- Managed V2 object IDs and counts in `StampRun.result`.
+
+Next:
+
+- Add clearer template validation at the boundary.
+- Add NetBox device creation support behind explicit template rules.
+
 ### Slice 5: Minimal Operator Surface
+
+Status: partially completed.
 
 Goal: usable, not beautiful.
 
@@ -372,7 +445,17 @@ Exit criteria:
 - Operator can stamp a small test fabric.
 - Operator can query a GPU endpoint and see its per-lane paths to leaves.
 
+Completed:
+
+- V2 home and seed proof action.
+- Stamp-template detail action and execute workflow.
+- Path query page/API endpoint.
+- Registry-backed standard object list/detail/add/edit/delete/changelog/journal
+  routes.
+
 ### Slice 6: Compatibility And Cutover Decisions
+
+Status: not started.
 
 Goal: decide what survives from V1.
 
@@ -390,7 +473,8 @@ Goal: decide what survives from V1.
   boundary.
 - Keep resolver pure enough to test without UI.
 - Add UI only after model+resolver tests prove the core.
-- Avoid registry-driven surface generation until there is a stable object set.
+- Use the V2 registry for standard object table/detail/form/filter/API routes.
+  Keep workflow pages hand-wired.
 - Prefer deleting a feature to preserving V1 compatibility in V2.
 
 ## Immediate File Plan

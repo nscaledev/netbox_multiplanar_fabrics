@@ -15,6 +15,7 @@ from netbox_plant_graph.models import (
     StampRun,
     StrandTermination,
     TransferMap,
+    TransportChannel,
 )
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import resolve_optical_lane_path
@@ -164,6 +165,34 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertEqual(TransferMap.objects.filter(fabric=fabric).count(), counts['transfer_maps'])
         self.assertEqual(OpticalLane.objects.filter(fabric=fabric).count(), counts['lanes'])
         self.assertEqual(StampRun.objects.filter(fabric=fabric).count(), stamp_run_count + 1)
+
+    def test_mini_stamp_records_managed_v2_object_inventory(self):
+        result = stamp_roce_4plane_mini_fabric()
+        fabric = result.fabric
+        managed_objects = result.stamp_run.result['managed_objects']
+        object_counts = result.stamp_run.result['object_counts']
+
+        self.assertEqual(managed_objects['fabrics'], [fabric.pk])
+        self.assertEqual(object_counts['planes'], Plane.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['nodes'], FabricNode.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['endpoints'], Endpoint.objects.filter(fabric=fabric).count())
+        self.assertEqual(
+            object_counts['connector_positions'],
+            ConnectorPosition.objects.filter(endpoint__fabric=fabric).count(),
+        )
+        self.assertEqual(object_counts['transport_channels'], TransportChannel.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['fiber_segments'], FiberSegment.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['fiber_strands'], FiberStrand.objects.filter(segment__fabric=fabric).count())
+        self.assertEqual(
+            object_counts['strand_terminations'],
+            StrandTermination.objects.filter(strand__segment__fabric=fabric).count(),
+        )
+        self.assertEqual(object_counts['transfer_maps'], TransferMap.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['optical_lanes'], OpticalLane.objects.filter(fabric=fabric).count())
+        self.assertEqual(
+            set(managed_objects['optical_lanes']),
+            {lane.pk for lane in result.source_lanes + result.destination_lanes},
+        )
 
     def test_seed_command_can_seed_architecture_or_full_mini_fabric(self):
         call_command('mpf_seed_v2', '--architecture-only')
