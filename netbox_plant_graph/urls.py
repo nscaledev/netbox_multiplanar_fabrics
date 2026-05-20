@@ -7,6 +7,7 @@ from .views import (
     FabricEditView,
     FabricListView,
     FabricView,
+    HomeView,
     PathQueryView,
 )
 
@@ -14,6 +15,7 @@ from .views import (
 app_name = 'netbox_plant_graph'
 
 urlpatterns = [
+    path('', HomeView.as_view(), name='home'),
     path('architectures/', FabricArchitectureListView.as_view(), name='architecture_list'),
     path('architectures/add/', FabricArchitectureEditView.as_view(), name='fabricarchitecture_add'),
     path('architectures/<int:pk>/', FabricArchitectureView.as_view(), name='fabricarchitecture'),

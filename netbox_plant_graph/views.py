@@ -1,11 +1,25 @@
-from django.http import JsonResponse
-from django.views import View
+from django.views.generic import TemplateView
 from netbox.views import generic
 
 from .filtersets import FabricArchitectureFilterSet, FabricFilterSet
 from .forms import FabricArchitectureFilterForm, FabricArchitectureForm, FabricFilterForm, FabricForm
-from .models import Fabric, FabricArchitecture
+from .models import Fabric, FabricArchitecture, OpticalLane, Plane, TransferMap
 from .tables import FabricArchitectureTable, FabricTable
+
+
+class HomeView(TemplateView):
+    template_name = 'netbox_plant_graph/home.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update({
+            'architecture_count': FabricArchitecture.objects.count(),
+            'fabric_count': Fabric.objects.count(),
+            'plane_count': Plane.objects.count(),
+            'optical_lane_count': OpticalLane.objects.count(),
+            'transfer_map_count': TransferMap.objects.count(),
+        })
+        return context
 
 
 class FabricArchitectureListView(generic.ObjectListView):
@@ -40,9 +54,5 @@ class FabricEditView(generic.ObjectEditView):
     form = FabricForm
 
 
-class PathQueryView(View):
-    def get(self, request):
-        return JsonResponse({
-            'status': 'not_implemented',
-            'detail': 'V2 path resolution endpoint scaffold is installed.',
-        })
+class PathQueryView(TemplateView):
+    template_name = 'netbox_plant_graph/path_query.html'
