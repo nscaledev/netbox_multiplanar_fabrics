@@ -1,23 +1,9 @@
-from .models import (
-    AssemblyTemplate,
-    AttachmentUnit,
-    DeploymentPlan,
-    Fabric,
-    FabricPlane,
-    PlantNode,
-    RackPopulationTemplate,
-    SpatialTemplate,
-    TerminationPoint,
-)
+from .models import Endpoint, Fabric, FabricArchitecture, FabricNode
+
 
 search_index = (
-    (Fabric, ('name', 'description')),
-    (FabricPlane, ('plane',)),
-    (PlantNode, ('name', 'node_type')),
-    (TerminationPoint, ('name',)),
-    (AttachmentUnit, ('name',)),
-    (AssemblyTemplate, ('name', 'description', 'part_number')),
-    (SpatialTemplate, ('name', 'description')),
-    (DeploymentPlan, ('name', 'description')),
-    (RackPopulationTemplate, ('name', 'description')),
+    (FabricArchitecture, ('name', 'slug', 'version', 'description')),
+    (Fabric, ('name', 'slug', 'status')),
+    (FabricNode, ('name', 'address', 'node_kind')),
+    (Endpoint, ('name', 'address', 'endpoint_kind', 'connector_kind')),
 )

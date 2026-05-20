@@ -39,9 +39,7 @@ classifiers = [
     'Programming Language :: Python :: 3.14',
 ]
 
-dependencies = [
-    "netbox-floorplan-plugin>=0.6.0,<0.10",
-]
+dependencies = []
 keywords = ["netbox", "plugin", "roce", "fabric", "topology", "plant-graph"]
 requires-python = ">=3.12"
 

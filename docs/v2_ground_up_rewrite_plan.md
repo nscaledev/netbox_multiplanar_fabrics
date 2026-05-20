@@ -24,6 +24,8 @@ all modeled-fabric connection semantics:
 
 For modeled fabrics, V2 must not depend on NetBox `Cable`, `CableTermination`,
 `CablePath`, cable profiles, or `PortMapping` as source-of-truth constructs.
+Modeled-fabric endpoints should explicitly reject plugin-managed connections
+that try to use those NetBox-native cable/path constructs.
 
 ## Product Shape
 
@@ -55,23 +57,23 @@ Some ideas may come back later, but only after the kernel proves itself.
 
 ## Proposed Package Strategy
 
-Default: create a parallel V2 plugin package in this repo, leaving
-`netbox_plant_graph` intact as the V1 reference.
+Decision: replace the existing `netbox_plant_graph` plugin in-place.
 
-Working package name:
-
-```text
-netbox_multiplanar_fabrics
-```
-
-Working Django app label:
+Working package name remains:
 
 ```text
-netbox_mpf
+netbox_plant_graph
 ```
 
-Why: clean migrations, clean model names, no compatibility drag, and no need to
-untangle V1's derived-overlay assumptions while building the V2 kernel.
+Working Django app label remains:
+
+```text
+netbox_plant_graph
+```
+
+Why: the old plugin was a discovery prototype. V2 should not carry two
+semantically different apps in one repo. This is a greenfield break of the
+existing app surface.
 
 ## Core Data Model
 
@@ -143,21 +145,30 @@ The V2 model should start with a small number of high-signal tables.
 
 `FiberStrand`
 
-- A physical strand between two connector positions.
+- A physical strand of glass inside a `FiberSegment`.
 - Represents glass, not traffic.
 - Carries polarity/orientation metadata when needed.
 
-`OpticalCarrier`
+`StrandTermination`
 
-- A wavelength/lambda on one strand.
-- This makes WDM-like cases natural: multiple carriers can share one strand.
+- Normalized join from one `FiberStrand` to one MPO endpoint position.
+- Fields: strand, MPO endpoint, MPO position, optional termination index.
+- This lets a strand have one or more modeled terminations without baking a
+  fixed "A/B end" assumption into the core model.
 
 `OpticalLane`
 
-- A directed or paired transport lane used in a fabric path.
-- References one or more carriers depending on optic mode.
-- Carries plane, lane index, nominal rate, direction, and endpoint/channel
-  semantics.
+- A transceiver-local signaling lane, not an end-to-end path object.
+- Belongs to an active/plugin transceiver endpoint such as an OSFP.
+- Carries lane index, local MPO index, local MPO position, send/receive
+  direction from the transceiver's point of view, wavelength/lambda, nominal
+  rate, plane, and optional channel.
+- Multiple optical lanes can reference the same fiber strand indirectly by
+  terminating on positions attached to that strand. WDM-style cases are
+  represented by distinct lanes with distinct wavelengths on the same
+  position/strand.
+- Bidirectional operation is represented as two local lanes, usually sharing a
+  `pair_key`: one `send`, one `receive`.
 
 `TransportChannel`
 
@@ -176,8 +187,26 @@ The V2 model should start with a small number of high-signal tables.
 `TransferMap`
 
 - Internal transform inside a `FabricNode` or `FiberSegment`.
-- Maps connector positions, strands, carriers, lanes, or channels across a
-  passive artifact.
+- Maps connector positions across a passive artifact.
+- Passive maps are bidirectional by default; future active/directional
+  transforms can set `bidirectional=false`.
+
+### Arbitrary-Hop Path Extraction
+
+The database stores canonical graph facts; the resolver walks them.
+
+- Vertices: `ConnectorPosition` rows.
+- Fiber edges: positions joined through `StrandTermination` rows on the same
+  `FiberStrand`.
+- Passive transfer edges: `TransferMap.src_position` to
+  `TransferMap.dst_position`.
+- Signaling anchors: `OpticalLane.local_mpo_position` at the active endpoints.
+
+Path extraction is a bounded breadth-first graph traversal with cycle
+detection, not a fixed-depth SQL join. This is the escape hatch for arbitrary
+patch/shuffle hops: the schema can represent any number of segments, and the
+resolver follows adjacency until it finds a compatible destination lane or
+exhausts `max_depth`.
 
 `PathIntent`
 
@@ -198,6 +227,10 @@ The V2 model should start with a small number of high-signal tables.
 - Declarative template for devices, passive nodes, endpoints, channels, and
   fiber segments.
 - JSON-backed initially, with strict validation in Python.
+- Architecture/rule storage is deliberately flexible for now. Start with DB
+  rows containing JSON payloads, but keep import/export services ready for
+  versioned JSON/YAML fixtures if the workflow wants repository-owned
+  architecture definitions.
 
 `StampRun`
 
@@ -217,7 +250,8 @@ Minimum fixture content:
   - four OSFP endpoints
   - two MPO endpoints per OSFP
   - four 200G transport channels per OSFP
-  - lane-to-MPO position mapping for 100G unidirectional optical lanes
+  - transceiver-local lane-to-MPO position mapping for 100G unidirectional
+    optical lanes
 - Leaf switch role:
   - OSFP endpoints
   - two MPO endpoints per OSFP
@@ -234,27 +268,30 @@ Minimum fixture content:
 
 ## Implementation Slices
 
-### Slice 0: Branch And Skeleton
+### Slice 0: In-Place Skeleton
 
-Goal: establish V2 as a separate kernel without damaging V1.
+Goal: replace the V1 plugin boot path with a minimal V2 kernel.
 
-- Add new package skeleton.
-- Add NetBox plugin config for V2.
+- Strip V1 custom-field, CablePath, audit, floorplan, and generated-registry
+  boot behavior from plugin initialization.
+- Replace plugin config metadata/default settings with V2 settings.
 - Add minimal URL/API placeholders.
-- Add migration `0001_initial.py` for kernel models.
-- Add tests proving V2 can load alongside V1 in the local test settings.
+- Replace migrations with a new greenfield `0001_initial.py`.
+- Add tests proving the V2 plugin imports and model metadata is coherent.
 
 Exit criteria:
 
-- `python manage.py test netbox_multiplanar_fabrics` can discover tests.
-- V1 tests are not made worse by V2 package presence.
+- `python manage.py test netbox_plant_graph.tests.test_v2_*` can discover
+  and run V2 tests.
+- No V2 boot path imports V1 sync/audit/floorplan/cabling code.
 
 ### Slice 1: Kernel Models
 
 Goal: persist the V2 graph vocabulary.
 
-- Implement architecture, fabric, node, endpoint, position, strand, carrier,
-  optical lane, channel, segment, transfer map, and stamp-run models.
+- Implement architecture, fabric, node, endpoint, position, strand
+  termination, optical lane, channel, segment, transfer map, and stamp-run
+  models.
 - Keep UI minimal: admin/list/detail can wait.
 - Add pure model tests for constraints and string/address behavior.
 
@@ -263,7 +300,8 @@ Exit criteria:
 - Can create a fabric with four planes.
 - Can create NetBox-bound active endpoints.
 - Can create plugin-native passive endpoints.
-- Can create multiple optical carriers on one strand.
+- Can create multiple send/receive optical lanes on positions attached to one
+  strand, including distinct wavelengths on the same strand.
 
 ### Slice 2: In-Memory Resolver
 
@@ -274,7 +312,7 @@ Goal: prove semantics before building a big UI.
 - Return ordered path stages:
   - source endpoint
   - connector positions
-  - strand/carrier/lane hops
+  - fiber-strand hops
   - transfer maps
   - destination endpoint
 - Support filtering by plane, channel, lane index, wavelength, direction.
@@ -308,7 +346,7 @@ Goal: turn architecture data into repeatable instances.
 - Support:
   - selecting existing NetBox device types by role
   - creating NetBox devices for active roles when requested
-  - binding to existing NetBox devices/ports
+  - binding to existing NetBox devices/ports when requested
   - generating plugin-native passive nodes/endpoints
   - name/address patterns with variables and counters
   - allocation cursors
@@ -357,12 +395,11 @@ Goal: decide what survives from V1.
 
 ## Immediate File Plan
 
-First files to add:
+First files to replace/add:
 
 ```text
-netbox_multiplanar_fabrics/
+netbox_plant_graph/
   __init__.py
-  plugin_config.py
   choices.py
   models.py
   urls.py
@@ -381,10 +418,10 @@ netbox_multiplanar_fabrics/
     0001_initial.py
   tests/
     __init__.py
-    test_models.py
-    test_resolver.py
-    test_shuffle_architecture.py
-    test_stamping.py
+    test_v2_models.py
+    test_v2_resolver.py
+    test_v2_shuffle_architecture.py
+    test_v2_stamping.py
 ```
 
 First docs to add:
@@ -394,91 +431,28 @@ docs/v2_model_contract.md
 docs/v2_roce_4_plane_shuffle_fixture.md
 ```
 
-## Explicit Decisions Needed
+## Resolved Decisions
 
-These are the questions that materially affect the implementation. My
-recommended default is marked with `Default`.
-
-1. Plugin/package boundary
-
-Default: build V2 as a parallel package named `netbox_multiplanar_fabrics`
-inside this repo and leave `netbox_plant_graph` intact.
-
-Question: do you want a parallel V2 plugin package, or should V2 replace the
-existing `netbox_plant_graph` app in-place?
-
-2. NetBox cable relationship
-
-Default: V2 never creates or depends on NetBox `Cable` rows for modeled
-fabric connections.
-
-Question: should V2 forbid NetBox-native cables for modeled fabric endpoints,
-or merely ignore them?
-
-3. Active endpoint anchoring
-
-Default: anchor only at NetBox physical parent interfaces/front/rear ports in
-V2 MVP; represent OSFP/MPO substructure as plugin-native endpoints under that
-anchor.
-
-Question: should MPO connectors under an OSFP be modeled as plugin-native
-sub-endpoints, or should we force NetBox component objects for each MPO when
-possible?
-
-4. Optical lane semantics
-
-Default: model strand, carrier/lambda, and optical lane separately:
-`FiberStrand` -> `OpticalCarrier` -> `OpticalLane`.
-
-Question: do you agree that a lane is not the same object as a fiber strand,
-and not the same object as a wavelength?
-
-5. Directionality
-
-Default: optical lanes are directed, and bidirectional optics are represented
-by paired directed lanes/carriers.
-
-Question: should bidirectional lanes be first-class paired records, or should
-we always model TX/RX as separate directed lanes with a shared pair/group key?
-
-6. Architecture definitions
-
-Default: architecture templates are database rows with JSON rule payloads,
-validated by Python dataclasses/services.
-
-Question: should architecture definitions live in the database, in versioned
-YAML/JSON files in the repo, or both?
-
-7. Stamping NetBox devices
-
-Default: V2 stamping can create NetBox devices from selected device types, but
-does not create NetBox cables.
-
-Question: should the first stamping MVP create NetBox devices, or only bind to
-pre-existing NetBox devices while creating plugin-native fabric plant?
-
-8. Migration from V1
-
-Default: no V1-to-V2 migration in the first working slice.
-
-Question: do you need a migration/import path from current V1 data before we
-call V2 useful, or can V2 initially be greenfield?
-
-9. Resolver persistence
-
-Default: resolved paths are computed on demand first; cached `ResolvedPath`
-records come only if performance requires them.
-
-Question: do you want resolved path rows persisted as part of stamping, or
-computed on demand from canonical graph objects?
-
-10. First proof target
-
-Default: the first proof target is one GB300 tray -> two shuffle cassettes ->
-four leaf ports, not a whole NVL72 or full Madison SU.
-
-Question: is that small topology the right first acceptance test, or should
-the first acceptance target be larger?
+1. Plugin/package boundary: replace `netbox_plant_graph` in-place.
+2. NetBox cable relationship: forbid NetBox-native cables for modeled fabric
+   connections.
+3. Active endpoint anchoring: join to NetBox physical ports, but model port
+   definitions, OSFP semantics, and MPO children in the plugin.
+4. Optical lane semantics: `OpticalLane` is transceiver-local. `FiberStrand`
+   is glass. `StrandTermination` joins strands to MPO positions. Lambda lives
+   on the local optical lane.
+5. Directionality: send/receive are separate local lanes from the endpoint's
+   point of view, with a shared pair/group key when paired.
+6. Architecture definitions: start with DB JSON payloads validated by Python;
+   be ready to pivot to repo fixtures or dual DB/file definitions.
+7. Stamping NetBox devices: support both creating NetBox devices and binding to
+   existing devices/ports.
+8. Migration from V1: greenfield; no V1 migration in the first working slice.
+9. Resolver persistence: compute on demand from canonical graph objects in the
+   MVP. Add persisted/cached `ResolvedPath` rows later only if performance or
+   UI requirements justify them.
+10. First proof target: one GB300 tray -> two shuffle cassettes -> four leaf
+    ports.
 
 ## First Acceptance Test
 
