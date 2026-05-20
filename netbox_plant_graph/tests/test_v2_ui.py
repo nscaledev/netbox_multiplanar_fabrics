@@ -1,8 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 
-from netbox_plant_graph.models import Fabric, OpticalLane, PathIntent
+from netbox_plant_graph.models import Endpoint, Fabric, FabricNode, OpticalLane, PathIntent
 from netbox_plant_graph.navigation import menu
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
@@ -152,6 +153,34 @@ class V2UITestCase(TestCase):
         fabric = Fabric.objects.get(slug='workflow-stamped-proof')
         self.assertEqual(post_response.redirect_chain[-1][0], fabric.get_absolute_url())
         self.assertContains(post_response, 'Stamped Workflow stamped proof with 4 resolved paths.')
+
+    def test_stamp_template_execute_workflow_accepts_netbox_source_anchors(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='GB300 Tray', slug='gb300-tray')
+        role = DeviceRole.objects.create(name='GPU Tray', slug='gpu-tray', color='ff0000')
+        site = Site.objects.create(name='Site 1', slug='site-1', status='active')
+        device = Device.objects.create(name='GPU-REAL-1', device_type=device_type, role=role, site=site)
+        osfp = Interface.objects.create(device=device, name='OSFP-1', type='800gbase-x-osfp')
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+
+        response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Workflow anchored proof',
+                'fabric_slug': 'workflow-anchored-proof',
+                'gpu_tray_device': device.pk,
+                'gpu_osfp_1_interface': osfp.pk,
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fabric = Fabric.objects.get(slug='workflow-anchored-proof')
+        node = FabricNode.objects.get(fabric=fabric, address='GB300-TRAY-1')
+        endpoint = Endpoint.objects.get(fabric=fabric, address='GB300-TRAY-1.OSFP-1')
+        self.assertEqual(node.source, device)
+        self.assertEqual(endpoint.source, osfp)
 
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()

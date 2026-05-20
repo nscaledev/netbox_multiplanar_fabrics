@@ -1,5 +1,6 @@
 from django import forms
 from django.utils.text import slugify
+from dcim.models import Device, Interface
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
 
 from .v2_registry import V2_OBJECT_SPECS
@@ -39,6 +40,18 @@ class StampTemplateExecuteForm(forms.Form):
         max_length=200,
         label='Fabric Slug',
     )
+    gpu_tray_device = forms.ModelChoiceField(
+        queryset=Device.objects.order_by('name', 'pk'),
+        required=False,
+        label='GPU Tray Device',
+        help_text='Optional NetBox Device to anchor the stamped GB300 tray node.',
+    )
+    gpu_osfp_1_interface = forms.ModelChoiceField(
+        queryset=Interface.objects.select_related('device').order_by('device__name', 'name', 'pk'),
+        required=False,
+        label='GPU OSFP-1 Interface',
+        help_text='Optional NetBox Interface to anchor the stamped GB300 OSFP-1 endpoint.',
+    )
 
     @classmethod
     def initial_from_template(cls, template):
@@ -48,6 +61,20 @@ class StampTemplateExecuteForm(forms.Form):
         return {
             'fabric_name': fabric_name,
             'fabric_slug': slugify(fabric_name),
+        }
+
+    def source_bindings(self):
+        if not self.is_valid():
+            return {}
+        nodes = {}
+        endpoints = {}
+        if self.cleaned_data.get('gpu_tray_device'):
+            nodes['GB300-TRAY-1'] = self.cleaned_data['gpu_tray_device']
+        if self.cleaned_data.get('gpu_osfp_1_interface'):
+            endpoints['GB300-TRAY-1.OSFP-1'] = self.cleaned_data['gpu_osfp_1_interface']
+        return {
+            'nodes': nodes,
+            'endpoints': endpoints,
         }
 
 
