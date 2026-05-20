@@ -181,6 +181,12 @@ class V2UITestCase(TestCase):
         endpoint = Endpoint.objects.get(fabric=fabric, address='GB300-TRAY-1.OSFP-1')
         self.assertEqual(node.source, device)
         self.assertEqual(endpoint.source, osfp)
+        node_response = self.client.get(node.get_absolute_url())
+        endpoint_response = self.client.get(endpoint.get_absolute_url())
+        self.assertContains(node_response, 'Source')
+        self.assertContains(node_response, device.name)
+        self.assertContains(endpoint_response, 'Source')
+        self.assertContains(endpoint_response, osfp.name)
 
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()

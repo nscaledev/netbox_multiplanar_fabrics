@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.core.exceptions import FieldDoesNotExist
 from django.shortcuts import redirect
 from django.views import View
 from django.views.generic import TemplateView
@@ -20,9 +21,13 @@ class V2RegisteredObjectView(generic.ObjectView):
         detail_fields = []
         for field_name in spec.resolved_detail_fields:
             value = getattr(instance, field_name)
+            try:
+                label = instance._meta.get_field(field_name).verbose_name.title()
+            except FieldDoesNotExist:
+                label = field_name.replace('_', ' ').title()
             detail_fields.append({
                 'name': field_name,
-                'label': instance._meta.get_field(field_name).verbose_name.title(),
+                'label': label,
                 'value': value,
                 'is_empty': value in (None, ''),
             })
