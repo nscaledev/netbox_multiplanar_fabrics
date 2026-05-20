@@ -1,6 +1,8 @@
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist
+from django.urls import reverse
 from django.shortcuts import redirect
+from django.utils.html import format_html
 from django.views import View
 from django.views.generic import TemplateView
 from netbox.views import generic
@@ -128,6 +130,24 @@ class StampTemplateExecuteView(TemplateView):
                 request,
                 f'Stamped {result.fabric.name} with {len(result.resolved_paths)} resolved paths.',
             )
+        object_counts = result.stamp_run.result.get('object_counts') or {}
+        messages.info(
+            request,
+            format_html(
+                (
+                    'Stamp run <a href="{}">#{}</a> completed with {} failures. '
+                    '{} nodes, {} endpoints, {} optical lanes. '
+                    '<a href="{}">Open fabric</a>.'
+                ),
+                result.stamp_run.get_absolute_url(),
+                result.stamp_run.pk,
+                len(failures),
+                object_counts.get('nodes', 0),
+                object_counts.get('endpoints', 0),
+                object_counts.get('optical_lanes', 0),
+                reverse('plugins:netbox_plant_graph:fabric', kwargs={'pk': result.fabric.pk}),
+            ),
+        )
         return redirect(result.fabric.get_absolute_url())
 
 
@@ -195,6 +215,10 @@ class PathQueryView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        fabrics = Fabric.objects.order_by('name', 'pk')
+        fabric_id = self.request.GET.get('fabric')
+        selected_fabric = fabrics.filter(pk=fabric_id).first() if fabric_id else None
+
         source_lanes = OpticalLane.objects.select_related(
             'fabric',
             'endpoint',
@@ -209,6 +233,9 @@ class PathQueryView(TemplateView):
             'local_mpo_position',
             'plane',
         ).filter(direction='receive').order_by('fabric__name', 'endpoint__address', 'lane_index')
+        if selected_fabric is not None:
+            source_lanes = source_lanes.filter(fabric=selected_fabric)
+            destination_lanes = destination_lanes.filter(fabric=selected_fabric)
 
         selected_source = None
         selected_destination = None
@@ -233,6 +260,8 @@ class PathQueryView(TemplateView):
                 destination_lanes = destination_queryset
 
         context.update({
+            'fabrics': fabrics,
+            'selected_fabric': selected_fabric,
             'source_lanes': source_lanes,
             'destination_lanes': destination_lanes,
             'selected_source': selected_source,

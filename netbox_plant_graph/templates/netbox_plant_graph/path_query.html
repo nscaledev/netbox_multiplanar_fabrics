@@ -10,7 +10,18 @@
   <div class="card mb-3">
     <div class="card-body">
       <form method="get" class="row g-3 align-items-end">
-        <div class="col-md-5">
+        <div class="col-md-3">
+          <label class="form-label" for="fabric">Fabric</label>
+          <select id="fabric" name="fabric" class="form-select">
+            <option value="">All fabrics</option>
+            {% for fabric in fabrics %}
+              <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>
+                {{ fabric.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
           <label class="form-label" for="source_lane">Source Lane</label>
           <select id="source_lane" name="source_lane" class="form-select">
             <option value="">---------</option>
@@ -21,7 +32,7 @@
             {% endfor %}
           </select>
         </div>
-        <div class="col-md-5">
+        <div class="col-md-4">
           <label class="form-label" for="destination_lane">Destination Lane</label>
           <select id="destination_lane" name="destination_lane" class="form-select">
             <option value="">Any compatible receive lane</option>

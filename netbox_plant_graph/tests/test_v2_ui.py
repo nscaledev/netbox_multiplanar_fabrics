@@ -3,7 +3,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 
-from netbox_plant_graph.models import Endpoint, Fabric, FabricNode, OpticalLane, PathIntent
+from netbox_plant_graph.models import Endpoint, Fabric, FabricNode, OpticalLane, PathIntent, StampRun
 from netbox_plant_graph.navigation import menu
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
@@ -153,6 +153,11 @@ class V2UITestCase(TestCase):
         fabric = Fabric.objects.get(slug='workflow-stamped-proof')
         self.assertEqual(post_response.redirect_chain[-1][0], fabric.get_absolute_url())
         self.assertContains(post_response, 'Stamped Workflow stamped proof with 4 resolved paths.')
+        stamp_run = StampRun.objects.filter(fabric=fabric).latest('created')
+        self.assertContains(post_response, 'Stamp run')
+        self.assertContains(post_response, f'>#{stamp_run.pk}<')
+        self.assertContains(post_response, stamp_run.get_absolute_url())
+        self.assertContains(post_response, fabric.get_absolute_url())
 
     def test_stamp_template_execute_workflow_accepts_netbox_source_anchors(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -292,3 +297,17 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Path Found')
         self.assertContains(response, 'transfer_map')
         self.assertEqual(OpticalLane.objects.filter(fabric=result.fabric).count(), 8)
+
+    def test_path_query_can_filter_by_fabric(self):
+        first = stamp_roce_4plane_mini_fabric(fabric_name='First Fabric', fabric_slug='first-fabric')
+        second = stamp_roce_4plane_mini_fabric(fabric_name='Second Fabric', fabric_slug='second-fabric')
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:path_query'),
+            {'fabric': first.fabric.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'First Fabric')
+        self.assertNotContains(response, f'value="{second.source_lanes[0].pk}"')
+        self.assertNotContains(response, f'value="{second.destination_lanes[0].pk}"')
