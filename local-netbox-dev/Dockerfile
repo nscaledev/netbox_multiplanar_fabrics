@@ -17,7 +17,6 @@ COPY vendor/netbox_power_plant /opt/netbox/local-plugins/netbox_power_plant
 
 RUN /usr/local/bin/uv pip install -r /opt/netbox/plugin_requirements.txt \
     && /usr/local/bin/uv pip install /opt/netbox/local-plugins/netbox-plugin-prometheus-sd \
-    && /usr/local/bin/uv pip install netbox-floorplan-plugin==0.6.0 \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NETBOX_PLANT_GRAPH=0.1.0 \
        SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NETBOX_POWER_PLANT=0.1.0 \
        /usr/local/bin/uv pip install --no-deps \

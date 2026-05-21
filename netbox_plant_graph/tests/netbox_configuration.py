@@ -56,9 +56,9 @@ CACHES = {
 PLUGINS = [
     plugin_name
     for plugin_name in PLUGINS
-    if plugin_name not in ('netbox_floorplan', 'netbox_plant_graph')
+    if plugin_name != 'netbox_plant_graph'
 ]
-PLUGINS.extend(['netbox_floorplan', 'netbox_plant_graph'])
+PLUGINS.append('netbox_plant_graph')
 
 PLUGINS_CONFIG = {
     **globals().get('PLUGINS_CONFIG', {}),

@@ -15,6 +15,74 @@ ARCHITECTURE_SLUG = 'roce-4-plane-gb300-2x2-shuffle'
 ARCHITECTURE_VERSION = 'v2'
 STAMP_TEMPLATE_SLUG = 'roce-4-plane-mini-proof'
 
+MPO_POSITION_COUNT = 12
+MPO_DARK_POSITIONS = (5, 6, 7, 8)
+
+
+CHANNEL_MAP_MATRIX = (
+    {
+        'subinterface_index': 1,
+        'mpo_index': 1,
+        'positions': [1, 12, 2, 11],
+    },
+    {
+        'subinterface_index': 2,
+        'mpo_index': 1,
+        'positions': [3, 10, 4, 9],
+    },
+    {
+        'subinterface_index': 3,
+        'mpo_index': 2,
+        'positions': [1, 12, 2, 11],
+    },
+    {
+        'subinterface_index': 4,
+        'mpo_index': 2,
+        'positions': [3, 10, 4, 9],
+    },
+)
+
+ACTIVE_POSITION_GROUP_A = tuple(CHANNEL_MAP_MATRIX[0]['positions'])
+ACTIVE_POSITION_GROUP_B = tuple(CHANNEL_MAP_MATRIX[1]['positions'])
+ACTIVE_POSITION_GROUPS = (ACTIVE_POSITION_GROUP_A, ACTIVE_POSITION_GROUP_B)
+SHUFFLE_MPO_GROUPS = ((1, 2), (3, 4))
+
+
+def key_down_roll_position(position_number: int, *, position_count: int = MPO_POSITION_COUNT) -> int:
+    return int(position_count) + 1 - int(position_number)
+
+
+def key_down_roll_position_pairs(src_positions, base_dst_positions) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        (int(src_position), key_down_roll_position(dst_position))
+        for src_position, dst_position in zip(src_positions, base_dst_positions, strict=True)
+    )
+
+
+def shuffle_2x2_transfer_position_pairs(*, front_index: int, rear_index: int) -> tuple[tuple[int, int], ...]:
+    """
+    Return the active-position transfer pairs for one front/rear MPO crossing.
+
+    The shuffle first splits each front MPO across the two rear MPOs, then
+    applies the key-down MPO roll on the rear side. This models the cassette as
+    a true transform, not a straight-through group fanout.
+    """
+    for first_front, second_front in SHUFFLE_MPO_GROUPS:
+        if front_index not in {first_front, second_front}:
+            continue
+        first_rear, second_rear = first_front, second_front
+        if rear_index not in {first_rear, second_rear}:
+            return ()
+        if front_index == first_front and rear_index == first_rear:
+            return key_down_roll_position_pairs(ACTIVE_POSITION_GROUP_A, ACTIVE_POSITION_GROUP_A)
+        if front_index == first_front and rear_index == second_rear:
+            return key_down_roll_position_pairs(ACTIVE_POSITION_GROUP_B, ACTIVE_POSITION_GROUP_A)
+        if front_index == second_front and rear_index == first_rear:
+            return key_down_roll_position_pairs(ACTIVE_POSITION_GROUP_A, ACTIVE_POSITION_GROUP_B)
+        if front_index == second_front and rear_index == second_rear:
+            return key_down_roll_position_pairs(ACTIVE_POSITION_GROUP_B, ACTIVE_POSITION_GROUP_B)
+    return ()
+
 
 ROLE_DEFINITIONS = (
     {
@@ -97,10 +165,35 @@ TRANSFER_PATTERN_DEFINITIONS = (
         'pattern_kind': 'shuffle_2x2',
         'rule': {
             'type': 'position_map',
-            'pairs': [[1, 9], [2, 10], [9, 1], [10, 2]],
+            'groups': [
+                {
+                    'front_mpos': [1, 2],
+                    'rear_mpos': [1, 2],
+                    'rear_position_transform': {
+                        'type': 'key_down_roll',
+                        'position_count': MPO_POSITION_COUNT,
+                        'formula': 'dst_position = position_count + 1 - base_dst_position',
+                    },
+                    'active_position_groups': {
+                        'A': [1, 12, 2, 11],
+                        'B': [3, 10, 4, 9],
+                    },
+                    'matrix': [
+                        {'front_mpo': 1, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'A'},
+                        {'front_mpo': 1, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'A'},
+                        {'front_mpo': 2, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'B'},
+                        {'front_mpo': 2, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'B'},
+                    ],
+                },
+            ],
             'bidirectional': True,
         },
-        'metadata': {'description': 'Minimal 2x2 lane-position exchange primitive.'},
+        'metadata': {
+            'description': (
+                '2x2 channel-group matrix: each front MPO fans out across both rear MPOs, '
+                'then applies the key-down MPO position roll on the rear side.'
+            )
+        },
     },
     {
         'slug': 'second_third_mpo_stagger',
@@ -148,6 +241,17 @@ ALLOCATION_RULE_DEFINITIONS = (
         },
         'metadata': {},
     },
+    {
+        'slug': 'channel_subinterface_mapping',
+        'name': 'Channel sub-interface mapping',
+        'rule': {
+            'speed_gbps': 200,
+            'parent_interface_scope': 'physical_osfp',
+            'child_name_pattern': '{parent_name}/{channel_index}',
+            'channel_map_matrix': [dict(entry) for entry in CHANNEL_MAP_MATRIX],
+        },
+        'metadata': {},
+    },
 )
 
 
@@ -176,6 +280,13 @@ STAMP_TEMPLATE = {
     'leaf_ports': {
         'count': 4,
         'plane_assignment': {'1': 1, '2': 2, '3': 3, '4': 4},
+    },
+    'channel_subinterfaces': {
+        'enabled': True,
+        'name_pattern': '{parent_name}/{channel_index}',
+        'type': 'virtual',
+        'speed_gbps': 200,
+        'channel_map_matrix': [dict(entry) for entry in CHANNEL_MAP_MATRIX],
     },
     'source_bindings': [
         {

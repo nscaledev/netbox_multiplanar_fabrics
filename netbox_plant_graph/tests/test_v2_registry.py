@@ -4,8 +4,11 @@ from django.urls import reverse
 from netbox_plant_graph import filtersets, forms, tables, views
 from netbox_plant_graph.api import serializers, views as api_views
 from netbox_plant_graph.models import (
+    AuditEvent,
+    OperationRun,
     AllocationRuleSet,
     ArchitectureRole,
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -19,9 +22,11 @@ from netbox_plant_graph.models import (
     StampRun,
     StampTemplate,
     StrandTermination,
+    SuppressionRule,
     TransferMap,
     TransferPattern,
     TransportChannel,
+    TransportChannelPositionMap,
 )
 from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS, get_v2_object_spec, get_v2_object_spec_for_model
 
@@ -37,7 +42,9 @@ EXPECTED_V2_MODELS = {
     Endpoint,
     ConnectorPosition,
     TransportChannel,
+    TransportChannelPositionMap,
     FiberSegment,
+    CableAssembly,
     FiberStrand,
     StrandTermination,
     OpticalLane,
@@ -45,6 +52,9 @@ EXPECTED_V2_MODELS = {
     PathIntent,
     StampTemplate,
     StampRun,
+    SuppressionRule,
+    AuditEvent,
+    OperationRun,
 }
 
 

@@ -313,6 +313,108 @@ def _validate_proof_paths(template_spec: dict, planes: list[int]) -> None:
             )
 
 
+def _validate_channel_subinterfaces(template_spec: dict) -> None:
+    channel_subinterfaces = _require_mapping(
+        template_spec.get('channel_subinterfaces'),
+        'StampTemplate.template.channel_subinterfaces',
+    )
+    enabled = channel_subinterfaces.get('enabled')
+    if not isinstance(enabled, bool):
+        raise ValueError('StampTemplate.template.channel_subinterfaces.enabled must be a boolean.')
+    if not enabled:
+        return
+
+    _require_non_empty_string(
+        channel_subinterfaces.get('name_pattern'),
+        'StampTemplate.template.channel_subinterfaces.name_pattern',
+    )
+    _require_non_empty_string(
+        channel_subinterfaces.get('type'),
+        'StampTemplate.template.channel_subinterfaces.type',
+    )
+    _require_positive_int(
+        channel_subinterfaces.get('speed_gbps'),
+        'StampTemplate.template.channel_subinterfaces.speed_gbps',
+    )
+
+    gpu_spec = _require_mapping(template_spec['gpu_tray'], 'StampTemplate.template.gpu_tray')
+    max_mpo_index = _require_positive_int(
+        gpu_spec['mpo_per_osfp'],
+        'StampTemplate.template.gpu_tray.mpo_per_osfp',
+    )
+    max_position = _require_positive_int(
+        gpu_spec['positions_per_mpo'],
+        'StampTemplate.template.gpu_tray.positions_per_mpo',
+    )
+
+    matrix = _require_sequence(
+        channel_subinterfaces.get('channel_map_matrix'),
+        'StampTemplate.template.channel_subinterfaces.channel_map_matrix',
+    )
+    if not matrix:
+        raise ValueError('StampTemplate.template.channel_subinterfaces.channel_map_matrix must not be empty.')
+
+    assigned_positions = set()
+    for index, entry_spec in enumerate(matrix, start=1):
+        entry = _require_mapping(
+            entry_spec,
+            f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}]',
+        )
+        subinterface_index = _require_positive_int(
+            entry.get('subinterface_index'),
+            f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].subinterface_index',
+        )
+        mpo_index = _require_positive_int(
+            entry.get('mpo_index'),
+            f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].mpo_index',
+        )
+        if mpo_index > max_mpo_index:
+            raise ValueError(
+                f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].mpo_index '
+                'exceeds StampTemplate.template.gpu_tray.mpo_per_osfp.'
+            )
+        positions = _require_sequence(
+            entry.get('positions'),
+            f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].positions',
+        )
+        if not positions:
+            raise ValueError(
+                f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].positions '
+                'must not be empty.'
+            )
+        normalized_positions = set()
+        for pos_index, position in enumerate(positions, start=1):
+            position_number = _require_positive_int(
+                position,
+                f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].positions[{pos_index}]',
+            )
+            if position_number > max_position:
+                raise ValueError(
+                    f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].positions[{pos_index}] '
+                    'exceeds StampTemplate.template.gpu_tray.positions_per_mpo.'
+                )
+            if position_number in normalized_positions:
+                raise ValueError(
+                    f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}] has duplicate '
+                    f'position {position_number}.'
+                )
+            normalized_positions.add(position_number)
+
+            lane_key = (mpo_index, position_number)
+            if lane_key in assigned_positions:
+                raise ValueError(
+                    f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}] duplicates '
+                    f'MPO {mpo_index} position {position_number} in another mapping entry.'
+                )
+            assigned_positions.add(lane_key)
+
+        if subinterface_index < 1:
+            raise ValueError(
+                f'StampTemplate.template.channel_subinterfaces.channel_map_matrix[{index}].subinterface_index '
+                'must be >= 1.'
+            )
+
+
 def validate_stamp_template_spec(template_spec: dict) -> None:
     if not isinstance(template_spec, dict):
         raise ValueError('StampTemplate.template must be an object.')
@@ -337,4 +439,5 @@ def validate_stamp_template_spec(template_spec: dict) -> None:
     )
     _validate_leaf_plane_assignment(template_spec, planes)
     _validate_source_bindings(template_spec)
+    _validate_channel_subinterfaces(template_spec)
     _validate_proof_paths(template_spec, planes)

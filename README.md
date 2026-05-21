@@ -66,7 +66,6 @@ The test suite includes a multiplane shuffle fixture with one 800G host interfac
 
 - NetBox 4.2.3+ (supported lines: 4.2.x and 4.5.x; 4.3.x and 4.4.x are not validated)
 - Python 3.12+
-- `netbox-floorplan-plugin` 0.9.x for the floorplan/layout integration work
 
 ## Installation
 
@@ -74,37 +73,11 @@ The test suite includes a multiplane shuffle fixture with one 800G host interfac
 pip install netbox_plant_graph
 ```
 
-Install and enable both plugins in your NetBox `configuration.py`:
+Install and enable the plugin in your NetBox `configuration.py`:
 
 ```python
-PLUGINS = ['netbox_floorplan', 'netbox_plant_graph']
+PLUGINS = ['netbox_plant_graph']
 ```
-
-The floorplan plugin owns the operator-facing 2D site/location layout
-experience. `netbox_plant_graph` retains ownership of template authoring,
-spatial/rack/assembly stamping, connection templates, deployment-plan
-workflow, and read-only `SpatialPlacement` planning metadata that is not
-represented by floorplan canvas state.
-
-When a spatial stamp creates or updates racks, the plugin can push managed rack
-positions into the corresponding floorplan automatically. After an operator
-edits those managed rack objects in the floorplan UI, use the dedicated
-reconciliation endpoint to pull the floorplan's `x`/`y`/rotation values back
-into `SpatialPlacement` metadata without reopening generic placement CRUD:
-
-```text
-POST /api/plugins/netbox_plant_graph/floorplan/reconcile/
-```
-
-Payload:
-
-```json
-{"scope_type": "site"|"location", "scope_id": 123, "create_missing": false}
-```
-
-This reconciliation path updates managed rack placements only. Existing
-`position_z`, reference-frame fields, and arbitrary placement metadata remain
-owned by `netbox_plant_graph`.
 
 ## Development
 

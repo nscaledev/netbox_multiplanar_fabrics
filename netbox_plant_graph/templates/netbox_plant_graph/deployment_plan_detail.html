@@ -119,23 +119,6 @@
                 {% if record.error_detail %}
                   <span class="text-danger small ms-1">{{ record.error_detail|truncatechars:80 }}</span>
                 {% endif %}
-                {% with floorplan_sync=record.metadata.floorplan_sync %}
-                  {% if floorplan_sync %}
-                    <div class="small text-muted mt-1">
-                      Floorplan sync:
-                      {% if floorplan_sync.sync_skipped_reason == 'disabled' %}
-                        disabled
-                      {% elif floorplan_sync.sync_skipped_reason == 'no_rack_placements' %}
-                        skipped (no rack placements)
-                      {% else %}
-                        {{ floorplan_sync.racks_synced_to_floorplan }} rack(s) synced across {{ floorplan_sync.floorplans_touched }} floorplan(s)
-                      {% endif %}
-                      {% if floorplan_sync.floorplan_errors %}
-                        <span class="text-danger">{{ floorplan_sync.floorplan_errors|join:', ' }}</span>
-                      {% endif %}
-                    </div>
-                  {% endif %}
-                {% endwith %}
               </td>
               <td>{{ record.stamped_at|default:"&mdash;" }}</td>
               <td>{{ record.stamped_by|default:"&mdash;" }}</td>

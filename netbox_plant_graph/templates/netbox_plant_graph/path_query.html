@@ -3,90 +3,245 @@
 {% block title %}Path Query{% endblock %}
 
 {% block content %}
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="mb-0">Path Query</h1>
-  </div>
+<h1>Path Query</h1>
 
-  <div class="card mb-3">
-    <div class="card-body">
-      <form method="get" class="row g-3 align-items-end">
-        <div class="col-md-3">
-          <label class="form-label" for="fabric">Fabric</label>
-          <select id="fabric" name="fabric" class="form-select">
-            <option value="">All fabrics</option>
-            {% for fabric in fabrics %}
-              <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>
-                {{ fabric.name }}
-              </option>
-            {% endfor %}
-          </select>
+{% with selected_source|default:source_lane as selected_source_lane %}
+{% with selected_destination|default:destination_lane as selected_destination_lane %}
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label" for="fabric">Fabric</label>
+        <select id="fabric" name="fabric" class="form-select">
+          <option value="">All fabrics</option>
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>
+              {{ fabric.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="source_lane">Source Lane</label>
+        <select id="source_lane" name="source_lane" class="form-select">
+          <option value="">Select a source lane</option>
+          {% for lane in source_lanes %}
+            <option value="{{ lane.pk }}"{% if selected_source_lane and lane.pk == selected_source_lane.pk %} selected{% endif %}>
+              {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="destination_lane">Destination Lane</label>
+        <select id="destination_lane" name="destination_lane" class="form-select">
+          <option value="">Any compatible receive lane</option>
+          {% for lane in destination_lanes %}
+            <option value="{{ lane.pk }}"{% if selected_destination_lane and lane.pk == selected_destination_lane.pk %} selected{% endif %}>
+              {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-1">
+        <button type="submit" class="btn btn-primary w-100">Resolve</button>
+      </div>
+    </form>
+    <div class="small text-muted mt-2">Leave destination empty to resolve all compatible receive endpoints in the selected fabric.</div>
+  </div>
+</div>
+
+{% if resolved_path %}
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Resolution Summary</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Status</dt>
+            <dd class="col-sm-7">
+              {% if resolved_path.path_found %}
+                <span class="text-success">Path found</span>
+              {% else %}
+                <span class="text-warning">No path found</span>
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Source</dt>
+            <dd class="col-sm-7">
+              {% if selected_source_lane %}
+                {{ selected_source_lane.endpoint.address }} lane {{ selected_source_lane.lane_index }}
+              {% elif source_lane %}
+                {{ source_lane }}
+              {% else %}
+                <span class="text-muted">Not selected</span>
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Destination</dt>
+            <dd class="col-sm-7">
+              {% if selected_destination_lane %}
+                {{ selected_destination_lane.endpoint.address }} lane {{ selected_destination_lane.lane_index }}
+              {% elif destination_lane %}
+                {{ destination_lane }}
+              {% else %}
+                <span class="text-muted">Auto-select compatible</span>
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Step Count</dt>
+            <dd class="col-sm-7">
+              {% if resolved_path.steps %}
+                {{ resolved_path.steps|length }}
+              {% elif resolved_path.path %}
+                {{ resolved_path.path|length }}
+              {% else %}
+                0
+              {% endif %}
+            </dd>
+          </dl>
         </div>
-        <div class="col-md-4">
-          <label class="form-label" for="source_lane">Source Lane</label>
-          <select id="source_lane" name="source_lane" class="form-select">
-            <option value="">---------</option>
-            {% for lane in source_lanes %}
-              <option value="{{ lane.pk }}"{% if selected_source and lane.pk == selected_source.pk %} selected{% endif %}>
-                {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
-              </option>
-            {% endfor %}
-          </select>
+      </div>
+    </div>
+    <div class="col-lg-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Context</div>
+        <div class="card-body">
+          {% if selected_source_lane %}
+            <div><strong>Source endpoint:</strong> {{ selected_source_lane.endpoint }}</div>
+            <div><strong>Source direction:</strong> {{ selected_source_lane.direction }}</div>
+            <div><strong>Source wavelength:</strong> {{ selected_source_lane.wavelength_nm }} nm</div>
+            {% if selected_source_lane.plane %}
+              <div><strong>Source plane:</strong> {{ selected_source_lane.plane }}</div>
+            {% endif %}
+          {% endif %}
+          {% if selected_destination_lane %}
+            <hr class="my-2">
+            <div><strong>Destination endpoint:</strong> {{ selected_destination_lane.endpoint }}</div>
+            <div><strong>Destination direction:</strong> {{ selected_destination_lane.direction }}</div>
+            <div><strong>Destination wavelength:</strong> {{ selected_destination_lane.wavelength_nm }} nm</div>
+            {% if selected_destination_lane.plane %}
+              <div><strong>Destination plane:</strong> {{ selected_destination_lane.plane }}</div>
+            {% endif %}
+          {% endif %}
+          {% if not selected_source_lane and not selected_destination_lane %}
+            <div class="text-muted">Select a source lane to resolve end-to-end path details.</div>
+          {% endif %}
         </div>
-        <div class="col-md-4">
-          <label class="form-label" for="destination_lane">Destination Lane</label>
-          <select id="destination_lane" name="destination_lane" class="form-select">
-            <option value="">Any compatible receive lane</option>
-            {% for lane in destination_lanes %}
-              <option value="{{ lane.pk }}"{% if selected_destination and lane.pk == selected_destination.pk %} selected{% endif %}>
-                {{ lane.fabric.name }} / {{ lane.endpoint.address }} / lane {{ lane.lane_index }} / {{ lane.wavelength_nm }} nm
-              </option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-2">
-          <button type="submit" class="btn btn-primary w-100">
-            <i class="mdi mdi-route" aria-hidden="true"></i> Resolve
-          </button>
-        </div>
-      </form>
+      </div>
     </div>
   </div>
 
-  {% if resolved_path %}
-    <div class="card">
-      <div class="card-header">
-        {% if resolved_path.path_found %}
-          <strong>Path Found</strong>
-        {% else %}
-          <strong>No Path Found</strong>
-        {% endif %}
-      </div>
+  {% if resolved_path.error %}
+    <div class="alert alert-warning">{{ resolved_path.error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-header">Path Steps</div>
+    <div class="card-body">
       <div class="table-responsive">
         <table class="table table-hover mb-0">
           <thead>
             <tr>
+              <th>#</th>
               <th>Step</th>
               <th>Object</th>
-              <th>Label</th>
+              <th>Context</th>
+              <th>Cable Assembly</th>
               <th>Metadata</th>
             </tr>
           </thead>
           <tbody>
-            {% for step in resolved_path.steps %}
+            {% if resolved_path.steps %}
+              {% for step in resolved_path.steps %}
+                <tr>
+                  <td>{{ forloop.counter }}</td>
+                  <td>{{ step.step_type|default:step.kind|default:step.step_kind }}</td>
+                  <td>
+                    {% if step.url %}
+                      <a href="{{ step.url }}">{{ step.display|default:step.label }}</a>
+                    {% elif step.object and step.object.url %}
+                      <a href="{{ step.object.url }}">{{ step.object.display }}</a>
+                    {% elif step.label %}
+                      {{ step.label }}
+                    {% else %}
+                      {{ step.object_type }} #{{ step.object_id }}
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if step.endpoint_context %}
+                      {{ step.endpoint_context }}
+                    {% elif step.edge_type %}
+                      {{ step.edge_type }}
+                    {% elif step.object_type %}
+                      {{ step.object_type }}
+                    {% else %}
+                      <span class="text-muted">-</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if step.cable_assembly %}
+                      {% if step.cable_assembly.url %}
+                        <a href="{{ step.cable_assembly.url }}">{{ step.cable_assembly.display }}</a>
+                      {% else %}
+                        {{ step.cable_assembly.display }}
+                      {% endif %}
+                      {% if step.cable_assembly.manufacturer %}
+                        <div class="small text-muted">{{ step.cable_assembly.manufacturer }}</div>
+                      {% endif %}
+                      {% if step.cable_assembly.model_id %}
+                        <div class="small text-muted">Model {{ step.cable_assembly.model_id }}</div>
+                      {% endif %}
+                    {% else %}
+                      <span class="text-muted">-</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if step.metadata %}
+                      <code class="small">{{ step.metadata }}</code>
+                    {% else %}
+                      <span class="text-muted">-</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% elif resolved_path.path %}
+              {% for step in resolved_path.path %}
+                <tr>
+                  <td>{{ forloop.counter }}</td>
+                  <td>{{ step.kind|default:step.step_kind|default:"step" }}</td>
+                  <td>
+                    {% if step.url %}
+                      <a href="{{ step.url }}">{{ step.display }}</a>
+                    {% elif step.object and step.object.url %}
+                      <a href="{{ step.object.url }}">{{ step.object.display }}</a>
+                    {% elif step.display %}
+                      {{ step.display }}
+                    {% else %}
+                      <span class="text-muted">-</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ step.endpoint_context|default:step.edge_type|default:"-" }}</td>
+                  <td><span class="text-muted">-</span></td>
+                  <td>
+                    {% if step.object and step.object.model %}
+                      <code class="small">{{ step.object.model }} #{{ step.object.pk }}</code>
+                    {% else %}
+                      <span class="text-muted">-</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% else %}
               <tr>
-                <td>{{ step.step_type }}</td>
-                <td>{{ step.object_type }} #{{ step.object_id }}</td>
-                <td>{{ step.label }}</td>
-                <td><code>{{ step.metadata }}</code></td>
+                <td colspan="6" class="text-muted">No path steps were returned for this query.</td>
               </tr>
-            {% empty %}
-              <tr>
-                <td colspan="4" class="text-secondary">{{ resolved_path.error }}</td>
-              </tr>
-            {% endfor %}
+            {% endif %}
           </tbody>
         </table>
       </div>
     </div>
-  {% endif %}
+  </div>
+{% else %}
+  <div class="alert alert-info">Choose source and destination lanes to resolve an optical path.</div>
+{% endif %}
+{% endwith %}
+{% endwith %}
 {% endblock %}

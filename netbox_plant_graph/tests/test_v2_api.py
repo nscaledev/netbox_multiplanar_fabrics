@@ -1,12 +1,19 @@
+import json
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from extras.events import serialize_for_event
 from utilities.api import get_serializer_for_model
 
 from netbox_plant_graph.models import (
+    AuditEvent,
+    OperationRun,
     AllocationRuleSet,
     ArchitectureRole,
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -20,9 +27,11 @@ from netbox_plant_graph.models import (
     StampRun,
     StampTemplate,
     StrandTermination,
+    SuppressionRule,
     TransferMap,
     TransferPattern,
     TransportChannel,
+    TransportChannelPositionMap,
 )
 from netbox_plant_graph.services.stamping import stamp_roce_4plane_mini_fabric
 from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
@@ -40,13 +49,18 @@ V2_MODELS = (
     Endpoint,
     ConnectorPosition,
     TransportChannel,
+    TransportChannelPositionMap,
     FiberSegment,
+    CableAssembly,
     FiberStrand,
     StrandTermination,
     OpticalLane,
     TransferMap,
     StampRun,
     PathIntent,
+    SuppressionRule,
+    AuditEvent,
+    OperationRun,
 )
 
 
@@ -71,7 +85,65 @@ class V2APISerializerTestCase(TestCase):
             destination_endpoint=result.destination_lanes[0].endpoint,
             selector={'pair_key': result.source_lanes[0].pair_key},
         )
+        SuppressionRule.objects.create(
+            fabric=result.fabric,
+            optical_lane=result.source_lanes[-1],
+            plane=result.source_lanes[-1].plane,
+            status='active',
+            reason='Test suppression',
+            policy_key='',
+        )
+        stamp_run = StampRun.objects.filter(fabric=result.fabric).latest('created')
+        AuditEvent.objects.create(
+            fabric=result.fabric,
+            event_type='stamp',
+            outcome='ok',
+            subject_type=None,
+            subject_id=None,
+            payload={'stamp_run_id': stamp_run.pk},
+        )
+        OperationRun.objects.create(
+            profile='generic_roce',
+            status='completed',
+            fabric=result.fabric,
+            parameters={'test': True},
+            result={'ok': True},
+        )
         return result
+
+    def _create_workflow_finding(
+        self,
+        *,
+        fabric,
+        plane=None,
+        status='open',
+        severity='warning',
+        finding_type='cross_plane_overlap',
+        message='Workflow finding',
+    ):
+        now = timezone.now()
+        lifecycle = {
+            'status': status,
+            'suppressed': status == 'suppressed',
+            'first_seen_at': (now - timedelta(days=1)).isoformat(),
+            'last_seen_at': now.isoformat(),
+        }
+        if plane is not None:
+            lifecycle['plane_id'] = plane.pk
+        payload = {
+            'finding_type': finding_type,
+            'severity': severity,
+        }
+        if plane is not None:
+            payload['plane_id'] = plane.pk
+        return AuditEvent.objects.create(
+            fabric=fabric,
+            event_type='policy_eval',
+            outcome='warning',
+            message=message,
+            payload=payload,
+            metadata={'finding_lifecycle': lifecycle},
+        )
 
     def test_every_v2_model_has_event_safe_serializer(self):
         self._stamp_with_path_intent()
@@ -134,3 +206,452 @@ class V2APISerializerTestCase(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()['detail'], 'source_lane query parameter is required.')
+
+    def test_post_mvp_summary_endpoints_render(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+
+        suppression = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:suppression-summary'),
+            {'fabric': result.fabric.pk},
+        )
+        timeline = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:audit-timeline'),
+            {'fabric': result.fabric.pk},
+        )
+        operations = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:operation-runs'),
+            {'fabric': result.fabric.pk},
+        )
+
+        self.assertEqual(suppression.status_code, 200)
+        self.assertEqual(timeline.status_code, 200)
+        self.assertEqual(operations.status_code, 200)
+        self.assertGreaterEqual(len(suppression.json()), 1)
+        self.assertGreaterEqual(len(timeline.json()), 1)
+        self.assertGreaterEqual(len(operations.json()), 1)
+
+    def test_workflow_summary_endpoint_filters_by_fabric_and_plane(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        planes = list(result.fabric.planes.order_by('plane_number', 'pk'))
+        self.assertGreaterEqual(len(planes), 2)
+        selected_plane = planes[0]
+        other_plane = planes[1]
+
+        self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=selected_plane,
+            status='open',
+            severity='error',
+            finding_type='cross_plane_overlap',
+            message='Selected plane open finding',
+        )
+        self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=selected_plane,
+            status='suppressed',
+            severity='warning',
+            finding_type='partial_profile_mapping',
+            message='Selected plane suppressed finding',
+        )
+        self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=other_plane,
+            status='resolved',
+            severity='info',
+            finding_type='resolved_probe',
+            message='Other plane resolved finding',
+        )
+
+        other_fabric = Fabric.objects.create(
+            name='API Workflow Other Fabric',
+            slug='api-workflow-other-fabric',
+            status='active',
+        )
+        other_fabric_plane = Plane.objects.create(fabric=other_fabric, plane_number=1, label='Other Fabric Plane 1')
+        self._create_workflow_finding(
+            fabric=other_fabric,
+            plane=other_fabric_plane,
+            status='open',
+            message='Other fabric finding',
+        )
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-summary'),
+            {'fabric': result.fabric.pk, 'plane': selected_plane.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['fabric_id'], result.fabric.pk)
+        self.assertEqual(payload['plane_id'], selected_plane.pk)
+        self.assertEqual(payload['total_findings'], 2)
+        self.assertEqual(payload['active_findings'], 2)
+        self.assertEqual(payload['resolved_findings'], 0)
+        self.assertEqual(payload['suppressed_findings'], 1)
+
+    def test_workflow_summary_endpoint_rejects_unknown_plane(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-summary'),
+            {'plane': 999999},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('plane', response.json())
+
+    def test_workflow_findings_endpoint_filters_and_validates(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        plane = result.fabric.planes.order_by('plane_number', 'pk').first()
+
+        suppressed_event = self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=plane,
+            status='suppressed',
+            message='Suppressed finding',
+        )
+        self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=plane,
+            status='open',
+            message='Open finding',
+        )
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-findings'),
+            {'fabric': result.fabric.pk, 'status': 'suppressed'},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]['id'], suppressed_event.pk)
+        self.assertEqual(payload[0]['status'], 'suppressed')
+
+        invalid = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-findings'),
+            {'suppressed': 'definitely-not-bool'},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn('suppressed', invalid.json())
+
+    def test_workflow_finding_detail_endpoint_renders_and_handles_not_found(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        plane = result.fabric.planes.order_by('plane_number', 'pk').first()
+        finding_event = self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=plane,
+            status='open',
+            message='Detail target finding',
+        )
+        AuditEvent.objects.create(
+            fabric=result.fabric,
+            event_type='suppression_change',
+            outcome='ok',
+            message='Acknowledged by operator.',
+            payload={
+                'finding_id': finding_event.pk,
+                'finding_action': 'acknowledge',
+                'old_status': 'open',
+                'new_status': 'acknowledged',
+            },
+            metadata={},
+        )
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-detail', kwargs={'pk': finding_event.pk})
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['finding']['id'], finding_event.pk)
+        self.assertGreaterEqual(len(payload['transitions']), 1)
+        self.assertEqual(payload['transitions'][0]['finding_id'], finding_event.pk)
+
+        missing = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-detail', kwargs={'pk': 999999})
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    def test_workflow_runs_endpoint_renders_and_validates(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        other_fabric = Fabric.objects.create(
+            name='API Workflow Runs Other Fabric',
+            slug='api-workflow-runs-other-fabric',
+            status='active',
+        )
+        OperationRun.objects.create(
+            profile='generic_roce',
+            status='completed',
+            fabric=other_fabric,
+            parameters={'test': 'other'},
+            result={'ok': True},
+        )
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-runs'),
+            {'fabric': result.fabric.pk, 'limit': 1},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]['fabric_id'], result.fabric.pk)
+
+        invalid = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-runs'),
+            {'limit': 0},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn('limit', invalid.json())
+
+    def test_stamps_preview_endpoint_supports_v2_stamp_template(self):
+        self.client.force_login(self.user)
+        self._stamp_with_path_intent()
+        template = StampTemplate.objects.order_by('pk').first()
+        self.assertIsNotNone(template)
+
+        response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamps-preview'),
+            data=json.dumps(
+                {
+                    'template_type': 'stamp_template',
+                    'template_id': template.pk,
+                    'parameters': {
+                        'fabric_name': 'Preview Fabric',
+                        'fabric_slug': 'preview-fabric',
+                    },
+                }
+            ),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['template_id'], template.pk)
+        self.assertEqual(payload['template_type'], 'v2_stamp_template')
+        self.assertGreater(payload['proof_path_count'], 0)
+        self.assertGreaterEqual(len(payload['objects_to_create']), 1)
+
+    def test_stamps_preview_endpoint_rejects_unsupported_template_type_and_missing_template(self):
+        self.client.force_login(self.user)
+        self._stamp_with_path_intent()
+
+        unsupported = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamps-preview'),
+            data=json.dumps(
+                {
+                    'template_type': 'assembly',
+                    'template_id': 1,
+                    'parameters': {},
+                }
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(unsupported.status_code, 400)
+        self.assertIn('template_type', unsupported.json())
+
+        missing = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamps-preview'),
+            data=json.dumps(
+                {
+                    'template_type': 'stamp_template',
+                    'template_id': 999999,
+                    'parameters': {},
+                }
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    def test_workflow_finding_mutation_endpoints_cover_full_lifecycle(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        plane = result.fabric.planes.order_by('plane_number', 'pk').first()
+        finding = self._create_workflow_finding(
+            fabric=result.fabric,
+            plane=plane,
+            status='open',
+            message='Lifecycle target finding',
+        )
+
+        acknowledge = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-acknowledge', kwargs={'pk': finding.pk}),
+            data=json.dumps({'note': 'ack'}),
+            content_type='application/json',
+        )
+        self.assertEqual(acknowledge.status_code, 200)
+        self.assertEqual(acknowledge.json()['finding']['status'], 'acknowledged')
+
+        start = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-start-remediation', kwargs={'pk': finding.pk}),
+            data=json.dumps({'note': 'start remediation'}),
+            content_type='application/json',
+        )
+        self.assertEqual(start.status_code, 200)
+        self.assertEqual(start.json()['finding']['status'], 'in_progress')
+
+        resolve_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-resolve', kwargs={'pk': finding.pk}),
+            data=json.dumps({'resolution_summary': 'fixed'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resolve_response.status_code, 200)
+        self.assertEqual(resolve_response.json()['finding']['status'], 'resolved')
+
+        reopen = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-reopen', kwargs={'pk': finding.pk}),
+            data=json.dumps({'note': 'regressed'}),
+            content_type='application/json',
+        )
+        self.assertEqual(reopen.status_code, 200)
+        self.assertEqual(reopen.json()['finding']['status'], 'open')
+
+        suppress = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-suppress', kwargs={'pk': finding.pk}),
+            data=json.dumps({'reason': 'maintenance window', 'days': 1}),
+            content_type='application/json',
+        )
+        self.assertEqual(suppress.status_code, 200)
+        self.assertEqual(suppress.json()['finding']['status'], 'suppressed')
+
+        unsuppress = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-unsuppress', kwargs={'pk': finding.pk}),
+            data=json.dumps({'reason': 'maintenance complete'}),
+            content_type='application/json',
+        )
+        self.assertEqual(unsuppress.status_code, 200)
+        self.assertEqual(unsuppress.json()['finding']['status'], 'open')
+
+    def test_workflow_finding_mutations_reject_invalid_transition(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        finding = self._create_workflow_finding(
+            fabric=result.fabric,
+            status='resolved',
+            message='Already resolved finding',
+        )
+
+        response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:workflow-finding-resolve', kwargs={'pk': finding.pk}),
+            data=json.dumps({'resolution_summary': 'still fixed'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('detail', response.json())
+
+    def test_disjointness_exception_mutation_endpoints(self):
+        self.client.force_login(self.user)
+        result = self._stamp_with_path_intent()
+        lane = result.source_lanes[0]
+
+        create_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:disjointness-exception-request'),
+            data=json.dumps(
+                {
+                    'fabric': result.fabric.pk,
+                    'plane': lane.plane_id,
+                    'optical_lane': lane.pk,
+                    'policy_key': 'disjointness',
+                    'reason': 'Operator exception request',
+                }
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(create_response.status_code, 201)
+        exception_id = create_response.json()['id']
+        self.assertEqual(create_response.json()['status'], 'pending')
+
+        approve_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:disjointness-exception-approve', kwargs={'pk': exception_id}),
+            data=json.dumps({'comment': 'approved'}),
+            content_type='application/json',
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertEqual(approve_response.json()['status'], 'active')
+
+        expire_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:disjointness-exception-expire', kwargs={'pk': exception_id}),
+            data=json.dumps({'comment': 'expired'}),
+            content_type='application/json',
+        )
+        self.assertEqual(expire_response.status_code, 200)
+        self.assertEqual(expire_response.json()['status'], 'expired')
+
+        reactivate_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:disjointness-exception-reactivate', kwargs={'pk': exception_id}),
+            data=json.dumps({'comment': 'reactivated'}),
+            content_type='application/json',
+        )
+        self.assertEqual(reactivate_response.status_code, 200)
+        self.assertEqual(reactivate_response.json()['status'], 'active')
+
+    def test_stamp_execute_and_rollback_mutation_endpoints(self):
+        self.client.force_login(self.user)
+        fixture = self._stamp_with_path_intent()
+        template = StampTemplate.objects.order_by('pk').first()
+        self.assertIsNotNone(template)
+        slug = f'api-exec-{timezone.now().strftime("%H%M%S%f")}'
+
+        execute_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamp-template-execute', kwargs={'pk': template.pk}),
+            data=json.dumps(
+                {
+                    'fabric_name': 'API Execute Fabric',
+                    'fabric_slug': slug,
+                    'source_bindings': {},
+                    'creation_options': {},
+                }
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(execute_response.status_code, 201)
+        execute_payload = execute_response.json()
+        self.assertEqual(execute_payload['template_id'], template.pk)
+        self.assertEqual(execute_payload['status'], 'completed')
+        self.assertTrue(execute_payload['rollback_eligible'])
+
+        rollback_response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamp-run-rollback', kwargs={'pk': execute_payload['stamp_run_id']}),
+            data=json.dumps({'delete_fabric_as_primitive': True}),
+            content_type='application/json',
+        )
+        self.assertEqual(rollback_response.status_code, 200)
+        rollback_payload = rollback_response.json()
+        self.assertEqual(rollback_payload['stamp_run_id'], execute_payload['stamp_run_id'])
+        self.assertIn(rollback_payload['rollback_mode'], {'fabric_delete', 'managed_objects', 'none'})
+        self.assertGreaterEqual(rollback_payload['deleted_total'], 0)
+
+        idempotent_rollback = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamp-run-rollback', kwargs={'pk': execute_payload['stamp_run_id']}),
+            data=json.dumps({'delete_fabric_as_primitive': True}),
+            content_type='application/json',
+        )
+        self.assertEqual(idempotent_rollback.status_code, 200)
+        self.assertTrue(idempotent_rollback.json()['already_rolled_back'])
+        self.assertEqual(fixture.fabric.slug, 'roce-4-plane-mini-proof')
+
+    def test_stamp_preview_alias_name_resolves_and_executes(self):
+        self.client.force_login(self.user)
+        self._stamp_with_path_intent()
+        template = StampTemplate.objects.order_by('pk').first()
+        self.assertIsNotNone(template)
+
+        response = self.client.post(
+            reverse('plugins-api:netbox_plant_graph-api:stamp-preview'),
+            data=json.dumps(
+                {
+                    'template_type': 'stamp_template',
+                    'template_id': template.pk,
+                    'parameters': {
+                        'fabric_name': 'Alias Preview Fabric',
+                        'fabric_slug': 'alias-preview-fabric',
+                    },
+                }
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['template_id'], template.pk)

@@ -3,32 +3,78 @@
 {% block content %}
 <h1>{{ page_title }}</h1>
 
-<div class="alert alert-warning">
-  The custom coordinate-layout page is deprecated.
-  Operator-facing 2D site and location layout now lives in <code>netbox-floorplan-plugin</code>.
-</div>
-
 <div class="card">
   <div class="card-body">
     <p class="mb-3">
-      Use the floorplan plugin for interactive layout editing and inspection. This plugin still keeps
-      read-only <code>SpatialPlacement</code> records for planning metadata such as <code>z</code>,
-      orientation, and non-floorplan reference frames.
+      Coordinate metadata is plugin-native and stored on endpoint metadata as <code>spatial</code>.
     </p>
+    <form method="get" class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label">Fabric</label>
+        <select class="form-select" name="fabric">
+          <option value="">All Fabrics</option>
+          {% for fabric in fabrics %}
+            <option value="{{ fabric.pk }}"{% if selected_fabric_id|stringformat:'s' == fabric.pk|stringformat:'s' %} selected{% endif %}>{{ fabric.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">Apply</button>
+      </div>
+    </form>
 
-    {% if scope_label %}
-      <p class="mb-3">
-        The requested scope <strong>{{ scope_label }}</strong> could not be handed off automatically.
-        Check that the floorplan plugin is enabled and that the selected scope exists.
-      </p>
-    {% endif %}
+    <div class="row g-3 mb-3">
+      <div class="col-md-6">
+        <div class="text-secondary">Visible Endpoints</div>
+        <div class="h4 mb-0">{{ row_count }}</div>
+      </div>
+      <div class="col-md-6">
+        <div class="text-secondary">Missing Coordinates</div>
+        <div class="h4 mb-0">{{ invalid_count }}</div>
+      </div>
+    </div>
 
-    <div class="d-flex gap-2 flex-wrap">
-      {% if floorplan_list_url %}
-        <a href="{{ floorplan_list_url }}" class="btn btn-primary">Browse Floorplans</a>
-      {% endif %}
-      <a href="{{ spatial_placement_list_url }}" class="btn btn-outline-secondary">Browse Spatial Placement Metadata</a>
-      <a href="{% url 'plugins:netbox_plant_graph:coordinate_layout' %}" class="btn btn-outline-secondary">Reset</a>
+    <div class="table-responsive mb-3">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th>Fabric</th>
+            <th>Endpoint</th>
+            <th>X</th>
+            <th>Y</th>
+            <th>Z</th>
+            <th>Orientation</th>
+            <th>Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.endpoint.fabric.name }}</td>
+              <td><a href="{{ row.endpoint.get_absolute_url }}">{{ row.endpoint.address }}</a></td>
+              <td>{{ row.x|default:'-' }}</td>
+              <td>{{ row.y|default:'-' }}</td>
+              <td>{{ row.z|default:'-' }}</td>
+              <td>{{ row.orientation|default:'-' }}</td>
+              <td>{{ row.unit }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="text-secondary">No endpoints found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Update Endpoint Coordinates</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button type="submit" class="btn btn-primary">Save Coordinates</button>
+          <a href="{{ spatial_placement_list_url }}" class="btn btn-outline-secondary">Browse Endpoints</a>
+        </form>
+      </div>
     </div>
   </div>
 </div>

@@ -4,11 +4,25 @@ import csv
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-
-from django.contrib.contenttypes.models import ContentType
+import sys
 
 from dcim.models import Device, FrontPort, Interface, Rack
-from netbox_plant_graph.models import AttachmentUnit, Fabric, PlantNode, TerminationPoint
+from netbox_plant_graph.models import Endpoint
+
+
+for candidate in (
+    Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path('/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path(globals().get('__file__', '.')).resolve().parent,
+):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+from madison_v2_graph import (  # noqa: E402
+    endpoint_for_device_port,
+    get_fabric,
+    mpo_endpoint_for_device_port,
+)
 
 
 MAD_SITE_SLUG = 'mad-1'
@@ -174,54 +188,41 @@ def shuffle_candidates_by_su_and_group() -> dict[tuple[int, int, str], list[Devi
     return grouped
 
 
-def attachment_unit_for_device_interface(device: Device, interface_name: str, mpo: int, indexes) -> AttachmentUnit | None:
-    interface = indexes['interfaces'].get((device.pk, interface_name))
-    if interface is None:
+def endpoint_for_device_interface(device: Device, interface_name: str, mpo: int, indexes) -> Endpoint | None:
+    if (device.pk, interface_name) not in indexes['interfaces']:
         return None
-    tp = indexes['termination_points'].get((indexes['interface_ct'].pk, interface.pk))
-    if tp is None:
+    try:
+        return mpo_endpoint_for_device_port(indexes['fabric'], device.name, interface_name, mpo)
+    except Endpoint.DoesNotExist:
         return None
-    return indexes['attachment_units'].get((tp.pk, f'mpo-{mpo}'))
 
 
-def attachment_unit_for_front_port(device: Device, port_name: str, indexes) -> AttachmentUnit | None:
-    port = indexes['front_ports'].get((device.pk, port_name))
-    if port is None:
+def endpoint_for_front_port(device: Device, port_name: str, indexes) -> Endpoint | None:
+    if (device.pk, port_name) not in indexes['front_ports']:
         return None
-    tp = indexes['termination_points'].get((indexes['front_port_ct'].pk, port.pk))
-    if tp is None:
+    try:
+        return endpoint_for_device_port(indexes['fabric'], device.name, port_name)
+    except Endpoint.DoesNotExist:
         return None
-    return indexes['attachment_units'].get((tp.pk, 'mpo'))
 
 
 def build_indexes():
-    fabric = Fabric.objects.get(name=FABRIC_NAME)
-    interface_ct = ContentType.objects.get_for_model(Interface)
-    front_port_ct = ContentType.objects.get_for_model(FrontPort)
+    fabric = get_fabric()
     interfaces = {
         (interface.device_id, interface.name): interface
         for interface in Interface.objects.filter(device__site__slug=MAD_SITE_SLUG, type__icontains='osfp')
     }
     front_ports = {
         (port.device_id, port.name): port
-        for port in FrontPort.objects.filter(device__site__slug=MAD_SITE_SLUG, device__device_type__slug='shuffle-cassette-2x2-mpo')
-    }
-    termination_points = {
-        (tp.source_type_id, tp.source_id): tp
-        for tp in TerminationPoint.objects.filter(plant_node__fabric=fabric, source_id__isnull=False)
-    }
-    attachment_units = {
-        (au.termination_point_id, au.name): au
-        for au in AttachmentUnit.objects.filter(termination_point__plant_node__fabric=fabric)
+        for port in FrontPort.objects.filter(
+            device__site__slug=MAD_SITE_SLUG,
+            device__device_type__slug='shuffle-cassette-2x2-mpo',
+        )
     }
     return {
         'fabric': fabric,
-        'interface_ct': interface_ct,
-        'front_port_ct': front_port_ct,
         'interfaces': interfaces,
         'front_ports': front_ports,
-        'termination_points': termination_points,
-        'attachment_units': attachment_units,
     }
 
 
@@ -252,18 +253,18 @@ def main() -> None:
             gb_rack = gb_racks[pattern['nvl72_rack_ordinal'] - 1]
             gb_trays = tray_devices_by_rack[su][gb_rack.pk]
             gb_device = gb_trays[pattern['compute_tray_ordinal'] - 1] if len(gb_trays) >= pattern['compute_tray_ordinal'] else None
-            gb_au = None
+            gb_endpoint = None
             if gb_device:
-                gb_au = attachment_unit_for_device_interface(gb_device, f"osfp{pattern['cx8']}", pattern['gb300_mpo'], indexes)
-            if gb_au is None:
-                status.append('missing_gb300_au')
+                gb_endpoint = endpoint_for_device_interface(gb_device, f"osfp{pattern['cx8']}", pattern['gb300_mpo'], indexes)
+            if gb_endpoint is None:
+                status.append('missing_gb300_mpo_endpoint')
 
             leaf_device = leaf_devices[su].get((pattern['plane'], pattern['leaf_switch']))
-            leaf_au = None
+            leaf_endpoint = None
             if leaf_device:
-                leaf_au = attachment_unit_for_device_interface(leaf_device, f"swp{pattern['leaf_cage']}", pattern['leaf_mpo'], indexes)
-            if leaf_au is None:
-                status.append('missing_leaf_au')
+                leaf_endpoint = endpoint_for_device_interface(leaf_device, f"swp{pattern['leaf_cage']}", pattern['leaf_mpo'], indexes)
+            if leaf_endpoint is None:
+                status.append('missing_leaf_mpo_endpoint')
 
             side = 'A' if pattern['plane'] in {1, 2} else 'B'
             nic_index_zero = pattern['leaf_switch'] - 1
@@ -283,7 +284,7 @@ def main() -> None:
             counters['rows_total'] += 1
             if not status:
                 counters['rows_fully_resolved_by_label'] += 1
-            elif gb_au and leaf_au and candidates:
+            elif gb_endpoint and leaf_endpoint and candidates:
                 counters['rows_active_endpoints_resolved_shuffle_candidate_ambiguous'] += 1
             rows.append(
                 {
@@ -292,10 +293,12 @@ def main() -> None:
                     'gb300_rack': gb_rack.name,
                     'gb300_device': gb_device.name if gb_device else '',
                     'gb300_interface': f"osfp{pattern['cx8']}",
-                    'gb300_attachment_unit_id': gb_au.pk if gb_au else '',
+                    'gb300_mpo_endpoint_id': gb_endpoint.pk if gb_endpoint else '',
+                    'gb300_mpo_endpoint': gb_endpoint.address if gb_endpoint else '',
                     'leaf_device': leaf_device.name if leaf_device else '',
                     'leaf_interface': f"swp{pattern['leaf_cage']}",
-                    'leaf_attachment_unit_id': leaf_au.pk if leaf_au else '',
+                    'leaf_mpo_endpoint_id': leaf_endpoint.pk if leaf_endpoint else '',
+                    'leaf_mpo_endpoint': leaf_endpoint.address if leaf_endpoint else '',
                     'shuffle_candidate_side': side,
                     'shuffle_candidate_nic_index_zero': nic_index_zero,
                     'shuffle_candidate_boxes': '|'.join(candidate.name for candidate in candidates),

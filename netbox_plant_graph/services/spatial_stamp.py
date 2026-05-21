@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from django.utils.text import slugify
 
@@ -31,51 +31,10 @@ class SpatialStampResult:
     racks: list = field(default_factory=list)
     placements: list = field(default_factory=list)
     stamp_records: list = field(default_factory=list)
-    floorplan_results: list = field(default_factory=list)
-    floorplan_errors: list[str] = field(default_factory=list)
-    floorplans_touched: int = 0
-    racks_synced_to_floorplan: int = 0
     rack_placements: list = field(default_factory=list)
     # (node_pk, instance_index, plane) → [Device, ...]  — populated during rack-position stamping
     # Used by _stamp_connection_template to look up devices for a given node instance.
     devices_by_node_instance: dict = field(default_factory=dict)
-
-
-def serialize_floorplan_sync_result(sync_result) -> dict[str, Any]:
-    """Convert a bridge result object into JSON-safe summary data."""
-    floorplan = getattr(sync_result, 'floorplan', None)
-    errors = [str(error) for error in (getattr(sync_result, 'errors', None) or [])]
-    return {
-        'floorplan_id': getattr(floorplan, 'pk', None),
-        'created_floorplan': bool(getattr(sync_result, 'created_floorplan', False)),
-        'created_objects': int(getattr(sync_result, 'created_objects', 0) or 0),
-        'updated_objects': int(getattr(sync_result, 'updated_objects', 0) or 0),
-        'skipped_objects': int(getattr(sync_result, 'skipped_objects', 0) or 0),
-        'errors': errors,
-    }
-
-
-def build_floorplan_sync_summary(
-    result: SpatialStampResult,
-    *,
-    sync_requested: bool = True,
-) -> dict[str, Any]:
-    """Build a stable JSON-safe summary for floorplan sync reporting."""
-    sync_skipped_reason = None
-    if not sync_requested:
-        sync_skipped_reason = 'disabled'
-    elif not result.rack_placements:
-        sync_skipped_reason = 'no_rack_placements'
-
-    return {
-        'sync_requested': sync_requested,
-        'sync_skipped_reason': sync_skipped_reason,
-        'rack_placement_count': len(result.rack_placements),
-        'floorplans_touched': int(result.floorplans_touched or 0),
-        'racks_synced_to_floorplan': int(result.racks_synced_to_floorplan or 0),
-        'floorplan_errors': [str(error) for error in result.floorplan_errors],
-        'results': [serialize_floorplan_sync_result(sync_result) for sync_result in result.floorplan_results],
-    }
 
 
 def stamp_spatial_template(
@@ -86,8 +45,6 @@ def stamp_spatial_template(
     plan: DeploymentPlan | None = None,
     user: AbstractUser | None = None,
     dry_run: bool = False,
-    sync_floorplan: bool = True,
-    force_floorplan_sync: bool = False,
 ) -> SpatialStampResult:
     """
     Stamp a SpatialTemplate under an existing Site or Location scope.
@@ -197,34 +154,6 @@ def stamp_spatial_template(
                 parameters={'scope_type': scope_ct.model, 'scope_id': scope.pk},
             )
             result.stamp_records.append(plan_stamp_record)
-
-    if sync_floorplan and result.rack_placements:
-        try:
-            from .floorplan_bridge import sync_rack_placements_to_floorplan
-
-            floorplan_result = sync_rack_placements_to_floorplan(
-                scope,
-                result.rack_placements,
-                force=force_floorplan_sync,
-            )
-            result.floorplan_results.append(floorplan_result)
-            result.floorplans_touched = 1 if getattr(floorplan_result, 'floorplan', None) is not None else 0
-            result.racks_synced_to_floorplan = (
-                int(getattr(floorplan_result, 'created_objects', 0) or 0)
-                + int(getattr(floorplan_result, 'updated_objects', 0) or 0)
-            )
-            if getattr(floorplan_result, 'errors', None):
-                result.floorplan_errors.extend(str(error) for error in floorplan_result.errors)
-        except Exception as exc:
-            logger.warning('Floorplan synchronization failed for spatial template %s: %s', template, exc)
-            result.floorplan_errors.append(str(exc))
-
-    if plan_stamp_record is not None:
-        plan_stamp_record.metadata = {
-            **(plan_stamp_record.metadata or {}),
-            'floorplan_sync': build_floorplan_sync_summary(result, sync_requested=sync_floorplan),
-        }
-        plan_stamp_record.save(update_fields=['metadata'])
 
     logger.info(
         'Stamped spatial template %s → %d locations, %d racks, %d placements',

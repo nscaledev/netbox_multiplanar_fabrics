@@ -718,7 +718,7 @@ Model as a definition placeholder only; rack types and individual PDU devices ca
         'comments': """\
 Notion architecture: each shuffle cassette has 4 front MPOs and 4 rear MPOs with two internal 2x2 shuffles.
 Physical tray position is encoded by the parent shuffle-box device bay/index, e.g. cassette-1.1 through cassette-3.6.
-NetBox front/rear ports stage physical terminations only; the non-1:1 internal shuffle map belongs in netbox_plant_graph TransferMap/LaneMap definitions.
+NetBox front/rear ports stage physical terminations only; the non-1:1 internal shuffle map belongs in netbox_plant_graph TransferPattern and TransferMap definitions.
 """,
         'subdevice_role': 'child',
         'mpo_pairs': 4,

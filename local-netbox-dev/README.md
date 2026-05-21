@@ -5,8 +5,8 @@ Production-like local NetBox runtime with auth plugins intentionally omitted.
 ## Runtime
 
 - NetBox base image: `netboxcommunity/netbox:v4.2.3-3.2.0`
-- Plugins: `netbox_dns`, `netbox_prometheus_sd`, `netbox_floorplan==0.6.0`,
-  `netbox_plant_graph`, `netbox_power_plant`
+- Plugins: `netbox_dns`, `netbox_prometheus_sd`, `netbox_plant_graph`,
+  `netbox_power_plant`
 - Auth: local username/password only
 - URL: `http://localhost:8000`
 - User: `admin`
@@ -71,7 +71,6 @@ docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/man
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "script='/opt/netbox/netbox/scripts/seed_madison_fabric_endpoint_units.py'; exec(open(script).read(), {'__name__': '__main__', '__file__': script})"
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/report_madison_fiber_path_resolution.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_fiber_paths_from_resolution.py
-docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_power_floorplans.py
 ```
 
 `report_madison_workbook_manifest.py` parses the workbook-authoritative `NC SU

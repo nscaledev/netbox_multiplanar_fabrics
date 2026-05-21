@@ -1,7 +1,31 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Fabric Operations — {{ object.name }}</h1>
+{% with fabric=object %}
+{% url 'plugins:netbox_plant_graph:graph_overview' as graph_overview_url %}
+{% url 'plugins:netbox_plant_graph:health' as health_url %}
+{% url 'plugins:netbox_plant_graph:path_resolver' as path_resolver_url %}
+{% url 'plugins:netbox_plant_graph:audit_dashboard' as audit_dashboard_url %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+{% url 'plugins:netbox_plant_graph:lane_workspace' as lane_workspace_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Fabric Operations{% if fabric %} - {{ fabric.name|default:fabric }}{% endif %}</h1>
+    <p class="text-muted mb-0">Operate graph rebuilds, audits, and follow-up workflows for one fabric scope.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if graph_overview_url %}
+      <a href="{{ graph_overview_url }}" class="btn btn-outline-secondary btn-sm">Graph Overview</a>
+    {% endif %}
+    {% if fabric and health_url %}
+      <a href="{{ health_url }}?fabric_id={{ fabric.pk }}" class="btn btn-outline-secondary btn-sm">Health</a>
+    {% endif %}
+    {% if fabric and audit_dashboard_url %}
+      <a href="{{ audit_dashboard_url }}?fabric_id={{ fabric.pk }}" class="btn btn-outline-secondary btn-sm">Audit Dashboard</a>
+    {% endif %}
+  </div>
+</div>
 
 {% if messages %}
   {% for message in messages %}
@@ -11,31 +35,45 @@
   {% endfor %}
 {% endif %}
 
-<div class="card mb-3">
-  <div class="card-header"><strong>Fabric Info</strong></div>
-  <div class="card-body">
-    <dl class="row mb-0">
-      <dt class="col-sm-4">Name</dt>
-      <dd class="col-sm-8">{{ object.name }}</dd>
-      <dt class="col-sm-4">Description</dt>
-      <dd class="col-sm-8">{{ object.description|default:"&mdash;" }}</dd>
-      <dt class="col-sm-4">Tenant</dt>
-      <dd class="col-sm-8">
-        {% if object.resolved_tenant %}
-          <a href="{{ object.resolved_tenant.get_absolute_url }}">{{ object.resolved_tenant }}</a>
-        {% else %}
-          &mdash;
-        {% endif %}
-      </dd>
-      <dt class="col-sm-4">Expected Planes</dt>
-      <dd class="col-sm-8">{{ object.expected_plane_count }}</dd>
-      <dt class="col-sm-4">Tier Depth</dt>
-      <dd class="col-sm-8">{{ object.tier_depth }}</dd>
-      <dt class="col-sm-4">Disjointness Policy</dt>
-      <dd class="col-sm-8">{{ object.get_disjointness_policy_display }}</dd>
-    </dl>
+{% if fabric %}
+  <div class="card mb-3">
+    <div class="card-header"><strong>Fabric Info</strong></div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-4">Name</dt>
+        <dd class="col-sm-8">{{ fabric.name|default:fabric }}</dd>
+        <dt class="col-sm-4">Description</dt>
+        <dd class="col-sm-8">{{ fabric.description|default:"-" }}</dd>
+        <dt class="col-sm-4">Tenant</dt>
+        <dd class="col-sm-8">
+          {% if fabric.resolved_tenant %}
+            {% if fabric.resolved_tenant.get_absolute_url %}
+              <a href="{{ fabric.resolved_tenant.get_absolute_url }}">{{ fabric.resolved_tenant }}</a>
+            {% else %}
+              {{ fabric.resolved_tenant }}
+            {% endif %}
+          {% else %}
+            -
+          {% endif %}
+        </dd>
+        <dt class="col-sm-4">Expected Planes</dt>
+        <dd class="col-sm-8">{{ fabric.expected_plane_count|default:"-" }}</dd>
+        <dt class="col-sm-4">Tier Depth</dt>
+        <dd class="col-sm-8">{{ fabric.tier_depth|default:"-" }}</dd>
+        <dt class="col-sm-4">Disjointness Policy</dt>
+        <dd class="col-sm-8">
+          {% if fabric.get_disjointness_policy_display %}
+            {{ fabric.get_disjointness_policy_display }}
+          {% elif fabric.disjointness_policy %}
+            {{ fabric.disjointness_policy }}
+          {% else %}
+            -
+          {% endif %}
+        </dd>
+      </dl>
+    </div>
   </div>
-</div>
+{% endif %}
 
 <div class="row">
   <!-- Graph Builds card -->
@@ -155,11 +193,65 @@
   </div>
 </div>
 
+{% if operations %}
+  <div class="card mb-3">
+    <div class="card-header"><strong>Operations Queue</strong></div>
+    <div class="card-body p-0">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for op in operations %}
+            <tr>
+              <td>{% if op.name %}{{ op.name }}{% elif op.operation %}{{ op.operation }}{% elif op.profile %}{{ op.profile }}{% else %}-{% endif %}</td>
+              <td>{% if op.status %}{{ op.status }}{% elif op.get_status_display %}{{ op.get_status_display }}{% else %}-{% endif %}</td>
+              <td>{% if op.created %}{{ op.created }}{% elif op.started_at %}{{ op.started_at }}{% else %}-{% endif %}</td>
+              <td>
+                {% if op.get_absolute_url %}
+                  <a href="{{ op.get_absolute_url }}">View</a>
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
 <div class="card">
   <div class="card-body">
-    <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">Back to Fabric</a>
-    <a href="{% url 'plugins:netbox_plant_graph:graph-build-run_list' %}?fabric={{ object.pk }}" class="btn btn-outline-primary">All Build Runs</a>
-    <a href="{% url 'plugins:netbox_plant_graph:audit-run_list' %}?fabric={{ object.pk }}" class="btn btn-outline-primary">All Audit Runs</a>
+    {% if fabric and fabric.get_absolute_url %}
+      <a href="{{ fabric.get_absolute_url }}" class="btn btn-outline-secondary">Back to Fabric</a>
+    {% endif %}
+    {% if fabric %}
+      {% if plane_audit_url %}
+        <a href="{{ plane_audit_url }}?fabric_id={{ fabric.pk }}" class="btn btn-outline-primary">Plane Audit</a>
+      {% endif %}
+      {% if path_resolver_url %}
+        <a href="{{ path_resolver_url }}?fabric_id={{ fabric.pk }}" class="btn btn-outline-primary">Path Resolver</a>
+      {% endif %}
+      {% if lane_workspace_url %}
+        <a href="{{ lane_workspace_url }}?fabric_id={{ fabric.pk }}" class="btn btn-outline-primary">Lane Workspace</a>
+      {% endif %}
+    {% endif %}
+    {% url 'plugins:netbox_plant_graph:graph-build-run_list' as graph_build_run_list_url %}
+    {% if graph_build_run_list_url and fabric %}
+      <a href="{{ graph_build_run_list_url }}?fabric={{ fabric.pk }}" class="btn btn-outline-secondary">All Build Runs</a>
+    {% endif %}
+    {% url 'plugins:netbox_plant_graph:audit-run_list' as audit_run_list_url %}
+    {% if audit_run_list_url and fabric %}
+      <a href="{{ audit_run_list_url }}?fabric={{ fabric.pk }}" class="btn btn-outline-secondary">All Audit Runs</a>
+    {% endif %}
   </div>
 </div>
+{% endwith %}
 {% endblock %}

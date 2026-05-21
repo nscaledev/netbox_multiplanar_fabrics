@@ -101,3 +101,46 @@ class StampRunStatusChoices(ChoiceSet):
         ('completed', 'Completed'),
         ('failed', 'Failed'),
     ]
+
+
+class SuppressionStatusChoices(ChoiceSet):
+    key = 'PlantGraphV2.suppression_status'
+
+    CHOICES = [
+        ('pending', 'Pending'),
+        ('active', 'Active'),
+        ('revoked', 'Revoked'),
+        ('expired', 'Expired'),
+    ]
+
+
+class AuditEventTypeChoices(ChoiceSet):
+    key = 'PlantGraphV2.audit_event_type'
+
+    CHOICES = [
+        ('stamp', 'Stamp'),
+        ('path_resolve', 'Path Resolve'),
+        ('suppression_change', 'Suppression Change'),
+        ('operation_run', 'Operation Run'),
+        ('policy_eval', 'Policy Evaluation'),
+    ]
+
+
+class OperationProfileChoices(ChoiceSet):
+    key = 'PlantGraphV2.operation_profile'
+
+    CHOICES = [
+        ('generic_roce', 'Generic RoCE'),
+        ('madison_default', 'Madison Default'),
+    ]
+
+
+class OperationRunStatusChoices(ChoiceSet):
+    key = 'PlantGraphV2.operation_run_status'
+
+    CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]

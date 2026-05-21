@@ -1,201 +1,290 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+{% url 'plugins:netbox_plant_graph:audit_dashboard' as audit_dashboard_url %}
+{% url 'plugins:netbox_plant_graph:policy_review' as policy_review_url %}
+{% url 'plugins:netbox_plant_graph:audit_triage' as audit_triage_url %}
+
 <h1>Plane Audit</h1>
+
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3">
-      <div class="col-md-6">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-lg-5 col-md-6">
         <label class="form-label" for="fabric_id">Fabric</label>
         <select class="form-select" id="fabric_id" name="fabric_id">
+          <option value="">-- Select fabric --</option>
           {% for fabric in fabrics %}
-            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% elif fabric_id and fabric.pk|stringformat:"s" == fabric_id|stringformat:"s" %} selected{% endif %}>{{ fabric.name }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2 align-self-end">
+      <div class="col-lg-7 d-flex flex-wrap gap-2">
         <button type="submit" class="btn btn-primary">Run Audit</button>
+        {% if audit_dashboard_url %}
+          <a class="btn btn-outline-secondary" href="{{ audit_dashboard_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Dashboard</a>
+        {% endif %}
+        {% if policy_review_url %}
+          <a class="btn btn-outline-secondary" href="{{ policy_review_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Policy Review</a>
+        {% endif %}
       </div>
     </form>
   </div>
 </div>
 
-{% if result %}
-  <div class="row">
-    <div class="col-lg-4 mb-3">
-      <div class="card h-100">
-        <div class="card-header">Severity Counts</div>
-        <div class="card-body">
-          <ul class="mb-0">
-            {% for severity, count in finding_counts.by_severity %}
-              <li>{{ severity }}: {{ count }}</li>
-            {% empty %}
-              <li>No findings.</li>
-            {% endfor %}
-          </ul>
-        </div>
-      </div>
-    </div>
-    <div class="col-lg-8 mb-3">
-      <div class="card h-100">
-        <div class="card-header">Finding Types</div>
-        <div class="card-body">
-          <ul class="mb-0">
-            {% for finding_type, count in finding_counts.by_type %}
-              <li>{{ finding_type }}: {{ count }}</li>
-            {% empty %}
-              <li>No findings.</li>
-            {% endfor %}
-          </ul>
-        </div>
+{% if not fabrics %}
+  <div class="alert alert-info">No fabrics are available for auditing.</div>
+{% endif %}
+
+<div class="row">
+  <div class="col-lg-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Status Counts</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% if finding_status_counts and finding_status_counts.items %}
+              {% for status_name, status_count in finding_status_counts.items %}
+                <tr>
+                  <td>{{ status_name }}</td>
+                  <td class="text-end">{{ status_count }}</td>
+                </tr>
+              {% endfor %}
+            {% elif finding_counts and finding_counts.by_status %}
+              {% for status_name, status_count in finding_counts.by_status %}
+                <tr>
+                  <td>{{ status_name }}</td>
+                  <td class="text-end">{{ status_count }}</td>
+                </tr>
+              {% endfor %}
+            {% elif finding_counts and finding_counts.by_severity %}
+              {% for severity_name, severity_count in finding_counts.by_severity %}
+                <tr>
+                  <td>{{ severity_name }}</td>
+                  <td class="text-end">{{ severity_count }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td>No findings in scope.</td>
+                <td class="text-end">0</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
+  <div class="col-lg-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Suppression Summary</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% if suppression_summary and suppression_summary.items %}
+              {% for key, value in suppression_summary.items %}
+                <tr>
+                  <td>{{ key }}</td>
+                  <td class="text-end">{{ value }}</td>
+                </tr>
+              {% endfor %}
+            {% elif suppression_summary %}
+              {% for metric in suppression_summary %}
+                <tr>
+                  <td>{{ metric.name|default:metric.label|default:'Metric' }}</td>
+                  <td class="text-end">{{ metric.value|default:metric.count|default:'0' }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td>Active suppressions</td>
+                <td class="text-end">{{ active_suppressions|length }}</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
 
-  <div class="card">
-    <div class="card-header">Findings</div>
-    <div class="card-body">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Severity</th>
-            <th>Type</th>
-            <th>Object</th>
-            <th>Message</th>
-            <th>Durable State</th>
-            <th>Impact</th>
-            <th>Guidance</th>
-          </tr>
-        </thead>
-        <tbody>
+<div class="card mb-3">
+  <div class="card-header">Audit Findings</div>
+  <div class="card-body">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Object</th>
+          <th>Message</th>
+          <th>Guidance</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if finding_rows %}
           {% for row in finding_rows %}
-            <tr>
-              <td>{{ row.finding.severity }}</td>
-              <td>{{ row.finding.finding_type }}</td>
-              <td>
-                {% if row.finding.object.url %}
-                  <a href="{{ row.finding.object.url }}">{{ row.finding.object.display }}</a>
-                {% else %}
-                  {{ row.finding.object.display }}
-                {% endif %}
-              </td>
-              <td>{{ row.finding.message }}</td>
-              <td>
-                {% if row.durable_finding %}
-                  <div class="mb-2">
-                    <strong>Status:</strong>
-                    <a href="{{ row.durable_finding.get_absolute_url }}">{{ row.durable_finding.status }}</a>
-                  </div>
-                  <ul class="mb-3 ps-3">
-                    <li>Active: {{ row.durable_finding.active|yesno:"Yes,No" }}</li>
-                    <li>Assigned: {{ row.durable_finding.assigned_to|default:"None" }}</li>
-                    <li>Acknowledged: {{ row.durable_finding.acknowledged_by|default:"None" }}</li>
-                    {% if row.active_suppression %}
-                      <li>Suppressed until: {{ row.active_suppression.expires_at|default:"Never" }}</li>
-                      <li>Suppression reason: {{ row.active_suppression.reason|default:"None" }}</li>
+            {% with finding=row.finding|default:row %}
+              <tr>
+                <td>{{ finding.severity|default:row.severity|default:'-' }}</td>
+                <td>{{ finding.finding_type|default:row.finding_type|default:'-' }}</td>
+                <td>{{ finding.status|default:row.status|default:'-' }}</td>
+                <td>
+                  {% with obj=row.affected_object|default:finding.object %}
+                    {% if obj.url %}
+                      <a href="{{ obj.url }}">{{ obj.display|default:obj }}</a>
+                    {% elif obj.get_absolute_url %}
+                      <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                    {% elif obj %}
+                      {{ obj }}
+                    {% else %}
+                      -
                     {% endif %}
-                  </ul>
-                  <div class="d-flex flex-wrap gap-2">
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ row.durable_finding.get_absolute_url }}">Durable Detail</a>
-                    {% for action in row.durable_actions %}
-                      <form method="post" action="{{ action.url }}">
-                        {% csrf_token %}
-                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary">{{ action.label }}</button>
-                      </form>
-                    {% endfor %}
-                  </div>
-                {% else %}
-                  <div class="text-muted mb-2">No durable finding recorded yet.</div>
-                  {% if selected_fabric %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
+                  {% endwith %}
+                </td>
+                <td>{{ finding.message|default:'-' }}</td>
+                <td>
+                  {% if row.detail and row.detail.summary %}
+                    <div class="mb-2">{{ row.detail.summary }}</div>
                   {% endif %}
-                {% endif %}
-                {% if row.related_unresolved_summaries %}
-                  <div class="mt-3">
-                    <strong>Related Unresolved Summaries</strong>
-                    <ul class="mb-2 ps-3">
-                      {% for summary in row.related_unresolved_summaries %}
-                        <li>
-                          <a href="{{ summary.summary.url }}">{{ summary.cause_code }}</a>
-                          {% if summary.scope_label %}({{ summary.scope_label }}){% endif %}
-                        </li>
+                  {% if row.detail and row.detail.remediation_hints %}
+                    <ul class="mb-0 ps-3">
+                      {% for hint in row.detail.remediation_hints %}
+                        <li>{{ hint }}</li>
                       {% endfor %}
                     </ul>
-                  </div>
-                {% endif %}
-              </td>
-              <td>
-                <ul class="mb-0 ps-3">
-                  {% if row.detail.impact.plane_ids %}
-                    <li>Planes: {{ row.detail.impact.plane_ids|join:", " }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.affected_attachment_units is not None %}
-                    <li>Attachment units: {{ row.detail.impact.affected_attachment_units }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.present_lane_total is not None %}
-                    <li>Lanes: {{ row.detail.impact.present_lane_total }} / {{ row.detail.impact.expected_lane_total }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.mapped_lane_total is not None %}
-                    <li>Mapped lanes: {{ row.detail.impact.mapped_lane_total }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.unmatched_peer_positions %}
-                    <li>Unmatched positions: {{ row.detail.impact.unmatched_peer_positions|join:", " }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.lane_map_consistency %}
-                    <li>Lane consistency: {{ row.detail.impact.lane_map_consistency }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.plane_consistency %}
-                    <li>Plane consistency: {{ row.detail.impact.plane_consistency }}</li>
-                  {% endif %}
-                  {% if row.detail.impact.related_targets %}
-                    <li>
-                      Related targets:
-                      {% for target in row.detail.impact.related_targets %}
-                        {% if target.url %}
-                          <a href="{{ target.url }}">{{ target.display }}</a>
-                        {% else %}
-                          {{ target.display }}
-                        {% endif %}
-                        {% if not forloop.last %}, {% endif %}
+                  {% elif row.remediation_hints %}
+                    <ul class="mb-0 ps-3">
+                      {% for hint in row.remediation_hints %}
+                        <li>{{ hint }}</li>
                       {% endfor %}
-                    </li>
+                    </ul>
+                  {% else %}
+                    -
                   {% endif %}
-                  {% if row.detail.metadata %}
-                    {% for key, value in row.detail.metadata.items %}
-                      <li><code>{{ key }}</code>: {{ value }}</li>
-                    {% endfor %}
-                  {% endif %}
-                </ul>
-              </td>
-              <td>
-                <div class="mb-2">{{ row.detail.summary }}</div>
-                {% if row.detail.remediation_hints %}
-                  <ul class="mb-3 ps-3">
-                    {% for hint in row.detail.remediation_hints %}
-                      <li>{{ hint }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-                {% if row.detail.action_links %}
-                  <div class="d-flex flex-wrap gap-2">
-                    {% for action in row.detail.action_links %}
-                      <a class="btn btn-sm btn-outline-primary" href="{{ action.url }}">{{ action.label }}</a>
-                    {% endfor %}
+                </td>
+                <td class="text-end">
+                  <div class="d-flex flex-wrap gap-2 justify-content-end">
+                    {% if audit_triage_url %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ audit_triage_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Triage</a>
+                    {% endif %}
+                    {% if finding.pk %}
+                      <form method="post" action="{% url 'plugins:netbox_plant_graph:audit_finding_acknowledge' pk=finding.pk %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary">Ack</button>
+                      </form>
+                    {% endif %}
                   </div>
+                </td>
+              </tr>
+            {% endwith %}
+          {% endfor %}
+        {% elif findings %}
+          {% for finding in findings %}
+            <tr>
+              <td>{{ finding.severity|default:'-' }}</td>
+              <td>{{ finding.finding_type|default:'-' }}</td>
+              <td>{{ finding.status|default:'-' }}</td>
+              <td>
+                {% with obj=finding.object %}
+                  {% if obj.get_absolute_url %}
+                    <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                  {% elif obj %}
+                    {{ obj }}
+                  {% else %}
+                    -
+                  {% endif %}
+                {% endwith %}
+              </td>
+              <td>{{ finding.message|default:'-' }}</td>
+              <td>-</td>
+              <td class="text-end">
+                {% if audit_triage_url %}
+                  <a class="btn btn-sm btn-outline-primary" href="{{ audit_triage_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Triage</a>
                 {% endif %}
               </td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="7">No findings for this fabric.</td>
             </tr>
           {% endfor %}
-        </tbody>
-      </table>
+        {% else %}
+          <tr>
+            <td colspan="7">No findings were produced for the selected scope.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Active Suppressions</div>
+      <div class="card-body">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Finding</th>
+              <th>Reason</th>
+              <th>Expires</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for suppression in active_suppressions %}
+              <tr>
+                <td>
+                  {% if suppression.finding and suppression.finding.get_absolute_url %}
+                    <a href="{{ suppression.finding.get_absolute_url }}">{{ suppression.finding }}</a>
+                  {% elif suppression.finding %}
+                    {{ suppression.finding }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>{{ suppression.reason|default:'-' }}</td>
+                <td>{{ suppression.expires_at|default:'Never' }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3">No active suppressions.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
-{% else %}
-  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
-{% endif %}
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Recent Audit Events</div>
+      <div class="card-body">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Outcome</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for event in audit_events %}
+              <tr>
+                <td>{{ event.event_type|default:event.kind|default:'-' }}</td>
+                <td>{{ event.outcome|default:event.status|default:'-' }}</td>
+                <td>{{ event.created|default:event.created_at|default:'-' }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3">No audit events in scope.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

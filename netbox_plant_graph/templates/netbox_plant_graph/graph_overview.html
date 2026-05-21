@@ -1,19 +1,60 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Graph Overview</h1>
+{% url 'plugins:netbox_plant_graph:health' as health_url %}
+{% url 'plugins:netbox_plant_graph:fabric_onboard' as fabric_onboard_url %}
+{% url 'plugins:netbox_plant_graph:fabric_list' as fabric_list_url %}
+{% url 'plugins:netbox_plant_graph:path_resolver' as path_resolver_url %}
+{% url 'plugins:netbox_plant_graph:lane_drilldown' as lane_drilldown_url %}
+{% url 'plugins:netbox_plant_graph:lane_compare' as lane_compare_url %}
+{% url 'plugins:netbox_plant_graph:blast_radius' as blast_radius_url %}
+{% url 'plugins:netbox_plant_graph:audit_dashboard' as audit_dashboard_url %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Graph Overview</h1>
+    <p class="text-muted mb-0">Fabric-level visibility into modeled graph state, lane coverage, and operational signals.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if fabric_onboard_url %}
+      <a href="{{ fabric_onboard_url }}" class="btn btn-outline-primary btn-sm">Onboard Fabric</a>
+    {% endif %}
+    {% if fabric_list_url %}
+      <a href="{{ fabric_list_url }}" class="btn btn-outline-secondary btn-sm">All Fabrics</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
 <div class="card mb-3">
+  <div class="card-header"><strong>Fabric Scope</strong></div>
   <div class="card-body">
-    <form method="get" class="row g-3">
-      <div class="col-md-6">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-lg-5 col-md-6">
         <label class="form-label" for="fabric_id">Fabric</label>
         <select class="form-select" id="fabric_id" name="fabric_id">
+          <option value="">Select fabric</option>
           {% for fabric in fabrics %}
-            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>
+              {{ fabric.name|default:fabric }}
+            </option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2 align-self-end">
+      {% if form %}
+        <div class="col-lg-5 col-md-6">
+          {{ form.as_p }}
+        </div>
+      {% endif %}
+      <div class="col-lg-2 col-md-12 d-flex flex-wrap gap-2">
         <button type="submit" class="btn btn-primary">Refresh</button>
       </div>
     </form>
@@ -22,39 +63,285 @@
 
 {% if selected_fabric %}
   <div class="card mb-3">
-    <div class="card-header">
-      {{ selected_fabric.name }}
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <strong>{{ selected_fabric.name|default:selected_fabric }}</strong>
+      <div class="d-flex flex-wrap gap-2">
+        {% if health_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ health_url }}?fabric_id={{ selected_fabric.pk }}">Health</a>
+        {% endif %}
+        {% if audit_dashboard_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ audit_dashboard_url }}?fabric_id={{ selected_fabric.pk }}">Audit</a>
+        {% endif %}
+        {% if plane_audit_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ plane_audit_url }}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+        {% endif %}
+        {% if path_resolver_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ path_resolver_url }}?fabric_id={{ selected_fabric.pk }}">Path Resolver</a>
+        {% endif %}
+        {% if lane_drilldown_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ lane_drilldown_url }}?fabric_id={{ selected_fabric.pk }}">Lane Drilldown</a>
+        {% endif %}
+        {% if lane_compare_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ lane_compare_url }}?fabric_id={{ selected_fabric.pk }}">Lane Compare</a>
+        {% endif %}
+        {% if blast_radius_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ blast_radius_url }}?fabric_id={{ selected_fabric.pk }}">Blast Radius</a>
+        {% endif %}
+      </div>
     </div>
     <div class="card-body">
-      <table class="table table-hover mb-0">
+      <div class="row g-3">
+        <div class="col-lg-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted mb-1">Planes</div>
+            <div class="fs-5 fw-semibold">
+              {% if selected_fabric.expected_plane_count or selected_fabric.expected_plane_count == 0 %}
+                {{ selected_fabric.expected_plane_count }}
+              {% elif plane_rows %}
+                {{ plane_rows|length }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted mb-1">Lane Rows</div>
+            <div class="fs-5 fw-semibold">
+              {{ lane_counts|length|default:"0" }}
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted mb-1">Recent Events</div>
+            <div class="fs-5 fw-semibold">
+              {{ audit_events|length|default:"0" }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="row">
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Graph Summary</strong></div>
+      <div class="card-body p-0">
+        {% if graph_summary %}
+          <table class="table table-sm mb-0">
+            {% if graph_summary.items %}
+              {% for metric, value in graph_summary.items %}
+                <tr>
+                  <th>{{ metric }}</th>
+                  <td>{{ value }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              {% for metric in graph_summary %}
+                <tr>
+                  <th>
+                    {% if metric.label %}{{ metric.label }}{% elif metric.name %}{{ metric.name }}{% else %}Metric{% endif %}
+                  </th>
+                  <td>
+                    {% if metric.value or metric.value == 0 %}
+                      {{ metric.value }}
+                    {% elif metric.count or metric.count == 0 %}
+                      {{ metric.count }}
+                    {% else %}
+                      {{ metric }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% endif %}
+          </table>
+        {% elif graph_counts %}
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in graph_counts %}
+                <tr>
+                  <td>{% if item.label %}{{ item.label }}{% elif item.name %}{{ item.name }}{% else %}Metric{% endif %}</td>
+                  <td>
+                    {% if item.value or item.value == 0 %}
+                      {{ item.value }}
+                    {% elif item.count or item.count == 0 %}
+                      {{ item.count }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="p-3 text-muted">No graph summary is available for the selected scope.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Lane Coverage</strong></div>
+      <div class="card-body p-0">
+        {% if lane_counts %}
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>Plane/Group</th>
+                <th>Lanes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in lane_counts %}
+                <tr>
+                  <td>
+                    {% if row.label %}{{ row.label }}{% elif row.name %}{{ row.name }}{% elif row.plane %}{{ row.plane }}{% else %}-{% endif %}
+                  </td>
+                  <td>
+                    {% if row.value or row.value == 0 %}
+                      {{ row.value }}
+                    {% elif row.count or row.count == 0 %}
+                      {{ row.count }}
+                    {% elif row.total or row.total == 0 %}
+                      {{ row.total }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="p-3 text-muted">No lane coverage rows are available.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-xl-8 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Plane Health Rows</strong></div>
+      <div class="card-body p-0">
+        {% if plane_rows %}
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>Plane</th>
+                <th>Status</th>
+                <th>Lanes</th>
+                <th>Findings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in plane_rows %}
+                <tr>
+                  <td>{% if row.plane %}{{ row.plane }}{% elif row.name %}{{ row.name }}{% elif row.label %}{{ row.label }}{% else %}-{% endif %}</td>
+                  <td>{{ row.status|default:"-" }}</td>
+                  <td>
+                    {% if row.lanes or row.lanes == 0 %}
+                      {{ row.lanes }}
+                    {% elif row.lane_count or row.lane_count == 0 %}
+                      {{ row.lane_count }}
+                    {% elif row.total or row.total == 0 %}
+                      {{ row.total }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if row.findings or row.findings == 0 %}
+                      {{ row.findings }}
+                    {% elif row.finding_count or row.finding_count == 0 %}
+                      {{ row.finding_count }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="p-3 text-muted">No plane-level rows are available.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-xl-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Recent Audit Events</strong></div>
+      <div class="card-body p-0">
+        {% if audit_events %}
+          <ul class="list-group list-group-flush">
+            {% for event in audit_events %}
+              <li class="list-group-item">
+                <div class="fw-semibold">{% if event.event_type %}{{ event.event_type }}{% elif event.type %}{{ event.type }}{% else %}event{% endif %}</div>
+                <div class="small text-muted">
+                  {% if event.created %}{{ event.created }}{% elif event.timestamp %}{{ event.timestamp }}{% elif event.date %}{{ event.date }}{% else %}-{% endif %}
+                </div>
+                <div class="small">
+                  {% if event.summary %}{{ event.summary }}{% elif event.message %}{{ event.message }}{% elif event.description %}{{ event.description }}{% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="p-3 text-muted">No recent audit events.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><strong>Recent Operations</strong></div>
+  <div class="card-body p-0">
+    {% if operations %}
+      <table class="table table-sm mb-0">
         <thead>
           <tr>
-            <th>Metric</th>
-            <th>Count</th>
+            <th>Operation</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Result</th>
           </tr>
         </thead>
         <tbody>
-          {% for item in graph_counts %}
+          {% for run in operations %}
             <tr>
-              <td>{{ item.label }}</td>
-              <td>{{ item.value }}</td>
+              <td>{% if run.name %}{{ run.name }}{% elif run.operation %}{{ run.operation }}{% elif run.profile %}{{ run.profile }}{% else %}-{% endif %}</td>
+              <td>{% if run.status %}{{ run.status }}{% elif run.get_status_display %}{{ run.get_status_display }}{% else %}-{% endif %}</td>
+              <td>{% if run.started_at %}{{ run.started_at }}{% elif run.created %}{{ run.created }}{% else %}-{% endif %}</td>
+              <td>
+                {% if run.get_absolute_url %}
+                  <a href="{{ run.get_absolute_url }}">View</a>
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
-    </div>
+    {% else %}
+      <div class="p-3 text-muted">No recent operations found.</div>
+    {% endif %}
   </div>
-
-  <div class="card">
-    <div class="card-body">
-      <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:health' %}?fabric_id={{ selected_fabric.pk }}">Open Health</a>
-      <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Open Plane Audit</a>
-      <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:path_resolver' %}">Open Path Resolver</a>
-      <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_drilldown' %}">Open Lane Drilldown</a>
-      <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:blast_radius' %}">Open Physical Cable Blast Radius</a>
-    </div>
-  </div>
-{% else %}
-  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
-{% endif %}
+</div>
 {% endblock %}

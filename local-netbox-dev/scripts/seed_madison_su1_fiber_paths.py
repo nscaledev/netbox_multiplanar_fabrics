@@ -5,22 +5,43 @@ import os
 import re
 from collections import Counter
 from pathlib import Path
+import sys
 
-from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 from dcim.models import Device, Rack
-from netbox_plant_graph.models import CoarseEdge, Fabric, FineEdge, PlaneMembership, SignalLane
-from netbox_plant_graph.services.graph_external_edges import stamp_graph_external_path
+from netbox_plant_graph.models import FiberSegment
+
+
+for candidate in (
+    Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path('/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path(globals().get('__file__', '.')).resolve().parent,
+):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+from madison_v2_graph import (  # noqa: E402
+    ACTIVE_MPO_LANE_INDEXES,
+    delete_marked_connectivity,
+    ensure_fabric,
+    ensure_surfaces_for_devices,
+    shuffle_group_mpos,
+    source_position_plane_numbers_for_shuffle_front,
+    stamp_path_segments,
+)
 
 
 MAD_SITE_SLUG = 'mad-1'
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
 TARGET_SU_TAG = 'nv_su_1'
 TARGET_ROW_ID_TAGS = {'nscale-row-id-a9', 'nscale-row-id-a10'}
-SOURCE_MARKER = 'madison_su1_fiber_policy_v1'
-PATH_KEY = 'madison-su1-leaf16-four-plane-lane-aware-v1'
-OPTICAL_LANE_INDEXES = tuple(range(8))
+SOURCE_MARKER = 'madison_su1_fiber_policy_v2'
+SUPERSEDED_PATH_MARKERS = (
+    'madison_graph_endpoint_test_subset_v2',
+    'madison_first_nvl72_fiber_policy_v2',
+)
+PATH_KEY = 'madison-su1-leaf16-four-plane-lane-aware-v2'
+OPTICAL_LANE_INDEXES = ACTIVE_MPO_LANE_INDEXES
 
 PATTERN_INPUT_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/generated/madison_elevation_shuffle_leaf_patterns.csv'),
@@ -179,6 +200,35 @@ def endpoint(device_name: str, termination: str, ordinal: int) -> tuple[str, str
     return (device_name, termination, ordinal)
 
 
+def plane_by_mpo_for_cassette(rows_by_cassette_mpo: dict[tuple[str, int], dict], cassette_name: str, mpo: int) -> int | None:
+    row = rows_by_cassette_mpo.get((cassette_name, mpo))
+    if row is None:
+        return None
+    return int(row['leaf_row']['plane'])
+
+
+def source_position_plane_numbers(
+    *,
+    rows_by_cassette_mpo: dict[tuple[str, int], dict],
+    cassette_row: dict,
+    leaf_row: dict,
+) -> dict[int, int]:
+    cassette_name = cassette_row['device'].name
+    front_mpo = int(cassette_row['mpo'])
+    group_first_mpo, group_second_mpo = shuffle_group_mpos(front_mpo)
+    first_plane = plane_by_mpo_for_cassette(rows_by_cassette_mpo, cassette_name, group_first_mpo)
+    second_plane = plane_by_mpo_for_cassette(rows_by_cassette_mpo, cassette_name, group_second_mpo)
+    if first_plane is None:
+        first_plane = int(leaf_row['plane'])
+    if second_plane is None:
+        second_plane = int(leaf_row['plane'])
+    return source_position_plane_numbers_for_shuffle_front(
+        front_mpo=front_mpo,
+        first_plane=first_plane,
+        second_plane=second_plane,
+    )
+
+
 def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> list[dict]:
     segments = []
     for pattern_row in pattern_rows:
@@ -186,12 +236,33 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
         osfp_name = pattern_row['gb300_osfp']
         cassette_rows = cassette_mpo_sequence(pattern_row)
         leaf_rows = leaf_endpoint_sequence(pattern_row)
-        for sequence_index, (gb_row, cassette_row, leaf_row) in enumerate(
-            zip(gb_rows, cassette_rows[:126], leaf_rows[:126], strict=True),
-            start=1,
-        ):
+        sequence_rows = [
+            {
+                'gb_row': gb_row,
+                'cassette_row': cassette_row,
+                'leaf_row': leaf_row,
+                'sequence_index': sequence_index,
+            }
+            for sequence_index, (gb_row, cassette_row, leaf_row) in enumerate(
+                zip(gb_rows, cassette_rows[:126], leaf_rows[:126], strict=True),
+                start=1,
+            )
+        ]
+        rows_by_cassette_mpo = {
+            (row['cassette_row']['device'].name, int(row['cassette_row']['mpo'])): row
+            for row in sequence_rows
+        }
+        for row in sequence_rows:
+            sequence_index = row['sequence_index']
+            gb_row = row['gb_row']
+            cassette_row = row['cassette_row']
+            leaf_row = row['leaf_row']
+            source_plane_map = source_position_plane_numbers(
+                rows_by_cassette_mpo=rows_by_cassette_mpo,
+                cassette_row=cassette_row,
+                leaf_row=leaf_row,
+            )
             common = {
-                'plane_number': leaf_row['plane'],
                 'lane_indexes': OPTICAL_LANE_INDEXES,
                 'plane_membership_granularity': 'signal_lane',
                 'cable_profile_name': 'madison-mpo8-smf-patch-optical-lanes',
@@ -232,17 +303,20 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
                         **common,
                         'a': endpoint(gb_row['device'].name, osfp_name, gb_mpo),
                         'b': cassette_row['front'],
-                        'segment_role': 'gb300_to_shuffle_mpo8_optical_lanes',
+                        'segment_role': 'gb300_to_shuffle_mpo12_active_lanes',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'gb300_to_shuffle',
+                            'position_plane_numbers': source_plane_map,
+                            'plane_assignment': 'per_position_from_2x2_shuffle_group',
                         },
                     },
                     {
                         **common,
+                        'plane_number': int(leaf_row['plane']),
                         'a': cassette_row['rear'],
                         'b': endpoint(leaf_row['device_name'], leaf_row['interface'], leaf_row['mpo']),
-                        'segment_role': 'shuffle_to_leaf_mpo8_optical_lanes',
+                        'segment_role': 'shuffle_to_leaf_mpo12_active_lanes',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'shuffle_to_leaf',
@@ -251,33 +325,6 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
                 ]
             )
     return segments
-
-
-def delete_existing_managed_scope(fabric: Fabric, counters: Counter) -> None:
-    managed_coarse_ids = list(
-        CoarseEdge.objects.filter(metadata__graph_external_edge_stamp=True).values_list('pk', flat=True)
-    )
-    counters['existing_managed_fine_edges_deleted'], _ = FineEdge.objects.filter(
-        parent_coarse_edge_id__in=managed_coarse_ids,
-    ).delete()
-    counters['existing_managed_coarse_edges_deleted'], _ = CoarseEdge.objects.filter(
-        pk__in=managed_coarse_ids,
-    ).delete()
-    counters['existing_managed_plane_memberships_deleted'], _ = PlaneMembership.objects.filter(
-        plane__fabric=fabric,
-        metadata__graph_external_edge_stamp=True,
-    ).delete()
-
-
-def lane_membership_counts(fabric: Fabric) -> Counter:
-    signal_lane_type = ContentType.objects.get_for_model(SignalLane)
-    counts = Counter()
-    for plane_number in PlaneMembership.objects.filter(
-        plane__fabric=fabric,
-        member_type=signal_lane_type,
-    ).values_list('plane__plane_number', flat=True):
-        counts[f'plane_{plane_number}_signal_lane_memberships'] += 1
-    return counts
 
 
 def print_dry_run(pattern_rows: list[dict[str, str]], gb_rows: list[dict], segments: list[dict]) -> None:
@@ -294,16 +341,17 @@ def print_dry_run(pattern_rows: list[dict[str, str]], gb_rows: list[dict], segme
     print('  - side A uses GB300 MPO 1 and planes 1/2')
     print('  - side B uses GB300 MPO 2 and planes 3/4')
     print('  - each cassette-pair exposes 128 MPO positions; the first 126 map to the 126 GB300 trays in SU1')
-    print('  - all eight OpticalLanes on each selected MPO8 position are assigned to the leaf-plane for that position')
+    print('  - source MPO-12 active positions are assigned per 2x2 shuffle channel group')
     for segment in segments[:8]:
+        plane_label = segment.get('plane_number') or segment['metadata'].get('position_plane_numbers')
         print(
-            f"  sample plane={segment['plane_number']} lanes={segment['lane_indexes']} "
+            f"  sample plane={plane_label} lanes={segment['lane_indexes']} "
             f"{segment['a']} -> {segment['b']}"
         )
 
 
 def main() -> None:
-    fabric = Fabric.objects.get(name=FABRIC_NAME)
+    fabric = ensure_fabric()
     pattern_rows = read_pattern_rows()
     racks = su1_gb300_racks()
     gb_rows = su1_gb300_trays(racks)
@@ -315,27 +363,21 @@ def main() -> None:
 
     counters = Counter()
     with transaction.atomic():
-        delete_existing_managed_scope(fabric, counters)
-        result = stamp_graph_external_path(
-            path_key=PATH_KEY,
-            fabric=fabric,
-            replace_existing=True,
-            metadata={
-                SOURCE_MARKER: True,
-                'modeled_status': 'planned',
-                'scope': 'complete first SU GB300 trays to SU1 BE leaf switches across all four planes',
-            },
-            segments=segments,
-        )
-        counters['coarse_edges_created'] = len(result.coarse_edges)
-        counters['fine_edges_created'] = len(result.fine_edges)
-        counters.update(lane_membership_counts(fabric))
+        devices = {row['device'] for row in gb_rows}
+        for segment in segments:
+            for device_name, _port_name, _mpo in (segment['a'], segment['b']):
+                device = Device.objects.filter(site__slug=MAD_SITE_SLUG, name=device_name).first()
+                if device is not None:
+                    devices.add(device)
+        ensure_surfaces_for_devices(fabric, sorted(devices, key=lambda device: device.name), marker=SOURCE_MARKER, counters=counters)
+        for marker in SUPERSEDED_PATH_MARKERS:
+            delete_marked_connectivity(marker, fabric=fabric, counters=counters)
+        counters.update(stamp_path_segments(fabric, marker=SOURCE_MARKER, path_key=PATH_KEY, segments=segments))
 
-    print('Madison SU1 fiber policy seed complete.')
+    print('Madison SU1 fiber policy seed complete for netbox_plant_graph v2.')
     for key in sorted(counters):
         print(f'{key}={counters[key]}')
-    print(f'marked_coarse_edges={CoarseEdge.objects.filter(metadata__path_key=PATH_KEY).count()}')
-    print(f'marked_fine_edges={FineEdge.objects.filter(metadata__path_key=PATH_KEY).count()}')
+    print(f'marked_fiber_segments={FiberSegment.objects.filter(fabric=fabric, metadata__path_key=PATH_KEY).count()}')
 
 
 main()

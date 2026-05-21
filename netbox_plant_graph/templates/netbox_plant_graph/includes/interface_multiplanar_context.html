@@ -1,0 +1,47 @@
+{% load helpers %}
+
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">Multiplanar Fabrics</h2>
+  </div>
+  <div class="card-body">
+    {% if has_multiplanar_linkage %}
+      <div class="d-flex flex-wrap gap-2 mb-3">
+        <a href="{{ path_resolver_url }}" class="btn btn-sm btn-outline-primary">Resolve Path</a>
+        <a href="{{ lane_drilldown_url }}" class="btn btn-sm btn-outline-primary">Lane Drilldown</a>
+        <a href="{{ blast_radius_url }}" class="btn btn-sm btn-outline-primary">Blast Radius</a>
+      </div>
+
+      {% if fabric_summaries %}
+        <h3 class="h5">Fabric Scope</h3>
+        <ul class="list-unstyled mb-3">
+          {% for summary in fabric_summaries %}
+            <li class="mb-2">
+              <strong>{{ summary.fabric|linkify }}</strong>
+              <div class="small text-secondary">
+                Endpoints {{ summary.endpoint_count }} / Lanes {{ summary.lane_count }} / Planes {{ summary.plane_count }}
+              </div>
+              <a class="small" href="{{ summary.workspace_url }}">Open Lane Workspace</a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <h3 class="h5">Linked Endpoints</h3>
+      <ul class="list-unstyled mb-0">
+        {% for endpoint in endpoints %}
+          <li class="mb-2">
+            {{ endpoint|linkify }}
+            <div class="small text-secondary">
+              {{ endpoint.fabric|linkify }} / {{ endpoint.node|linkify }}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-secondary mb-0">
+        This interface is not currently anchored to any multiplanar endpoints.
+      </p>
+    {% endif %}
+  </div>
+</div>

@@ -2,8 +2,10 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from dcim.models import Site
 
 from netbox_plant_graph.models import (
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -25,10 +27,12 @@ class V2ModelSemanticsTestCase(TestCase):
             slug='roce-4-plane-shuffle',
             version='v2',
         )
+        self.site = Site.objects.create(name='V2 Model Site', slug='v2-model-site', status='active')
         self.fabric = Fabric.objects.create(
             architecture=self.architecture,
             name='Fabric V2',
             slug='fabric-v2',
+            scope_site=self.site,
         )
         self.plane = Plane.objects.create(fabric=self.fabric, plane_number=1, label='Plane 1')
         self.node = FabricNode.objects.create(
@@ -141,7 +145,19 @@ class V2ModelSemanticsTestCase(TestCase):
             a_endpoint=self.mpo,
             b_endpoint=peer_mpo,
         )
-        strand = FiberStrand.objects.create(segment=segment, strand_index=1)
+        cable_assembly = CableAssembly.objects.create(
+            site=self.site,
+            cable_id='JUMPER-1',
+            manufacturer='Test Manufacturer',
+            model_id='JUMPER',
+            description='Test jumper cable',
+        )
+        strand = FiberStrand.objects.create(
+            segment=segment,
+            strand_index=1,
+            cable_site=cable_assembly.site,
+            cable_id=cable_assembly.cable_id,
+        )
 
         StrandTermination.objects.create(
             strand=strand,
@@ -186,3 +202,89 @@ class V2ModelSemanticsTestCase(TestCase):
 
         self.assertEqual(first.local_mpo_position, second.local_mpo_position)
         self.assertNotEqual(first.wavelength_nm, second.wavelength_nm)
+
+    def test_fiber_strand_allows_unassigned_cable_identity(self):
+        peer_node = FabricNode.objects.create(
+            fabric=self.fabric,
+            name='Panel-2',
+            address='Panel-2',
+            node_kind='passive_assembly',
+        )
+        peer_mpo = Endpoint.objects.create(
+            fabric=self.fabric,
+            node=peer_node,
+            name='FRONT.MPO-2',
+            address='Panel-2.FRONT.MPO-2',
+            endpoint_kind='connector',
+            connector_kind='mpo-12',
+            position_count=12,
+        )
+        segment = FiberSegment.objects.create(
+            fabric=self.fabric,
+            name='Jumper-2',
+            a_endpoint=self.mpo,
+            b_endpoint=peer_mpo,
+        )
+        strand = FiberStrand.objects.create(
+            segment=segment,
+            strand_index=1,
+            cable_site=None,
+            cable_id='',
+        )
+        strand.full_clean()
+        self.assertIsNone(strand.cable_assembly)
+
+    def test_fiber_strand_requires_cable_site_and_cable_id_together(self):
+        peer_node = FabricNode.objects.create(
+            fabric=self.fabric,
+            name='Panel-3',
+            address='Panel-3',
+            node_kind='passive_assembly',
+        )
+        peer_mpo = Endpoint.objects.create(
+            fabric=self.fabric,
+            node=peer_node,
+            name='FRONT.MPO-3',
+            address='Panel-3.FRONT.MPO-3',
+            endpoint_kind='connector',
+            connector_kind='mpo-12',
+            position_count=12,
+        )
+        segment = FiberSegment.objects.create(
+            fabric=self.fabric,
+            name='Jumper-3',
+            a_endpoint=self.mpo,
+            b_endpoint=peer_mpo,
+        )
+
+        strand = FiberStrand(
+            segment=segment,
+            strand_index=1,
+            cable_site=self.site,
+            cable_id='',
+        )
+        with self.assertRaises(ValidationError):
+            strand.full_clean()
+
+    def test_cable_assembly_parent_must_be_same_site(self):
+        other_site = Site.objects.create(name='V2 Model Site 2', slug='v2-model-site-2', status='active')
+        parent = CableAssembly.objects.create(
+            site=self.site,
+            cable_id='TRUNK-1',
+            manufacturer='Test Manufacturer',
+            model_id='TRUNK',
+            description='Parent trunk',
+        )
+        child = CableAssembly(
+            site=other_site,
+            cable_id='JUMPER-CHILD-1',
+            parent_cable=parent,
+            manufacturer='Test Manufacturer',
+            model_id='JUMPER',
+            description='Child jumper',
+        )
+
+        with self.assertRaises(ValidationError) as raised:
+            child.full_clean()
+
+        self.assertIn('parent_cable', raised.exception.error_dict)

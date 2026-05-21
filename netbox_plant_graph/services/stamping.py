@@ -9,6 +9,7 @@ from django.utils.text import slugify
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Site
 
 from netbox_plant_graph.models import (
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -21,7 +22,9 @@ from netbox_plant_graph.models import (
     StrandTermination,
     TransferMap,
     TransportChannel,
+    TransportChannelPositionMap,
 )
+from netbox_plant_graph.services.audit import record_audit_event
 from netbox_plant_graph.services.architecture import ArchitectureFixtureResult, ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import OpticalLanePath, resolve_optical_lane_path
 from netbox_plant_graph.services.stamp_template_validation import validate_stamp_template_spec
@@ -53,6 +56,7 @@ class StampExecutionContext:
     fabric_slug: str
     source_bindings: dict
     netbox_created_objects: dict
+    actor: object | None
 
 
 HYBRID_STAMP_EXECUTORS = {}
@@ -282,6 +286,7 @@ def _channel(
     plane: Plane,
     name: str,
     channel_index: int,
+    source_subinterface: Interface | None = None,
 ) -> TransportChannel:
     channel, _ = TransportChannel.objects.update_or_create(
         endpoint=endpoint,
@@ -290,11 +295,190 @@ def _channel(
             'fabric': fabric,
             'plane': plane,
             'name': name,
-            'speed_gbps': 800,
+            'source_subinterface': source_subinterface,
+            'speed_gbps': 200,
             'metadata': {'fixture': True},
         },
     )
     return channel
+
+
+def _channel_subinterface_spec(template_spec: dict) -> dict:
+    return template_spec.get('channel_subinterfaces') or {}
+
+
+def _channel_map_matrix(template_spec: dict) -> list[dict]:
+    channel_subinterfaces = _channel_subinterface_spec(template_spec)
+    matrix = channel_subinterfaces.get('channel_map_matrix') or []
+    return [entry for entry in matrix if isinstance(entry, dict)]
+
+
+def _channel_index_for_local_mpo_position(
+    *,
+    template_spec: dict,
+    mpo_index: int,
+    position_number: int,
+) -> int:
+    for entry in _channel_map_matrix(template_spec):
+        if entry.get('mpo_index') != mpo_index:
+            continue
+        if position_number in set(entry.get('positions') or []):
+            return int(entry['subinterface_index'])
+    raise ValueError(
+        f'No channel_subinterfaces.channel_map_matrix entry found for MPO {mpo_index} position {position_number}.'
+    )
+
+
+def _stamp_channel_subinterface(
+    *,
+    endpoint: Endpoint,
+    channel_index: int,
+    name_pattern: str = '{parent_name}/{channel_index}',
+    interface_type: str = 'virtual',
+    speed_gbps: int = 200,
+) -> Interface | None:
+    source = endpoint.source
+    if not isinstance(source, Interface):
+        return None
+    child_name = name_pattern.format(parent_name=source.name, channel_index=channel_index)
+    subinterface, _ = Interface.objects.update_or_create(
+        device=source.device,
+        name=child_name,
+        defaults={
+            'type': interface_type,
+            'parent': source,
+            'enabled': source.enabled,
+            'speed': speed_gbps * 1000000,
+            'description': f'Stamped {speed_gbps}G channel {channel_index} for {source.name}',
+        },
+    )
+    return subinterface
+
+
+def _channel_position_map(
+    *,
+    channel: TransportChannel,
+    mpo_endpoint: Endpoint,
+    mpo_position: ConnectorPosition,
+) -> TransportChannelPositionMap:
+    channel_position_map, _ = TransportChannelPositionMap.objects.update_or_create(
+        channel=channel,
+        mpo_position=mpo_position,
+        defaults={
+            'mpo_endpoint': mpo_endpoint,
+            'metadata': {'fixture': True},
+        },
+    )
+    return channel_position_map
+
+
+def _ensure_channel_subinterfaces_for_endpoint(*, template_spec: dict, endpoint: Endpoint) -> dict[int, Interface]:
+    channel_subinterfaces = _channel_subinterface_spec(template_spec)
+    if not channel_subinterfaces.get('enabled'):
+        return {}
+
+    subinterface_indexes = sorted({
+        int(entry['subinterface_index'])
+        for entry in _channel_map_matrix(template_spec)
+        if entry.get('subinterface_index') is not None
+    })
+    if not subinterface_indexes:
+        return {}
+
+    name_pattern = channel_subinterfaces.get('name_pattern') or '{parent_name}/{channel_index}'
+    interface_type = channel_subinterfaces.get('type') or 'virtual'
+    speed_gbps = int(channel_subinterfaces.get('speed_gbps') or 200)
+    stamped = {}
+    for channel_index in subinterface_indexes:
+        subinterface = _stamp_channel_subinterface(
+            endpoint=endpoint,
+            channel_index=channel_index,
+            name_pattern=name_pattern,
+            interface_type=interface_type,
+            speed_gbps=speed_gbps,
+        )
+        if subinterface is not None:
+            stamped[channel_index] = subinterface
+    return stamped
+
+
+def _sync_channel_position_maps_for_endpoint(
+    *,
+    template_spec: dict,
+    channel: TransportChannel,
+    mpo_endpoints: dict[int, Endpoint],
+) -> None:
+    for entry in _channel_map_matrix(template_spec):
+        if int(entry.get('subinterface_index', 0)) != channel.channel_index:
+            continue
+        mpo_index = int(entry['mpo_index'])
+        mpo_endpoint = mpo_endpoints.get(mpo_index)
+        if mpo_endpoint is None:
+            continue
+        for position_number in entry.get('positions') or []:
+            mpo_position = _position(mpo_endpoint, int(position_number))
+            _channel_position_map(
+                channel=channel,
+                mpo_endpoint=mpo_endpoint,
+                mpo_position=mpo_position,
+            )
+
+
+def _fallback_cable_site() -> Site:
+    site, _ = Site.objects.get_or_create(
+        slug='mpf-unassigned',
+        defaults={
+            'name': 'MPF Unassigned',
+            'status': 'active',
+        },
+    )
+    return site
+
+
+def _resolved_cable_site(*, fabric: Fabric, a_endpoint: Endpoint, b_endpoint: Endpoint) -> Site:
+    if fabric.scope_site_id:
+        return fabric.scope_site
+    for endpoint in (a_endpoint, b_endpoint):
+        source = endpoint.source
+        device = getattr(source, 'device', None)
+        site = getattr(device, 'site', None) or getattr(source, 'site', None)
+        if isinstance(site, Site):
+            return site
+        node_source = endpoint.node.source
+        node_site = getattr(node_source, 'site', None)
+        if isinstance(node_site, Site):
+            return node_site
+    return _fallback_cable_site()
+
+
+def _cable_assembly(
+    *,
+    fabric: Fabric,
+    segment_name: str,
+    segment_kind: str,
+    a_endpoint: Endpoint,
+    b_endpoint: Endpoint,
+    wavelength_nm: Decimal,
+) -> CableAssembly:
+    site = _resolved_cable_site(fabric=fabric, a_endpoint=a_endpoint, b_endpoint=b_endpoint)
+    cable_id = f'{fabric.slug}:{segment_name}'
+    cable, _ = CableAssembly.objects.update_or_create(
+        site=site,
+        cable_id=cable_id,
+        defaults={
+            'manufacturer': 'Unknown',
+            'serial_number': '',
+            'model_id': segment_kind,
+            'description': f'{segment_kind} cable assembly for {segment_name}',
+            'parent_cable': None,
+            'metadata': {
+                'fixture': True,
+                'fabric_id': fabric.pk,
+                'wavelengths_nm': [str(wavelength_nm)],
+            },
+        },
+    )
+    return cable
 
 
 def _fiber_strand(
@@ -321,10 +505,20 @@ def _fiber_strand(
             },
         },
     )
+    cable_assembly = _cable_assembly(
+        fabric=fabric,
+        segment_name=name,
+        segment_kind=segment_kind,
+        a_endpoint=a_endpoint,
+        b_endpoint=b_endpoint,
+        wavelength_nm=wavelength_nm,
+    )
     strand, _ = FiberStrand.objects.update_or_create(
         segment=segment,
         strand_index=1,
         defaults={
+            'cable_site': cable_assembly.site,
+            'cable_id': cable_assembly.cable_id,
             'label': f'{name}.strand-1',
             'metadata': {
                 'fixture': True,
@@ -430,8 +624,18 @@ def _managed_object_ids(fabric: Fabric) -> dict[str, list[int]]:
             .order_by('endpoint__address', 'channel_index')
             .values_list('pk', flat=True)
         ),
+        'transport_channel_position_maps': list(
+            TransportChannelPositionMap.objects.filter(channel__fabric=fabric)
+            .order_by('channel__endpoint__address', 'channel__channel_index', 'mpo_position__position_number', 'pk')
+            .values_list('pk', flat=True)
+        ),
         'fiber_segments': list(
             FiberSegment.objects.filter(fabric=fabric).order_by('name').values_list('pk', flat=True)
+        ),
+        'cable_assemblies': list(
+            CableAssembly.objects.filter(metadata__fabric_id=fabric.pk)
+            .order_by('site__name', 'cable_id', 'pk')
+            .values_list('pk', flat=True)
         ),
         'fiber_strands': list(
             FiberStrand.objects.filter(segment__fabric=fabric)
@@ -510,6 +714,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
 
     gpu_osfps = {}
     gpu_mpos = {}
+    gpu_mpos_by_osfp = {}
     gpu_spec = template_spec['gpu_tray']
     for osfp_index in range(1, gpu_spec['osfp_count'] + 1):
         osfp = _endpoint(
@@ -523,6 +728,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             metadata={'fixture': True, 'role_slug': 'gpu_osfp'},
         )
         gpu_osfps[osfp_index] = osfp
+        gpu_mpos_by_osfp[osfp_index] = {}
         for mpo_index in range(1, gpu_spec['mpo_per_osfp'] + 1):
             mpo = _endpoint(
                 fabric=fabric,
@@ -536,6 +742,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
                 metadata={'fixture': True, 'role_slug': 'gpu_mpo', 'mpo_index': mpo_index},
             )
             gpu_mpos[(osfp_index, mpo_index)] = mpo
+            gpu_mpos_by_osfp[osfp_index][mpo_index] = mpo
 
     shuffle_nodes = {}
     shuffle_front_mpos = {}
@@ -578,6 +785,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
     leaf_nodes = {}
     leaf_osfps = {}
     leaf_mpos = {}
+    leaf_mpos_by_leaf = {}
     for leaf_index in range(1, template_spec['leaf_ports']['count'] + 1):
         leaf = _node(
             fabric=fabric,
@@ -601,6 +809,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             metadata={'fixture': True, 'role_slug': 'leaf_osfp'},
         )
         leaf_osfps[leaf_index] = osfp
+        leaf_mpos_by_leaf[leaf_index] = {}
         for mpo_index in range(1, gpu_spec['mpo_per_osfp'] + 1):
             leaf_mpos[(leaf_index, mpo_index)] = _endpoint(
                 fabric=fabric,
@@ -613,6 +822,14 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
                 position_count=gpu_spec['positions_per_mpo'],
                 metadata={'fixture': True, 'role_slug': 'leaf_mpo', 'mpo_index': mpo_index},
             )
+            leaf_mpos_by_leaf[leaf_index][mpo_index] = leaf_mpos[(leaf_index, mpo_index)]
+
+    channel_subinterfaces_by_endpoint = {}
+    for osfp_endpoint in list(gpu_osfps.values()) + list(leaf_osfps.values()):
+        channel_subinterfaces_by_endpoint[osfp_endpoint.address] = _ensure_channel_subinterfaces_for_endpoint(
+            template_spec=template_spec,
+            endpoint=osfp_endpoint,
+        )
 
     source_lanes = []
     destination_lanes = []
@@ -624,17 +841,29 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
         plane = planes[plane_number]
         wavelength_nm = DEFAULT_WAVELENGTHS_NM[plane_number]
         gpu_osfp = gpu_osfps[proof_path['gpu_osfp']]
-        gpu_mpo = gpu_mpos[(proof_path['gpu_osfp'], 1)]
+        gpu_mpo_index = 1
+        gpu_mpo = gpu_mpos[(proof_path['gpu_osfp'], gpu_mpo_index)]
         cassette = shuffle_nodes[proof_path['cassette']]
         shuffle_front_mpo = shuffle_front_mpos[(proof_path['cassette'], 1)]
         shuffle_rear_mpo = shuffle_rear_mpos[(proof_path['cassette'], 1)]
         leaf_osfp = leaf_osfps[proof_path['leaf']]
-        leaf_mpo = leaf_mpos[(proof_path['leaf'], 1)]
+        leaf_mpo_index = 1
+        leaf_mpo = leaf_mpos[(proof_path['leaf'], leaf_mpo_index)]
 
         gpu_position = _position(gpu_mpo, proof_path['front_position'])
         shuffle_front_position = _position(shuffle_front_mpo, proof_path['front_position'])
         shuffle_rear_position = _position(shuffle_rear_mpo, proof_path['rear_position'])
         leaf_position = _position(leaf_mpo, proof_path['rear_position'])
+        gpu_channel_index = _channel_index_for_local_mpo_position(
+            template_spec=template_spec,
+            mpo_index=gpu_mpo_index,
+            position_number=gpu_position.position_number,
+        )
+        leaf_channel_index = _channel_index_for_local_mpo_position(
+            template_spec=template_spec,
+            mpo_index=leaf_mpo_index,
+            position_number=leaf_position.position_number,
+        )
 
         pair_key = f'{fabric.slug}:plane-{plane_number}'
         gpu_channel = _channel(
@@ -642,14 +871,26 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             endpoint=gpu_osfp,
             plane=plane,
             name=f'GPU plane {plane_number}',
-            channel_index=1,
+            channel_index=gpu_channel_index,
+            source_subinterface=channel_subinterfaces_by_endpoint.get(gpu_osfp.address, {}).get(gpu_channel_index),
         )
         leaf_channel = _channel(
             fabric=fabric,
             endpoint=leaf_osfp,
             plane=plane,
             name=f'Leaf plane {plane_number}',
-            channel_index=1,
+            channel_index=leaf_channel_index,
+            source_subinterface=channel_subinterfaces_by_endpoint.get(leaf_osfp.address, {}).get(leaf_channel_index),
+        )
+        _sync_channel_position_maps_for_endpoint(
+            template_spec=template_spec,
+            channel=gpu_channel,
+            mpo_endpoints=gpu_mpos_by_osfp[proof_path['gpu_osfp']],
+        )
+        _sync_channel_position_maps_for_endpoint(
+            template_spec=template_spec,
+            channel=leaf_channel,
+            mpo_endpoints=leaf_mpos_by_leaf[proof_path['leaf']],
         )
 
         _fiber_strand(
@@ -697,7 +938,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             local_mpo_endpoint=gpu_mpo,
             local_mpo_position=gpu_position,
             lane_index=1,
-            local_mpo_index=1,
+            local_mpo_index=gpu_mpo_index,
             direction='send',
             wavelength_nm=wavelength_nm,
             pair_key=pair_key,
@@ -710,7 +951,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             local_mpo_endpoint=leaf_mpo,
             local_mpo_position=leaf_position,
             lane_index=1,
-            local_mpo_index=1,
+            local_mpo_index=leaf_mpo_index,
             direction='receive',
             wavelength_nm=wavelength_nm,
             pair_key=pair_key,
@@ -747,6 +988,20 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
         },
         metadata={'fixture': True},
     )
+    record_audit_event(
+        event_type='stamp',
+        fabric=fabric,
+        actor=context.actor,
+        subject=stamp_run,
+        outcome='ok',
+        message=f'Stamp run completed for fabric {fabric.slug}.',
+        payload={
+            'stamp_run_id': stamp_run.pk,
+            'template_id': template.pk,
+            'source_lane_count': len(source_lanes),
+            'destination_lane_count': len(destination_lanes),
+        },
+    )
 
     return MiniFabricStampResult(
         fabric=fabric,
@@ -765,6 +1020,7 @@ def execute_stamp_template(
     fabric_slug: str,
     source_bindings: dict | None = None,
     creation_options: dict | None = None,
+    actor=None,
 ) -> MiniFabricStampResult:
     fixture = ensure_roce_4plane_shuffle_architecture()
     if template.architecture_id and template.architecture_id != fixture.architecture.pk:
@@ -795,6 +1051,7 @@ def execute_stamp_template(
         fabric_slug=fabric_slug,
         source_bindings=resolved_source_bindings,
         netbox_created_objects=netbox_created_objects,
+        actor=actor,
     )
     return executor(context)
 
@@ -803,10 +1060,12 @@ def stamp_roce_4plane_mini_fabric(
     *,
     fabric_name: str = 'RoCE 4-plane mini proof',
     fabric_slug: str = 'roce-4-plane-mini-proof',
+    actor=None,
 ) -> MiniFabricStampResult:
     fixture = ensure_roce_4plane_shuffle_architecture()
     return execute_stamp_template(
         template=fixture.stamp_template,
         fabric_name=fabric_name,
         fabric_slug=fabric_slug,
+        actor=actor,
     )

@@ -1,31 +1,183 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Health</h1>
+{% url 'plugins:netbox_plant_graph:graph_overview' as graph_overview_url %}
+{% url 'plugins:netbox_plant_graph:audit_dashboard' as audit_dashboard_url %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+{% url 'plugins:netbox_plant_graph:path_resolver' as path_resolver_url %}
+{% url 'plugins:netbox_plant_graph:lane_drilldown' as lane_drilldown_url %}
+{% url 'plugins:netbox_plant_graph:lane_compare' as lane_compare_url %}
+{% url 'plugins:netbox_plant_graph:blast_radius' as blast_radius_url %}
+{% url 'plugins:netbox_plant_graph:graph-build-run_list' as graph_build_run_list_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Health</h1>
+    <p class="text-muted mb-0">Fabric and plane-level health status, unresolved policy signals, and actionable drill-down links.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if graph_overview_url %}
+      <a href="{{ graph_overview_url }}" class="btn btn-outline-secondary btn-sm">Graph Overview</a>
+    {% endif %}
+    {% if selected_fabric and audit_dashboard_url %}
+      <a href="{{ audit_dashboard_url }}?fabric_id={{ selected_fabric.pk }}" class="btn btn-outline-secondary btn-sm">Audit Dashboard</a>
+    {% endif %}
+  </div>
+</div>
+
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3">
-      <div class="col-md-6">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-lg-5 col-md-6">
         <label class="form-label" for="fabric_id">Fabric</label>
         <select class="form-select" id="fabric_id" name="fabric_id">
+          <option value="">Select fabric</option>
           {% for fabric in fabrics %}
             <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2 align-self-end">
-        <div class="d-flex flex-wrap gap-2">
-          <button type="submit" class="btn btn-primary">Refresh</button>
-          {% if selected_fabric %}
-            <a class="btn btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
-          {% endif %}
+      {% if form %}
+        <div class="col-lg-5 col-md-6">
+          {{ form.as_p }}
         </div>
+      {% endif %}
+      <div class="col-lg-2 col-md-12 d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">Refresh</button>
       </div>
     </form>
   </div>
 </div>
 
-{% if health %}
+{% if health or health_summary %}
+  {% if health_summary %}
+    {% with effective_summary=health_summary %}
+      <div class="row">
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Status</div>
+              <div class="fs-5 fw-semibold">{% if health and health.status %}{{ health.status }}{% elif effective_summary.status %}{{ effective_summary.status }}{% else %}unknown{% endif %}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Planes Healthy</div>
+              <div class="fs-5 fw-semibold">
+                {% if effective_summary.healthy_planes or effective_summary.healthy_planes == 0 %}{{ effective_summary.healthy_planes }}{% else %}0{% endif %}
+                /
+                {% if effective_summary.planes_total or effective_summary.planes_total == 0 %}
+                  {{ effective_summary.planes_total }}
+                {% elif plane_rows %}
+                  {{ plane_rows|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Signal Lanes</div>
+              <div class="fs-5 fw-semibold">
+                {% if effective_summary.signal_lanes or effective_summary.signal_lanes == 0 %}
+                  {{ effective_summary.signal_lanes }}
+                {% elif lane_counts %}
+                  {{ lane_counts|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Findings</div>
+              <div class="fs-5 fw-semibold">
+                {% if health and health.findings.total %}
+                  {{ health.findings.total }}
+                {% elif effective_summary.findings_total or effective_summary.findings_total == 0 %}
+                  {{ effective_summary.findings_total }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endwith %}
+  {% elif health and health.summary %}
+    {% with effective_summary=health.summary %}
+      <div class="row">
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Status</div>
+              <div class="fs-5 fw-semibold">{% if health.status %}{{ health.status }}{% elif effective_summary.status %}{{ effective_summary.status }}{% else %}unknown{% endif %}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Planes Healthy</div>
+              <div class="fs-5 fw-semibold">
+                {% if effective_summary.healthy_planes or effective_summary.healthy_planes == 0 %}{{ effective_summary.healthy_planes }}{% else %}0{% endif %}
+                /
+                {% if effective_summary.planes_total or effective_summary.planes_total == 0 %}
+                  {{ effective_summary.planes_total }}
+                {% elif plane_rows %}
+                  {{ plane_rows|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Signal Lanes</div>
+              <div class="fs-5 fw-semibold">
+                {% if effective_summary.signal_lanes or effective_summary.signal_lanes == 0 %}
+                  {{ effective_summary.signal_lanes }}
+                {% elif lane_counts %}
+                  {{ lane_counts|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="small text-muted mb-1">Findings</div>
+              <div class="fs-5 fw-semibold">
+                {% if health and health.findings.total %}
+                  {{ health.findings.total }}
+                {% elif effective_summary.findings_total or effective_summary.findings_total == 0 %}
+                  {{ effective_summary.findings_total }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endwith %}
+  {% endif %}
+
   <div class="row">
     <div class="col-lg-4 mb-3">
       <div class="card h-100">
@@ -84,13 +236,36 @@
               {% if unresolved_summaries_url %}
                 <a class="btn btn-sm btn-outline-secondary" href="{{ unresolved_summaries_url }}">Unresolved Summaries</a>
               {% endif %}
-              <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:graph-build-run_list' %}">Graph Build Runs</a>
+              {% if graph_build_run_list_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ graph_build_run_list_url }}">Graph Build Runs</a>
+              {% endif %}
             </div>
           {% else %}
             <p class="mb-0">No durable unresolved data is available.</p>
           {% endif %}
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header"><strong>Quick Actions</strong></div>
+    <div class="card-body d-flex flex-wrap gap-2">
+      {% if selected_fabric and plane_audit_url %}
+        <a class="btn btn-outline-primary btn-sm" href="{{ plane_audit_url }}?fabric_id={{ selected_fabric.pk }}">Run Plane Audit</a>
+      {% endif %}
+      {% if selected_fabric and path_resolver_url %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ path_resolver_url }}?fabric_id={{ selected_fabric.pk }}">Path Resolver</a>
+      {% endif %}
+      {% if selected_fabric and lane_drilldown_url %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ lane_drilldown_url }}?fabric_id={{ selected_fabric.pk }}">Lane Drilldown</a>
+      {% endif %}
+      {% if selected_fabric and lane_compare_url %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ lane_compare_url }}?fabric_id={{ selected_fabric.pk }}">Lane Compare</a>
+      {% endif %}
+      {% if selected_fabric and blast_radius_url %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ blast_radius_url }}?fabric_id={{ selected_fabric.pk }}">Blast Radius</a>
+      {% endif %}
     </div>
   </div>
 
@@ -132,7 +307,9 @@
                   {% if plane.durable_findings_url %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ plane.durable_findings_url }}">Durable Findings</a>
                   {% endif %}
-                  <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+                  {% if plane_audit_url and selected_fabric %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ plane_audit_url }}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
+                  {% endif %}
                 </div>
               </td>
             </tr>
@@ -146,6 +323,6 @@
     </div>
   </div>
 {% else %}
-  <div class="alert alert-info mb-0">No fabrics exist yet.</div>
+  <div class="alert alert-info mb-0">Select a fabric to view health status and findings.</div>
 {% endif %}
 {% endblock %}

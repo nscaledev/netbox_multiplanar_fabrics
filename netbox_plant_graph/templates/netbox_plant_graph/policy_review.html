@@ -1,204 +1,372 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
+{% url 'plugins:netbox_plant_graph:policy_review' as policy_review_url %}
+{% url 'plugins:netbox_plant_graph:audit_dashboard' as audit_dashboard_url %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+{% url 'plugins:netbox_plant_graph:audit_triage' as audit_triage_url %}
+{% url 'plugins:netbox_plant_graph:disjointness_exception_request' as disjointness_exception_request_url %}
+
 <h1>Policy Review</h1>
+
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3">
-      <div class="col-md-4">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-lg-4 col-md-6">
         <label class="form-label" for="fabric_id">Fabric</label>
         <select class="form-select" id="fabric_id" name="fabric_id">
+          <option value="">-- Select fabric --</option>
           {% for fabric in fabrics %}
-            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+            <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% elif fabric_id and fabric.pk|stringformat:"s" == fabric_id|stringformat:"s" %} selected{% endif %}>{{ fabric.name }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-4">
+      <div class="col-lg-4 col-md-6">
         <label class="form-label" for="plane_id">Plane</label>
         <select class="form-select" id="plane_id" name="plane_id">
           <option value="">All planes</option>
           {% for plane in plane_choices %}
-            <option value="{{ plane.pk }}"{% if selected_plane and plane.pk == selected_plane.pk %} selected{% endif %}>{{ plane.fabric.name }} / Plane {{ plane.plane_number }}</option>
+            <option value="{{ plane.pk }}"{% if selected_plane and plane.pk == selected_plane.pk %} selected{% endif %}>
+              {% if plane.fabric %}{{ plane.fabric.name }} / {% endif %}{{ plane.label|default:'Plane' }} {{ plane.plane_number|default:'' }}
+            </option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2 align-self-end">
-        <button type="submit" class="btn btn-primary">Review</button>
+      <div class="col-lg-4 d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">Refresh</button>
+        {% if audit_dashboard_url %}
+          <a class="btn btn-outline-secondary" href="{{ audit_dashboard_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Dashboard</a>
+        {% endif %}
+        {% if plane_audit_url %}
+          <a class="btn btn-outline-secondary" href="{{ plane_audit_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Plane Audit</a>
+        {% endif %}
+        {% if disjointness_exception_request_url %}
+          <a class="btn btn-outline-secondary" href="{{ disjointness_exception_request_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Request Exception</a>
+        {% endif %}
       </div>
     </form>
   </div>
 </div>
 
-{% if evaluation %}
-  <div class="row">
-    <div class="col-lg-5 mb-3">
-      <div class="card h-100">
-        <div class="card-header">Policy Summary</div>
-        <div class="card-body">
-          <dl class="row mb-0">
-            <dt class="col-sm-5">Fabric</dt>
-            <dd class="col-sm-7">
-              {% if evaluation.fabric.url %}
-                <a href="{{ evaluation.fabric.url }}">{{ evaluation.fabric.display }}</a>
-              {% else %}
-                {{ evaluation.fabric.display }}
-              {% endif %}
-            </dd>
-            <dt class="col-sm-5">Policy Mode</dt>
-            <dd class="col-sm-7">{{ evaluation.policy_mode }}</dd>
-            <dt class="col-sm-5">Artifact Shares</dt>
-            <dd class="col-sm-7">{{ evaluation.artifact_shares|length }}</dd>
-            <dt class="col-sm-5">Edge Bridges</dt>
-            <dd class="col-sm-7">{{ evaluation.edge_bridges|length }}</dd>
-            <dt class="col-sm-5">Domains</dt>
-            <dd class="col-sm-7">{{ domain_rows|length }}</dd>
-            <dt class="col-sm-5">Active Exceptions</dt>
-            <dd class="col-sm-7">{{ exception_review.active_exceptions|length }}</dd>
-            <dt class="col-sm-5">Covered Exceptions</dt>
-            <dd class="col-sm-7">{{ exception_review.covered_exception_ids|length }}</dd>
-            <dt class="col-sm-5">Drifted Exceptions</dt>
-            <dd class="col-sm-7">{{ exception_review.drifted_exceptions|length }}</dd>
-          </dl>
-          {% if plane_filter_note %}
-            <div class="alert alert-info mb-0 mt-3">{{ plane_filter_note }}</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-    <div class="col-lg-7 mb-3">
-      <div class="card h-100">
-        <div class="card-header">Evidence Surface</div>
-        <div class="card-body">
-          <ul class="mb-3">
-            <li>Policy findings still surface the evidence even when an active exception downgrades severity.</li>
-            <li>Contamination domains are grouped deterministically from artifact shares and cross-plane bridges.</li>
-            <li>Active exceptions are topology intent; suppressions remain audit-workflow presentation state.</li>
-          </ul>
-          <div class="d-flex flex-wrap gap-2">
-            <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:plane_audit' %}?fabric_id={{ selected_fabric.pk }}">Plane Audit</a>
-            <a class="btn btn-sm btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}?fabric_id={{ selected_fabric.pk }}">Audit Dashboard</a>
-            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:lane_compare' %}">Lane Compare</a>
-            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:disjointness-exception_list' %}">Exception List</a>
-            <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:disjointness-exception_add' %}">Add Exception</a>
-          </div>
-        </div>
+{% if plane_filter_note %}
+  <div class="alert alert-info">{{ plane_filter_note }}</div>
+{% endif %}
+
+<div class="row">
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Finding Status</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% if finding_status_counts and finding_status_counts.items %}
+              {% for status_name, status_count in finding_status_counts.items %}
+                <tr>
+                  <td>{{ status_name }}</td>
+                  <td class="text-end">{{ status_count }}</td>
+                </tr>
+              {% endfor %}
+            {% elif finding_status_counts %}
+              {% for metric in finding_status_counts %}
+                <tr>
+                  <td>{{ metric.name|default:metric.status|default:'Unknown' }}</td>
+                  <td class="text-end">{{ metric.value|default:metric.count|default:'0' }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td>No policy findings in scope.</td>
+                <td class="text-end">0</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Suppression State</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% if suppression_summary and suppression_summary.items %}
+              {% for key, value in suppression_summary.items %}
+                <tr>
+                  <td>{{ key }}</td>
+                  <td class="text-end">{{ value }}</td>
+                </tr>
+              {% endfor %}
+            {% elif suppression_summary %}
+              {% for metric in suppression_summary %}
+                <tr>
+                  <td>{{ metric.name|default:metric.label|default:'Metric' }}</td>
+                  <td class="text-end">{{ metric.value|default:metric.count|default:'0' }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td>Active suppressions</td>
+                <td class="text-end">{{ active_suppressions|length }}</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Exception Load</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-7">Requests in scope</dt>
+          <dd class="col-sm-5 text-end">{{ exception_requests|default:exception_rows|length }}</dd>
+          <dt class="col-sm-7">Active suppressions</dt>
+          <dd class="col-sm-5 text-end">{{ active_suppressions|length }}</dd>
+          <dt class="col-sm-7">Audit events</dt>
+          <dd class="col-sm-5 text-end">{{ audit_events|length }}</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
 
-  <div class="card mb-3">
-    <div class="card-header">Contamination Domains</div>
-    <div class="card-body">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Domain</th>
-            <th>Planes</th>
-            <th>Artifacts</th>
-            <th>Attachment Units</th>
-            <th>Signal Lanes</th>
-            <th>Exception Coverage</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
+<div class="card mb-3">
+  <div class="card-header">Policy Findings</div>
+  <div class="card-body">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Finding</th>
+          <th>Severity</th>
+          <th>Status</th>
+          <th>Object</th>
+          <th>Message</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if finding_rows %}
+          {% for row in finding_rows %}
+            {% with finding=row.finding|default:row %}
+              <tr>
+                <td>
+                  {% if finding.get_absolute_url %}
+                    <a href="{{ finding.get_absolute_url }}">{{ finding }}</a>
+                  {% elif finding.url %}
+                    <a href="{{ finding.url }}">{{ finding.display|default:finding }}</a>
+                  {% else %}
+                    {{ finding.display|default:finding }}
+                  {% endif %}
+                </td>
+                <td>{{ finding.severity|default:row.severity|default:'-' }}</td>
+                <td>{{ finding.status|default:row.status|default:'-' }}</td>
+                <td>
+                  {% with obj=row.affected_object|default:finding.object %}
+                    {% if obj.url %}
+                      <a href="{{ obj.url }}">{{ obj.display|default:obj }}</a>
+                    {% elif obj.get_absolute_url %}
+                      <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                    {% elif obj %}
+                      {{ obj }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  {% endwith %}
+                </td>
+                <td>{{ finding.message|default:'-' }}</td>
+                <td class="text-end">
+                  {% if audit_triage_url %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ audit_triage_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Triage</a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endwith %}
+          {% endfor %}
+        {% elif findings %}
+          {% for finding in findings %}
+            <tr>
+              <td>
+                {% if finding.get_absolute_url %}
+                  <a href="{{ finding.get_absolute_url }}">{{ finding }}</a>
+                {% else %}
+                  {{ finding }}
+                {% endif %}
+              </td>
+              <td>{{ finding.severity|default:'-' }}</td>
+              <td>{{ finding.status|default:'-' }}</td>
+              <td>
+                {% with obj=finding.object %}
+                  {% if obj.get_absolute_url %}
+                    <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                  {% elif obj %}
+                    {{ obj }}
+                  {% else %}
+                    -
+                  {% endif %}
+                {% endwith %}
+              </td>
+              <td>{{ finding.message|default:'-' }}</td>
+              <td class="text-end">
+                {% if audit_triage_url %}
+                  <a class="btn btn-sm btn-outline-primary" href="{{ audit_triage_url }}{% if selected_fabric %}?fabric_id={{ selected_fabric.pk }}{% elif fabric_id %}?fabric_id={{ fabric_id }}{% endif %}">Triage</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        {% elif domain_rows %}
           {% for row in domain_rows %}
             <tr>
-              <td><code>{{ row.domain.domain_key|slice:":12" }}</code></td>
-              <td>{{ row.domain.plane_ids|join:", " }}</td>
-              <td>
-                {% for artifact in row.domain.artifacts %}
-                  {% if not forloop.first %}, {% endif %}
-                  {% if artifact.url %}<a href="{{ artifact.url }}">{{ artifact.display }}</a>{% else %}{{ artifact.display }}{% endif %}
-                {% endfor %}
-              </td>
-              <td>{{ row.domain.attachment_units|length }}</td>
-              <td>{{ row.domain.signal_lane_count }}</td>
-              <td>
-                {% if row.matched_exceptions %}
-                  {% for exception in row.matched_exceptions %}
-                    {% if not forloop.first %}, {% endif %}
-                    <a href="{{ exception.get_absolute_url }}">{{ exception.exception_type }}</a>
-                  {% endfor %}
-                {% else %}
-                  <span class="text-muted">None</span>
+              <td><code>{{ row.domain.domain_key|default:row.domain }}</code></td>
+              <td>{{ row.domain.highest_risk_severity|default:'-' }}</td>
+              <td>{{ row.domain.coverage_status|default:'-' }}</td>
+              <td>{{ row.domain.signal_lane_count|default:'-' }}</td>
+              <td>Contamination domain</td>
+              <td class="text-end">
+                {% if row.workspace_url %}
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ row.workspace_url }}">Lane Workspace</a>
                 {% endif %}
               </td>
-              <td>
-                <div class="d-flex flex-wrap gap-2">
-                  <a class="btn btn-sm btn-outline-primary" href="{{ row.workspace_url }}">Lane Workspace</a>
-                  <a class="btn btn-sm btn-outline-secondary" href="{{ row.finding_url }}">Policy Findings</a>
-                </div>
-              </td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="7">No contamination domains are active for the selected scope.</td>
             </tr>
           {% endfor %}
-        </tbody>
-      </table>
+        {% else %}
+          <tr>
+            <td colspan="6">No policy findings are available for this scope.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Active Suppressions</div>
+      <div class="card-body">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Finding</th>
+              <th>Reason</th>
+              <th>Expires</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for suppression in active_suppressions %}
+              <tr>
+                <td>
+                  {% if suppression.finding and suppression.finding.get_absolute_url %}
+                    <a href="{{ suppression.finding.get_absolute_url }}">{{ suppression.finding }}</a>
+                  {% elif suppression.finding %}
+                    {{ suppression.finding }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>{{ suppression.reason|default:'-' }}</td>
+                <td>{{ suppression.expires_at|default:'Never' }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3">No active suppressions.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
-  <div class="card mb-3">
-    <div class="card-header">Active Exceptions</div>
-    <div class="card-body">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Exception</th>
-            <th>Target</th>
-            <th>Plane Pair</th>
-            <th>Coverage</th>
-            <th>Expires</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in exception_rows %}
+  <div class="col-xl-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header">Exception Requests</div>
+      <div class="card-body">
+        <table class="table table-hover mb-0">
+          <thead>
             <tr>
-              <td><a href="{{ row.exception.get_absolute_url }}">{{ row.exception.exception_type }}</a></td>
-              <td>
-                {% if row.target_reference %}
-                  {% if row.target_reference.url %}
-                    <a href="{{ row.target_reference.url }}">{{ row.target_reference.display }}</a>
-                  {% else %}
-                    {{ row.target_reference.display }}
-                  {% endif %}
-                {% else %}
-                  <span class="text-muted">None</span>
-                {% endif %}
-              </td>
-              <td>{{ row.exception.plane_a }} / {{ row.exception.plane_b }}</td>
-              <td>
-                {% if row.covered %}
-                  Covered
-                {% else %}
-                  <span class="text-warning">Drifted</span>
-                {% endif %}
-              </td>
-              <td>{{ row.exception.expires_at|default:'Never' }}</td>
-              <td>
-                <div class="d-flex flex-wrap gap-2">
-                  {% for action in row.actions %}
-                    <form method="post" action="{{ action.url }}">
-                      {% csrf_token %}
-                      <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                      <button type="submit" class="btn btn-sm btn-outline-secondary">{{ action.label }}</button>
-                    </form>
-                  {% endfor %}
-                </div>
-              </td>
+              <th>Exception</th>
+              <th>Status</th>
+              <th>Plane Pair</th>
+              <th></th>
             </tr>
-          {% empty %}
-            <tr>
-              <td colspan="6">No active disjointness exceptions are defined for the selected scope.</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for row in exception_requests|default:exception_rows %}
+              {% with exception=row.exception|default:row %}
+                <tr>
+                  <td>
+                    {% if exception.get_absolute_url %}
+                      <a href="{{ exception.get_absolute_url }}">{{ exception }}</a>
+                    {% else %}
+                      {{ exception.exception_type|default:exception }}
+                    {% endif %}
+                  </td>
+                  <td>{{ exception.status|default:'-' }}</td>
+                  <td>{{ exception.plane_a|default:'-' }} / {{ exception.plane_b|default:'-' }}</td>
+                  <td class="text-end">
+                    {% if exception.pk %}
+                      <div class="d-flex flex-wrap gap-2 justify-content-end">
+                        <form method="post" action="{% url 'plugins:netbox_plant_graph:disjointness_exception_approve' pk=exception.pk %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          <button type="submit" class="btn btn-sm btn-outline-success">Approve</button>
+                        </form>
+                        <form method="post" action="{% url 'plugins:netbox_plant_graph:disjointness_exception_expire' pk=exception.pk %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          <button type="submit" class="btn btn-sm btn-outline-secondary">Expire</button>
+                        </form>
+                        <form method="post" action="{% url 'plugins:netbox_plant_graph:disjointness_exception_reactivate' pk=exception.pk %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          <button type="submit" class="btn btn-sm btn-outline-primary">Reactivate</button>
+                        </form>
+                      </div>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endwith %}
+            {% empty %}
+              <tr>
+                <td colspan="4">No exceptions in scope.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
-{% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header">Recent Audit Events</div>
+  <div class="card-body">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Event</th>
+          <th>Outcome</th>
+          <th>Created</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in audit_events %}
+          <tr>
+            <td>{{ event.event_type|default:event.kind|default:'-' }}</td>
+            <td>{{ event.outcome|default:event.status|default:'-' }}</td>
+            <td>{{ event.created|default:event.created_at|default:'-' }}</td>
+            <td>{{ event.message|default:'-' }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="4">No audit events in scope.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

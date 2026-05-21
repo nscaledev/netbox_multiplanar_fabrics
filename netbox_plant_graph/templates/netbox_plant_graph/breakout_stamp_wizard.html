@@ -1,95 +1,214 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Apply Breakout Template — {{ template.name }}</h1>
+{% url 'plugins:netbox_plant_graph:template_library' as template_library_url %}
+{% url 'plugins:netbox_plant_graph:rack_population_stamp_wizard' pk=template.pk as rack_wizard_url %}
+{% url 'plugins:netbox_plant_graph:deployment_plan_workflow' pk=template.pk as deployment_workflow_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Breakout Stamp Wizard</h1>
+    <p class="text-muted mb-0">Apply breakout interface generation rules to a target device.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if template_library_url %}
+      <a href="{{ template_library_url }}" class="btn btn-outline-secondary btn-sm">Template Library</a>
+    {% endif %}
+    {% if rack_wizard_url %}
+      <a href="{{ rack_wizard_url }}" class="btn btn-outline-secondary btn-sm">Rack Population Wizard</a>
+    {% endif %}
+    {% if deployment_workflow_url %}
+      <a href="{{ deployment_workflow_url }}" class="btn btn-outline-secondary btn-sm">Deployment Workflow</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
 
 <div class="row">
-  <div class="col-md-4">
+  <div class="col-lg-4 mb-3">
     <div class="card mb-3">
       <div class="card-header"><strong>Template Summary</strong></div>
       <div class="card-body">
-        <table class="table table-sm">
-          {% if template.device_type %}<tr><th>Device Type</th><td>{{ template.device_type }}</td></tr>{% endif %}
-          <tr><th>Interface Specs</th><td>{{ specs|length }}</td></tr>
-        </table>
+        {% if template %}
+          <table class="table table-sm mb-0">
+            <tr><th>Name</th><td>{{ template.name|default:template }}</td></tr>
+            <tr><th>Device Type</th><td>{{ template.device_type|default:"-" }}</td></tr>
+            <tr><th>Interface Specs</th><td>{{ specs|length }}</td></tr>
+          </table>
+        {% else %}
+          <div class="text-muted">No breakout template selected.</div>
+        {% endif %}
       </div>
+      {% if template and template.get_absolute_url %}
+        <div class="card-footer">
+          <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary btn-sm">Template Detail</a>
+        </div>
+      {% endif %}
     </div>
 
-    {% if specs %}
-      <div class="card">
-        <div class="card-header"><strong>Child Interface Specs</strong></div>
-        <div class="card-body p-0">
-          <table class="table table-sm mb-0" style="font-size:0.8rem">
-            <thead><tr><th>Parent Interface</th><th>Count</th><th>Pattern</th><th>Plane Start</th></tr></thead>
+    <div class="card mb-3">
+      <div class="card-header"><strong>Child Interface Specs</strong></div>
+      <div class="card-body p-0">
+        {% if specs %}
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>Parent</th>
+                <th>Count</th>
+                <th>Pattern</th>
+                <th>Plane Start</th>
+              </tr>
+            </thead>
             <tbody>
               {% for spec in specs %}
                 <tr>
-                  <td>{{ spec.parent_interface_name }}</td>
-                  <td>{{ spec.child_count }}</td>
-                  <td><code>{{ spec.child_name_pattern }}</code></td>
-                  <td>{{ spec.fabric_plane_start }}</td>
+                  <td>{{ spec.parent_interface_name|default:"-" }}</td>
+                  <td>{{ spec.child_count|default:"-" }}</td>
+                  <td><code>{{ spec.child_name_pattern|default:"-" }}</code></td>
+                  <td>{{ spec.fabric_plane_start|default:"-" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
-        </div>
+        {% else %}
+          <div class="p-3 text-muted">No breakout specs are defined.</div>
+        {% endif %}
       </div>
-    {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Workflow Summary</strong></div>
+      <div class="card-body">
+        {% if workflow_summary %}
+          {% if workflow_summary.items %}
+            <table class="table table-sm mb-0">
+              {% for metric, value in workflow_summary.items %}
+                <tr><th>{{ metric }}</th><td>{{ value }}</td></tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <ul class="mb-0 ps-3">
+              {% for metric in workflow_summary %}
+                <li>{{ metric.name|default:metric.label|default:"Metric" }}: {{ metric.value|default:metric.count|default:metric }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">No summary metrics are available yet.</div>
+        {% endif %}
+      </div>
+    </div>
   </div>
 
-  <div class="col-md-8">
-    {% if messages %}
-      {% for message in messages %}
-        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
-          {{ message }}
-        </div>
-      {% endfor %}
-    {% endif %}
-
+  <div class="col-lg-8 mb-3">
     {% if result %}
       <div class="alert alert-success">
-        <strong>Stamp successful!</strong>
-        Created {{ result.created|length }} child interface(s);
-        {{ result.skipped|length }} skipped (already existed).
+        <strong>Breakout stamp completed.</strong>
+        Created {{ result.created|length }} child interface(s), skipped {{ result.skipped|length }}.
       </div>
       {% if result.created %}
-        <table class="table table-sm">
-          <thead><tr><th>Created Interface</th><th>Parent</th></tr></thead>
-          <tbody>
-            {% for iface in result.created %}
-              <tr>
-                <td>{{ iface.name }}</td>
-                <td>{{ iface.parent_id|default:"-" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        <div class="card mb-3">
+          <div class="card-header"><strong>Created Interfaces</strong></div>
+          <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+              <thead><tr><th>Interface</th><th>Parent</th></tr></thead>
+              <tbody>
+                {% for iface in result.created %}
+                  <tr>
+                    <td>{{ iface.name|default:iface }}</td>
+                    <td>{{ iface.parent|default:iface.parent_id|default:"-" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
       {% endif %}
-      <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
-    {% else %}
-      <div class="card">
-        <div class="card-header"><strong>Stamp Parameters</strong></div>
-        <div class="card-body">
-          <form method="post">
-            {% csrf_token %}
+    {% endif %}
+
+    <div class="card mb-3">
+      <div class="card-header"><strong>Stamp Inputs</strong></div>
+      <div class="card-body">
+        <form method="post"{% if execution_url %} action="{{ execution_url }}"{% endif %}>
+          {% csrf_token %}
+          {% if form %}
             {% for field in form %}
               <div class="mb-3">
-                <label class="form-label fw-bold" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
                 {{ field }}
                 {% if field.help_text %}
-                  <div class="form-text text-muted">{{ field.help_text }}</div>
+                  <div class="form-text">{{ field.help_text }}</div>
                 {% endif %}
                 {% for error in field.errors %}
                   <div class="text-danger">{{ error }}</div>
                 {% endfor %}
               </div>
             {% endfor %}
-            <button type="submit" class="btn btn-primary">Apply Template</button>
-            <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary ms-2">Cancel</a>
-          </form>
+          {% else %}
+            <div class="text-muted mb-0">No input form is currently available for this workflow.</div>
+          {% endif %}
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Run Breakout Stamp</button>
+            {% if rollback_url %}
+              <a href="{{ rollback_url }}" class="btn btn-outline-danger">Rollback Latest Run</a>
+            {% endif %}
+            {% if template and template.get_absolute_url %}
+              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
+            {% endif %}
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% with run_rows=recent_runs|default:stamp_runs %}
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Recent Runs</strong>
+          <span class="badge bg-secondary">{{ run_rows|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          {% if run_rows %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for run in run_rows %}
+                  <tr>
+                    <td>{{ run.name|default:run.label|default:run.pk|default:"Run" }}</td>
+                    <td>{{ run.status|default:run.get_status_display|default:"-" }}</td>
+                    <td>{{ run.started_at|default:run.created|default:run.created_at|default:"-" }}</td>
+                    <td>
+                      {% if run.get_absolute_url %}
+                        <a href="{{ run.get_absolute_url }}">View</a>
+                      {% elif run.result and run.result.get_absolute_url %}
+                        <a href="{{ run.result.get_absolute_url }}">Result</a>
+                      {% else %}
+                        <span class="text-muted">-</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="p-3 text-muted">No run history has been recorded yet.</div>
+          {% endif %}
         </div>
       </div>
-    {% endif %}
+    {% endwith %}
   </div>
 </div>
 {% endblock %}

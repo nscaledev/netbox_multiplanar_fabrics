@@ -51,6 +51,389 @@ class DispatchResult:
     record_metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class TemplatePlanExecutionResult:
+    """V2 helper return contract for template execution workflows."""
+
+    template: Any
+    fabric: Any
+    stamp_run: Any
+    stamp_result: Any
+    rollback_eligible: bool
+
+
+@dataclass(frozen=True)
+class StampRunRollbackResult:
+    """Rollback outcome contract for deployment workflow pages."""
+
+    stamp_run: Any
+    already_rolled_back: bool
+    rollback_mode: str
+    deleted_counts: dict[str, int]
+    deleted_total: int
+
+
+@dataclass(frozen=True)
+class DeploymentWorkflowRunSummary:
+    """Per-run summary row for deployment workflow pages."""
+
+    stamp_run: Any
+    managed_object_total: int
+    rollback_applied: bool
+    rollback_eligible: bool
+    rollback_mode_hint: str
+
+
+@dataclass(frozen=True)
+class DeploymentWorkflowSummary:
+    """Summary payload for deployment workflow page context."""
+
+    recent_runs: tuple[DeploymentWorkflowRunSummary, ...]
+    rollback_eligible_run_ids: tuple[int, ...]
+    rollback_applied_run_ids: tuple[int, ...]
+    total_runs: int
+
+
+_MANAGED_OBJECT_MODEL_KEYS = (
+    ('optical_lanes', 'OpticalLane'),
+    ('transfer_maps', 'TransferMap'),
+    ('strand_terminations', 'StrandTermination'),
+    ('fiber_strands', 'FiberStrand'),
+    ('cable_assemblies', 'CableAssembly'),
+    ('fiber_segments', 'FiberSegment'),
+    ('transport_channels', 'TransportChannel'),
+    ('connector_positions', 'ConnectorPosition'),
+    ('endpoints', 'Endpoint'),
+    ('nodes', 'FabricNode'),
+    ('planes', 'Plane'),
+    ('fabrics', 'Fabric'),
+)
+
+
+def _is_authenticated_actor(actor) -> bool:
+    return actor is not None and bool(getattr(actor, 'is_authenticated', False))
+
+
+def _actor_id(actor) -> int | None:
+    return actor.pk if _is_authenticated_actor(actor) else None
+
+
+def _iso_timestamp(value=None) -> str:
+    if value is None:
+        value = timezone.now()
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return str(value)
+
+
+def _rollback_metadata(stamp_run) -> dict[str, Any]:
+    metadata = dict(stamp_run.metadata or {})
+    rollback = metadata.get('rollback')
+    return rollback if isinstance(rollback, dict) else {}
+
+
+def _managed_objects_from_result(stamp_run) -> dict[str, list[int]]:
+    raw = (stamp_run.result or {}).get('managed_objects')
+    if not isinstance(raw, dict):
+        return {}
+    managed_objects: dict[str, list[int]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, (list, tuple)):
+            continue
+        ids: list[int] = []
+        for raw_id in value:
+            try:
+                ids.append(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        managed_objects[key] = ids
+    return managed_objects
+
+
+def _managed_object_total(managed_objects: dict[str, list[int]]) -> int:
+    return sum(len(ids) for ids in managed_objects.values() if isinstance(ids, list))
+
+
+def _resolve_stamp_run(stamp_run):
+    from ..models import StampRun
+
+    if isinstance(stamp_run, StampRun):
+        return stamp_run
+    return StampRun.objects.get(pk=getattr(stamp_run, 'pk', stamp_run))
+
+
+def _managed_model_map() -> dict[str, Any]:
+    from ..models import (
+        CableAssembly,
+        ConnectorPosition,
+        Endpoint,
+        Fabric,
+        FabricNode,
+        FiberSegment,
+        FiberStrand,
+        OpticalLane,
+        Plane,
+        StrandTermination,
+        TransferMap,
+        TransportChannel,
+    )
+
+    return {
+        'optical_lanes': OpticalLane,
+        'transfer_maps': TransferMap,
+        'strand_terminations': StrandTermination,
+        'fiber_strands': FiberStrand,
+        'cable_assemblies': CableAssembly,
+        'fiber_segments': FiberSegment,
+        'transport_channels': TransportChannel,
+        'connector_positions': ConnectorPosition,
+        'endpoints': Endpoint,
+        'nodes': FabricNode,
+        'planes': Plane,
+        'fabrics': Fabric,
+    }
+
+
+def _delete_managed_objects(*, managed_objects: dict[str, list[int]], skip_keys: set[str] | None = None) -> dict[str, int]:
+    model_map = _managed_model_map()
+    deleted_counts: dict[str, int] = {}
+    skip = skip_keys or set()
+    for key, _model_name in _MANAGED_OBJECT_MODEL_KEYS:
+        if key in skip:
+            continue
+        model = model_map.get(key)
+        object_ids = managed_objects.get(key) or []
+        if model is None or not object_ids:
+            continue
+        queryset = model.objects.filter(pk__in=object_ids)
+        existing_count = queryset.count()
+        if existing_count:
+            queryset.delete()
+        deleted_counts[key] = existing_count
+    return deleted_counts
+
+
+def _stamp_run_is_rollback_eligible(stamp_run) -> bool:
+    rollback = _rollback_metadata(stamp_run)
+    if rollback.get('state') == 'completed':
+        return False
+    managed_objects = _managed_objects_from_result(stamp_run)
+    if _managed_object_total(managed_objects) > 0:
+        return True
+    return bool(stamp_run.fabric_id)
+
+
+def _rollback_mode_hint(stamp_run) -> str:
+    if stamp_run.fabric_id:
+        return 'fabric_delete'
+    managed_objects = _managed_objects_from_result(stamp_run)
+    if _managed_object_total(managed_objects) > 0:
+        return 'managed_objects'
+    return 'none'
+
+
+@transaction.atomic
+def execute_template_plan(
+    *,
+    template,
+    fabric_name: str,
+    fabric_slug: str,
+    source_bindings: dict | None = None,
+    creation_options: dict | None = None,
+    actor=None,
+) -> TemplatePlanExecutionResult:
+    """
+    Execute a V2 StampTemplate through the stamping service.
+
+    Returns execution context used by deployment workflow pages.
+    """
+    from .stamping import execute_stamp_template
+
+    stamp_result = execute_stamp_template(
+        template=template,
+        fabric_name=fabric_name,
+        fabric_slug=fabric_slug,
+        source_bindings=source_bindings,
+        creation_options=creation_options,
+        actor=actor,
+    )
+    stamp_run = stamp_result.stamp_run
+    stamp_run.metadata = {
+        **(stamp_run.metadata or {}),
+        'deployment_workflow': {
+            'helper': 'execute_template_plan',
+            'executed_at': _iso_timestamp(),
+            'executed_by_id': _actor_id(actor),
+        },
+    }
+    stamp_run.save(update_fields=['metadata'])
+    return TemplatePlanExecutionResult(
+        template=template,
+        fabric=stamp_result.fabric,
+        stamp_run=stamp_run,
+        stamp_result=stamp_result,
+        rollback_eligible=_stamp_run_is_rollback_eligible(stamp_run),
+    )
+
+
+@transaction.atomic
+def rollback_stamp_run(
+    *,
+    stamp_run,
+    actor=None,
+    delete_fabric_as_primitive: bool = True,
+) -> StampRunRollbackResult:
+    """
+    Roll back one V2 StampRun.
+
+    Rollback is idempotent: repeated calls return the existing rollback metadata
+    without executing additional deletes.
+    """
+    from ..models import Fabric
+    from .audit import record_audit_event
+
+    stamp_run = _resolve_stamp_run(stamp_run)
+    rollback = _rollback_metadata(stamp_run)
+    if rollback.get('state') == 'completed':
+        deleted_counts = rollback.get('deleted_counts') or {}
+        deleted_total = int(rollback.get('deleted_total') or 0)
+        return StampRunRollbackResult(
+            stamp_run=stamp_run,
+            already_rolled_back=True,
+            rollback_mode=str(rollback.get('mode') or 'none'),
+            deleted_counts=dict(deleted_counts),
+            deleted_total=deleted_total,
+        )
+
+    fabric = stamp_run.fabric
+    managed_objects = _managed_objects_from_result(stamp_run)
+    deleted_counts: dict[str, int] = {}
+    rollback_mode = 'none'
+
+    if delete_fabric_as_primitive and fabric is not None:
+        fabric_id = fabric.pk
+        existed = Fabric.objects.filter(pk=fabric_id).exists()
+        if existed:
+            fabric.delete()
+            deleted_counts['fabrics'] = 1
+            rollback_mode = 'fabric_delete'
+        else:
+            deleted_counts['fabrics'] = 0
+            rollback_mode = 'fabric_delete'
+        managed_deletes = _delete_managed_objects(
+            managed_objects=managed_objects,
+            skip_keys={'fabrics'},
+        )
+        deleted_counts.update(
+            {
+                key: max(deleted_counts.get(key, 0), managed_deletes.get(key, 0))
+                for key in managed_deletes
+            }
+        )
+    else:
+        deleted_counts = _delete_managed_objects(managed_objects=managed_objects)
+        rollback_mode = 'managed_objects' if deleted_counts else 'none'
+
+    stamp_run.refresh_from_db()
+    deleted_total = sum(deleted_counts.values())
+    rollback_metadata = {
+        'state': 'completed',
+        'mode': rollback_mode,
+        'applied_at': _iso_timestamp(),
+        'applied_by_id': _actor_id(actor),
+        'deleted_counts': deleted_counts,
+        'deleted_total': deleted_total,
+    }
+    stamp_run.metadata = {
+        **(stamp_run.metadata or {}),
+        'rollback': rollback_metadata,
+    }
+    stamp_run.result = {
+        **(stamp_run.result or {}),
+        'rollback': rollback_metadata,
+    }
+    stamp_run.save(update_fields=['metadata', 'result'])
+
+    record_audit_event(
+        event_type='stamp',
+        fabric=stamp_run.fabric,
+        actor=actor if _is_authenticated_actor(actor) else None,
+        subject=stamp_run,
+        outcome='ok',
+        message=f'Rolled back stamp run #{stamp_run.pk}.',
+        payload={
+            'action': 'rollback',
+            'stamp_run_id': stamp_run.pk,
+            'mode': rollback_mode,
+            'deleted_total': deleted_total,
+            'deleted_counts': deleted_counts,
+        },
+        metadata={
+            'rollback': rollback_metadata,
+        },
+    )
+
+    return StampRunRollbackResult(
+        stamp_run=stamp_run,
+        already_rolled_back=False,
+        rollback_mode=rollback_mode,
+        deleted_counts=deleted_counts,
+        deleted_total=deleted_total,
+    )
+
+
+def build_deployment_workflow_summary(
+    *,
+    fabric=None,
+    template=None,
+    limit: int = 20,
+) -> DeploymentWorkflowSummary:
+    """
+    Build summary context for deployment workflow UI pages.
+    """
+    from ..models import Fabric, StampRun, StampTemplate
+
+    queryset = StampRun.objects.select_related('fabric', 'template').order_by('-created', '-pk')
+    if fabric is not None:
+        fabric_id = getattr(fabric, 'pk', fabric)
+        if isinstance(fabric, Fabric) or fabric_id is not None:
+            queryset = queryset.filter(fabric_id=fabric_id)
+    if template is not None:
+        template_id = getattr(template, 'pk', template)
+        if isinstance(template, StampTemplate) or template_id is not None:
+            queryset = queryset.filter(template_id=template_id)
+
+    rows: list[DeploymentWorkflowRunSummary] = []
+    rollback_eligible_run_ids: list[int] = []
+    rollback_applied_run_ids: list[int] = []
+
+    for run in queryset[: max(1, limit)]:
+        managed_total = _managed_object_total(_managed_objects_from_result(run))
+        rollback = _rollback_metadata(run)
+        rollback_applied = rollback.get('state') == 'completed'
+        rollback_eligible = _stamp_run_is_rollback_eligible(run)
+        if rollback_applied:
+            rollback_applied_run_ids.append(run.pk)
+        if rollback_eligible:
+            rollback_eligible_run_ids.append(run.pk)
+        rows.append(
+            DeploymentWorkflowRunSummary(
+                stamp_run=run,
+                managed_object_total=managed_total,
+                rollback_applied=rollback_applied,
+                rollback_eligible=rollback_eligible,
+                rollback_mode_hint=_rollback_mode_hint(run),
+            )
+        )
+
+    return DeploymentWorkflowSummary(
+        recent_runs=tuple(rows),
+        rollback_eligible_run_ids=tuple(rollback_eligible_run_ids),
+        rollback_applied_run_ids=tuple(rollback_applied_run_ids),
+        total_runs=len(rows),
+    )
+
+
 def execute_plan(
     plan: DeploymentPlan,
     *,
@@ -170,28 +553,18 @@ def _dispatch_record(record, user):
     stamp_type = params.get('stamp_type')
 
     if stamp_type == 'spatial':
-        from .spatial_stamp import build_floorplan_sync_summary, stamp_spatial_template
+        from .spatial_stamp import stamp_spatial_template
         from ..models import SpatialTemplate
         template = SpatialTemplate.objects.get(pk=params['template_id'])
         scope = _resolve_scope(params['scope_type'], params['scope_id'])
-        sync_floorplan = params.get('sync_floorplan', True)
-        force_floorplan_sync = params.get('force_floorplan_sync', False)
-        stamp_result = stamp_spatial_template(
+        stamp_spatial_template(
             template,
             scope,
             variables=params.get('variables'),
             user=user,
-            sync_floorplan=sync_floorplan,
-            force_floorplan_sync=force_floorplan_sync,
         )
         return DispatchResult(
             result_obj=scope,
-            record_metadata={
-                'floorplan_sync': build_floorplan_sync_summary(
-                    stamp_result,
-                    sync_requested=sync_floorplan,
-                ),
-            },
         )
 
     if stamp_type == 'rack_population':

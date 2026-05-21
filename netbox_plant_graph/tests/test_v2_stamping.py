@@ -4,6 +4,7 @@ from django.test import TestCase
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 
 from netbox_plant_graph.models import (
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -16,6 +17,7 @@ from netbox_plant_graph.models import (
     StrandTermination,
     TransferMap,
     TransportChannel,
+    TransportChannelPositionMap,
 )
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import resolve_optical_lane_path
@@ -82,6 +84,20 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertEqual(endpoint.source_type, interface_content_type)
         self.assertEqual(endpoint.source_id, osfp.pk)
         self.assertEqual(endpoint.source, osfp)
+        subinterface = Interface.objects.get(device=device, name='OSFP-1/1')
+        self.assertTrue(Interface.objects.filter(device=device, name='OSFP-1/2').exists())
+        self.assertTrue(Interface.objects.filter(device=device, name='OSFP-1/3').exists())
+        self.assertTrue(Interface.objects.filter(device=device, name='OSFP-1/4').exists())
+        channel = TransportChannel.objects.get(fabric=result.fabric, endpoint=endpoint, channel_index=1)
+        self.assertEqual(channel.source_subinterface_id, subinterface.pk)
+        self.assertEqual(subinterface.parent_id, osfp.pk)
+        self.assertEqual(subinterface.speed, 200000000)
+        self.assertTrue(
+            TransportChannelPositionMap.objects.filter(
+                channel=channel,
+                mpo_endpoint__address='GB300-TRAY-1.OSFP-1.MPO-1',
+            ).exists()
+        )
         self.assertEqual(result.stamp_run.parameters['source_binding_counts'], {'nodes': 1, 'endpoints': 1})
 
     def test_execute_stamp_template_rejects_unknown_hybrid_executor(self):
@@ -161,6 +177,27 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertFalse(Fabric.objects.filter(slug='invalid-source-binding-proof').exists())
         self.assertEqual(StampRun.objects.count(), 0)
 
+    def test_execute_stamp_template_rejects_invalid_channel_map_matrix(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        channel_subinterfaces = dict(template['channel_subinterfaces'])
+        matrix = [dict(item) for item in channel_subinterfaces['channel_map_matrix']]
+        matrix[0] = {**matrix[0], 'positions': [1, 13]}
+        channel_subinterfaces['channel_map_matrix'] = matrix
+        template['channel_subinterfaces'] = channel_subinterfaces
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid channel map proof',
+                fabric_slug='invalid-channel-map-proof',
+            )
+
+        self.assertIn('exceeds StampTemplate.template.gpu_tray.positions_per_mpo', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-channel-map-proof').exists())
+        self.assertEqual(StampRun.objects.count(), 0)
+
     def test_execute_stamp_template_can_create_and_bind_netbox_active_devices(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
         manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
@@ -190,7 +227,7 @@ class V2MiniFabricStampTestCase(TestCase):
         )
 
         self.assertEqual(Device.objects.count(), 5)
-        self.assertEqual(Interface.objects.count(), 8)
+        self.assertEqual(Interface.objects.count(), 40)
         self.assertEqual(
             sorted(device.name for device in Device.objects.order_by('name')),
             [
@@ -317,9 +354,11 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertEqual(Endpoint.objects.filter(fabric=fabric, connector_kind='mpo-12').count(), 32)
         self.assertEqual(ConnectorPosition.objects.filter(endpoint__fabric=fabric).count(), 384)
         self.assertEqual(FiberSegment.objects.filter(fabric=fabric).count(), 8)
+        self.assertEqual(CableAssembly.objects.count(), 8)
         self.assertEqual(FiberStrand.objects.filter(segment__fabric=fabric).count(), 8)
         self.assertEqual(StrandTermination.objects.filter(strand__segment__fabric=fabric).count(), 16)
         self.assertEqual(TransferMap.objects.filter(fabric=fabric, map_kind='shuffle_2x2').count(), 4)
+        self.assertEqual(TransportChannelPositionMap.objects.filter(channel__fabric=fabric).count(), 32)
         self.assertEqual(OpticalLane.objects.filter(fabric=fabric, direction='send').count(), 4)
         self.assertEqual(OpticalLane.objects.filter(fabric=fabric, direction='receive').count(), 4)
 
@@ -346,9 +385,11 @@ class V2MiniFabricStampTestCase(TestCase):
             'endpoints': Endpoint.objects.filter(fabric=fabric).count(),
             'positions': ConnectorPosition.objects.filter(endpoint__fabric=fabric).count(),
             'segments': FiberSegment.objects.filter(fabric=fabric).count(),
+            'cable_assemblies': CableAssembly.objects.count(),
             'strands': FiberStrand.objects.filter(segment__fabric=fabric).count(),
             'terminations': StrandTermination.objects.filter(strand__segment__fabric=fabric).count(),
             'transfer_maps': TransferMap.objects.filter(fabric=fabric).count(),
+            'channel_position_maps': TransportChannelPositionMap.objects.filter(channel__fabric=fabric).count(),
             'lanes': OpticalLane.objects.filter(fabric=fabric).count(),
         }
         stamp_run_count = StampRun.objects.filter(fabric=fabric).count()
@@ -362,9 +403,14 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertEqual(Endpoint.objects.filter(fabric=fabric).count(), counts['endpoints'])
         self.assertEqual(ConnectorPosition.objects.filter(endpoint__fabric=fabric).count(), counts['positions'])
         self.assertEqual(FiberSegment.objects.filter(fabric=fabric).count(), counts['segments'])
+        self.assertEqual(CableAssembly.objects.count(), counts['cable_assemblies'])
         self.assertEqual(FiberStrand.objects.filter(segment__fabric=fabric).count(), counts['strands'])
         self.assertEqual(StrandTermination.objects.filter(strand__segment__fabric=fabric).count(), counts['terminations'])
         self.assertEqual(TransferMap.objects.filter(fabric=fabric).count(), counts['transfer_maps'])
+        self.assertEqual(
+            TransportChannelPositionMap.objects.filter(channel__fabric=fabric).count(),
+            counts['channel_position_maps'],
+        )
         self.assertEqual(OpticalLane.objects.filter(fabric=fabric).count(), counts['lanes'])
         self.assertEqual(StampRun.objects.filter(fabric=fabric).count(), stamp_run_count + 1)
 
@@ -383,7 +429,12 @@ class V2MiniFabricStampTestCase(TestCase):
             ConnectorPosition.objects.filter(endpoint__fabric=fabric).count(),
         )
         self.assertEqual(object_counts['transport_channels'], TransportChannel.objects.filter(fabric=fabric).count())
+        self.assertEqual(
+            object_counts['transport_channel_position_maps'],
+            TransportChannelPositionMap.objects.filter(channel__fabric=fabric).count(),
+        )
         self.assertEqual(object_counts['fiber_segments'], FiberSegment.objects.filter(fabric=fabric).count())
+        self.assertEqual(object_counts['cable_assemblies'], CableAssembly.objects.count())
         self.assertEqual(object_counts['fiber_strands'], FiberStrand.objects.filter(segment__fabric=fabric).count())
         self.assertEqual(
             object_counts['strand_terminations'],

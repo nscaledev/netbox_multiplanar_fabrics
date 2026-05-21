@@ -214,7 +214,7 @@ EOF
     esac
 
     cat >> "$CONFIG_FILE" <<EOF
-PLUGINS = ['netbox_floorplan', 'netbox_plant_graph'] if os.getenv('NETBOX_PLANT_GRAPH_ENABLE') == '1' else []
+PLUGINS = ['netbox_plant_graph'] if os.getenv('NETBOX_PLANT_GRAPH_ENABLE') == '1' else []
 
 PLUGINS_CONFIG = {
     'netbox_plant_graph': {

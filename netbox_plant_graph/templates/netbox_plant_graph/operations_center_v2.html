@@ -1,0 +1,50 @@
+{% extends 'base/layout.html' %}
+
+{% block title %}Operations Center{% endblock %}
+
+{% block content %}
+  <h1>Operations Center</h1>
+
+  <div class="card mb-3">
+    <div class="card-header"><strong>Execute Profile</strong></div>
+    <div class="card-body">
+      <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary">Run Operation</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><strong>Recent Runs</strong></div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Profile</th>
+            <th>Status</th>
+            <th>Fabric</th>
+            <th>Initiated By</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in recent_runs %}
+            <tr>
+              <td><a href="{{ run.get_absolute_url }}">#{{ run.pk }}</a></td>
+              <td>{{ run.profile }}</td>
+              <td>{{ run.status }}</td>
+              <td>{% if run.fabric %}<a href="{{ run.fabric.get_absolute_url }}">{{ run.fabric }}</a>{% else %}-{% endif %}</td>
+              <td>{{ run.initiated_by|default:'-' }}</td>
+              <td>{{ run.created }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-secondary">No operation runs yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

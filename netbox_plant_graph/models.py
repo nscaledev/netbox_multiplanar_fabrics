@@ -1,19 +1,25 @@
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
 from netbox.models import NetBoxModel
+from django.utils import timezone
 
 from .choices import (
+    AuditEventTypeChoices,
     ArchitectureStatusChoices,
     ConnectorKindChoices,
     EndpointKindChoices,
     FabricStatusChoices,
     LaneDirectionChoices,
     NodeKindChoices,
+    OperationProfileChoices,
+    OperationRunStatusChoices,
     SegmentKindChoices,
     StampRunStatusChoices,
+    SuppressionStatusChoices,
     TransferMapKindChoices,
 )
 
@@ -228,6 +234,13 @@ class TransportChannel(V2Model):
     fabric = models.ForeignKey(Fabric, related_name='transport_channels', on_delete=models.CASCADE)
     endpoint = models.ForeignKey(Endpoint, related_name='transport_channels', on_delete=models.CASCADE)
     plane = models.ForeignKey(Plane, null=True, blank=True, related_name='transport_channels', on_delete=models.SET_NULL)
+    source_subinterface = models.ForeignKey(
+        'dcim.Interface',
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.SET_NULL,
+    )
     name = models.CharField(max_length=200)
     channel_index = models.PositiveIntegerField()
     speed_gbps = models.PositiveIntegerField(null=True, blank=True)
@@ -244,6 +257,100 @@ class TransportChannel(V2Model):
 
     def __str__(self):
         return f'{self.endpoint}:{self.name}'
+
+    def clean(self):
+        super().clean()
+        if self.endpoint_id and self.endpoint.fabric_id != self.fabric_id:
+            raise ValidationError({'endpoint': 'Transport channel endpoint must belong to the channel fabric.'})
+        if self.plane_id and self.plane.fabric_id != self.fabric_id:
+            raise ValidationError({'plane': 'Transport channel plane must belong to the channel fabric.'})
+        if self.source_subinterface_id and self.endpoint_id:
+            endpoint_source = self.endpoint.source
+            if endpoint_source is not None and getattr(endpoint_source, 'pk', None):
+                if endpoint_source._meta.model_name == 'interface':
+                    if self.source_subinterface.parent_id != endpoint_source.pk:
+                        raise ValidationError(
+                            {'source_subinterface': 'Source sub-interface parent must be the endpoint source interface.'}
+                        )
+
+
+class TransportChannelPositionMap(V2Model):
+    channel = models.ForeignKey(
+        TransportChannel,
+        related_name='position_maps',
+        on_delete=models.CASCADE,
+    )
+    mpo_endpoint = models.ForeignKey(
+        Endpoint,
+        related_name='channel_position_maps',
+        on_delete=models.CASCADE,
+    )
+    mpo_position = models.ForeignKey(
+        ConnectorPosition,
+        related_name='channel_position_maps',
+        on_delete=models.CASCADE,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('channel', 'mpo_position', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('channel', 'mpo_position'),
+                name='netbox_plant_graph_transport_channel_position_map_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.channel}:{self.mpo_position}'
+
+    def clean(self):
+        super().clean()
+        if self.channel_id and self.channel.fabric_id != self.mpo_endpoint.fabric_id:
+            raise ValidationError({'mpo_endpoint': 'MPO endpoint must belong to the channel fabric.'})
+        if self.mpo_endpoint_id and self.mpo_position_id and self.mpo_position.endpoint_id != self.mpo_endpoint_id:
+            raise ValidationError({'mpo_position': 'MPO position must belong to the MPO endpoint.'})
+        if self.channel_id and self.channel.endpoint_id and self.mpo_endpoint_id and self.mpo_endpoint.parent_id:
+            if self.mpo_endpoint.parent_id != self.channel.endpoint_id:
+                raise ValidationError(
+                    {'mpo_endpoint': 'MPO endpoint parent must match the channel endpoint when parent is set.'}
+                )
+
+
+class CableAssembly(V2Model):
+    site = models.ForeignKey('dcim.Site', related_name='+', on_delete=models.PROTECT)
+    cable_id = models.CharField(max_length=200)
+    manufacturer = models.CharField(max_length=200, blank=True)
+    serial_number = models.CharField(max_length=200, blank=True)
+    model_id = models.CharField(max_length=200, blank=True)
+    description = models.TextField(blank=True)
+    parent_cable = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        related_name='child_cables',
+        on_delete=models.SET_NULL,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('site', 'cable_id')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('site', 'cable_id'),
+                name='netbox_plant_graph_cable_assembly_site_cable_id_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.site}:{self.cable_id}'
+
+    def clean(self):
+        super().clean()
+        if self.parent_cable_id and self.parent_cable_id == self.pk:
+            raise ValidationError({'parent_cable': 'A cable assembly cannot be its own parent.'})
+        if self.parent_cable_id and self.parent_cable.site_id != self.site_id:
+            raise ValidationError({'parent_cable': 'Parent cable must belong to the same site.'})
 
 
 class FiberSegment(V2Model):
@@ -271,6 +378,14 @@ class FiberSegment(V2Model):
 class FiberStrand(V2Model):
     segment = models.ForeignKey(FiberSegment, related_name='strands', on_delete=models.CASCADE)
     strand_index = models.PositiveIntegerField()
+    cable_site = models.ForeignKey(
+        'dcim.Site',
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.PROTECT,
+    )
+    cable_id = models.CharField(max_length=200, blank=True)
     label = models.CharField(max_length=100, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -285,6 +400,31 @@ class FiberStrand(V2Model):
 
     def __str__(self):
         return self.label or f'{self.segment}:strand-{self.strand_index}'
+
+    @property
+    def cable_assembly(self):
+        if not self.cable_site_id or not self.cable_id:
+            return None
+        return CableAssembly.objects.filter(
+            site_id=self.cable_site_id,
+            cable_id=self.cable_id,
+        ).first()
+
+    def clean(self):
+        super().clean()
+        has_site = bool(self.cable_site_id)
+        has_cable_id = bool(self.cable_id)
+        if has_site != has_cable_id:
+            raise ValidationError('Fiber strand cable_site and cable_id must be provided together.')
+        if has_site and has_cable_id:
+            exists = CableAssembly.objects.filter(
+                site_id=self.cable_site_id,
+                cable_id=self.cable_id,
+            ).exists()
+            if not exists:
+                raise ValidationError(
+                    {'cable_id': 'No cable assembly exists for the provided site and cable ID.'}
+                )
 
 
 class StrandTermination(V2Model):
@@ -475,3 +615,106 @@ class StampRun(V2Model):
 
     def __str__(self):
         return f'{self.template or "ad hoc"} stamp #{self.pk}'
+
+
+class SuppressionRule(V2Model):
+    fabric = models.ForeignKey(Fabric, related_name='suppression_rules', on_delete=models.CASCADE)
+    plane = models.ForeignKey(Plane, null=True, blank=True, related_name='suppression_rules', on_delete=models.CASCADE)
+    optical_lane = models.ForeignKey(
+        OpticalLane, null=True, blank=True, related_name='suppression_rules', on_delete=models.CASCADE
+    )
+    path_hop_object_type = models.CharField(max_length=64, blank=True)
+    path_hop_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    policy_key = models.CharField(max_length=200, blank=True)
+    status = models.CharField(max_length=32, choices=SuppressionStatusChoices, default='pending')
+    reason = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('-created', '-pk')
+
+    def __str__(self):
+        if self.optical_lane_id:
+            return f'lane suppression #{self.pk}'
+        if self.plane_id:
+            return f'plane suppression #{self.pk}'
+        if self.policy_key:
+            return f'policy suppression #{self.pk}'
+        if self.path_hop_object_type and self.path_hop_object_id:
+            return f'path-hop suppression #{self.pk}'
+        return f'fabric suppression #{self.pk}'
+
+    @property
+    def is_effective(self) -> bool:
+        if self.status != 'active':
+            return False
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None and self.expires_at <= timezone.now():
+            return False
+        return True
+
+    def clean(self):
+        super().clean()
+        if self.plane_id and self.plane.fabric_id != self.fabric_id:
+            raise ValidationError({'plane': 'Suppression plane must belong to suppression fabric.'})
+        if self.optical_lane_id and self.optical_lane.fabric_id != self.fabric_id:
+            raise ValidationError({'optical_lane': 'Suppression lane must belong to suppression fabric.'})
+        if bool(self.path_hop_object_type) != bool(self.path_hop_object_id):
+            raise ValidationError('path_hop_object_type and path_hop_object_id must be provided together.')
+        if self.optical_lane_id and self.plane_id and self.optical_lane.plane_id and self.optical_lane.plane_id != self.plane_id:
+            raise ValidationError({'plane': 'Suppression plane must match suppression optical lane plane when both are set.'})
+
+
+class AuditEvent(V2Model):
+    fabric = models.ForeignKey(Fabric, null=True, blank=True, related_name='audit_events', on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=64, choices=AuditEventTypeChoices, default='stamp')
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL
+    )
+    subject_type = models.ForeignKey(
+        ContentType, null=True, blank=True, related_name='+', on_delete=models.SET_NULL
+    )
+    subject_id = models.PositiveBigIntegerField(null=True, blank=True)
+    subject = GenericForeignKey('subject_type', 'subject_id')
+    outcome = models.CharField(max_length=32, default='ok')
+    message = models.TextField(blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('-created', '-pk')
+
+    def __str__(self):
+        return f'{self.event_type}:{self.outcome} #{self.pk}'
+
+
+class OperationRun(V2Model):
+    profile = models.CharField(max_length=64, choices=OperationProfileChoices, default='generic_roce')
+    status = models.CharField(max_length=32, choices=OperationRunStatusChoices, default='pending')
+    fabric = models.ForeignKey(Fabric, null=True, blank=True, related_name='operation_runs', on_delete=models.SET_NULL)
+    initiated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL
+    )
+    dedupe_key = models.CharField(max_length=128, blank=True)
+    parameters = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_detail = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ('-created', '-pk')
+
+    def __str__(self):
+        return f'{self.profile} run #{self.pk}'

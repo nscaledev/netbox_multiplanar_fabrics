@@ -25,6 +25,7 @@ class PlantGraphConfig(PluginConfig):
         'path_resolution_mode': 'on_demand',
         'architecture_definition_source': 'database',
     }
+    template_extensions = 'template_extensions.template_extensions'
 
 
 config = PlantGraphConfig

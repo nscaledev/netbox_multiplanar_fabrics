@@ -1,0 +1,304 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block title %}Interface Fanout Trace{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'netbox_plant_graph/fanout_trace.css' %}">
+{% endblock %}
+
+{% block content %}
+<h1>Interface Fanout Trace</h1>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label" for="device">Device</label>
+        <select id="device" name="device" class="form-select" onchange="this.form.submit()">
+          <option value="">Select a device</option>
+          {% for device in devices %}
+            <option value="{{ device.pk }}"{% if selected_device and device.pk == selected_device.pk %} selected{% endif %}>
+              {{ device.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label" for="interface">Physical Interface</label>
+        <select id="interface" name="interface" class="form-select" {% if not selected_device %}disabled{% endif %}>
+          <option value="">Select an interface</option>
+          {% for interface in interfaces %}
+            <option value="{{ interface.pk }}"{% if selected_interface and interface.pk == selected_interface.pk %} selected{% endif %}>
+              {{ interface.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="trace_mode">Trace Mode</label>
+        <select id="trace_mode" name="trace_mode" class="form-select">
+          <option value="expanded"{% if trace_mode != 'consolidated' %} selected{% endif %}>Expanded (per lane)</option>
+          <option value="consolidated"{% if trace_mode == 'consolidated' %} selected{% endif %}>Consolidated (per 200G)</option>
+        </select>
+      </div>
+      <div class="col-md-1 d-grid">
+        <button type="submit" name="trace" value="1" class="btn btn-primary">Trace Fanout</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if selected_interface %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-3">
+      <div class="fanout-metric">
+        <div class="small text-muted">Selected Interface</div>
+        <div class="fw-semibold">{{ selected_interface.device.name }} / {{ selected_interface.name }}</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="fanout-metric">
+        <div class="small text-muted">Anchored Endpoints</div>
+        <div class="h5 mb-0">{{ source_endpoints|length }}</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="fanout-metric">
+        <div class="small text-muted">Resolved Paths</div>
+        <div class="h5 mb-0">{% if trace_path_count %}{{ resolved_trace_count }} / {{ trace_path_count }}{% else %}0{% endif %}</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="fanout-metric">
+        <div class="small text-muted">Destination Endpoints</div>
+        <div class="h5 mb-0">{{ destination_endpoints|length }}</div>
+      </div>
+    </div>
+  </div>
+
+  {% if subinterface_summaries %}
+    <div class="card mb-3">
+      <div class="card-header">Child Sub-interfaces</div>
+      <div class="card-body">
+        <div class="row g-2">
+          {% for summary in subinterface_summaries %}
+            <div class="col-md-4">
+              <div class="fanout-metric">
+                <div class="fw-semibold">{% if summary.subinterface %}{{ summary.subinterface.name }}{% else %}{{ summary.label }}{% endif %}</div>
+                <div class="small text-muted">{{ summary.trace_count }} traced / {{ summary.resolved_count }} resolved</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+
+{% if trace_requested and fanout_pairs %}
+  <div class="card mb-3">
+    <div class="card-header">Sub-interface Fanout Matrix</div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Source Sub-interface</th>
+              <th>Remote Device-Interface</th>
+              <th>Path Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for pair in fanout_pairs %}
+              <tr>
+                <td>{{ pair.source_label }}</td>
+                <td>{{ pair.destination_label }}</td>
+                <td><span class="badge text-bg-light">{{ pair.path_count }}</span></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% if trace_requested and trace_rows %}
+  <div class="card mb-3">
+    <div class="card-header">
+      Visual Fanout Trace{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}
+    </div>
+    <div class="card-body">
+      <div
+        class="fanout-schematic mb-3"
+        data-fanout-schematic
+        data-fanout-trace-mode="{{ trace_mode }}"
+        data-fanout-source-title="Source: {{ selected_interface.device.name }}-{{ selected_interface.name }}"
+      >
+        <svg
+          class="fanout-schematic__svg"
+          data-fanout-schematic-svg
+          viewBox="0 0 980 280"
+          aria-hidden="true"
+          focusable="false"
+        ></svg>
+        <script type="application/json" data-fanout-schematic-data>{{ aggregate_schematic_paths_json|safe }}</script>
+        <script type="application/json" data-fanout-schematic-stages>{{ aggregate_schematic_stage_connectors_json|safe }}</script>
+      </div>
+      {% if not aggregate_has_shuffle_crossover %}
+        <div class="small text-warning mb-3">
+          Resolved transfer maps for this trace are position-identity mappings, so no shuffle crossover is present in the modeled path data.
+        </div>
+      {% endif %}
+
+      {% for row in trace_rows %}
+        <div class="fanout-trace-row mb-3 p-3 border rounded" data-fanout-path-canvas>
+          <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+            <div>
+              <div class="fw-semibold">
+                {% if row.source_subinterface %}
+                  {{ row.source_subinterface.name }}
+                {% else %}
+                  Source sub-interface unavailable
+                {% endif %}
+                {% if row.destination_subinterface %}
+                  -> {{ row.destination_subinterface.name }}
+                {% endif %}
+                {% if row.is_consolidated %}
+                  <span class="badge text-bg-light ms-1">{{ row.path_total }} lanes</span>
+                {% endif %}
+              </div>
+              <div class="small text-muted">
+                {% if row.is_consolidated %}
+                  {{ row.source_lane.endpoint.address }} / consolidated lane bundle
+                {% else %}
+                  {{ row.source_lane.endpoint.address }} / lane {{ row.source_lane.lane_index }} / {{ row.source_lane.wavelength_nm }} nm
+                {% endif %}
+              </div>
+              {% if row.remote_attachment_label %}
+                <div class="small text-muted">Remote attachment: {{ row.remote_attachment_label }}</div>
+              {% endif %}
+              {% if row.remote_device_names %}
+                <div class="small text-muted">Remote devices: {{ row.remote_device_names|join:", " }}</div>
+              {% endif %}
+              {% if not row.has_shuffle_crossover %}
+                <div class="small text-warning">Shuffle mapping is identity for this trace group (no crossover positions resolved).</div>
+              {% endif %}
+            </div>
+            <div>
+              {% if row.is_consolidated %}
+                <span class="badge text-bg-success">{{ row.resolved_total }} / {{ row.path_total }} resolved</span>
+              {% elif row.path_found %}
+                <span class="badge text-bg-success">Path found</span>
+              {% else %}
+                <span class="badge text-bg-warning">Unresolved</span>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if not row.is_consolidated and row.resolved_path.error %}
+            <div class="small text-warning mb-2">{{ row.resolved_path.error }}</div>
+          {% endif %}
+
+          <details>
+            {% if row.is_consolidated %}
+              <summary class="fanout-details-toggle">Consolidated Member Paths</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm mb-0">
+                  <thead>
+                    <tr>
+                      <th>Source Lane</th>
+                      <th>Destination Sub-interface</th>
+                      <th>Remote Device</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for member in row.member_rows %}
+                      <tr>
+                        <td>lane {{ member.source_lane.lane_index }} / {{ member.source_lane.wavelength_nm }} nm</td>
+                        <td>
+                          {% if member.destination_subinterface %}
+                            {{ member.destination_subinterface.name }}
+                          {% else %}
+                            <span class="text-muted">Unresolved</span>
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if member.remote_device_name %}
+                            {{ member.remote_device_name }}
+                          {% else %}
+                            <span class="text-muted">-</span>
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if member.path_found %}
+                            <span class="badge text-bg-success">Resolved</span>
+                          {% else %}
+                            <span class="badge text-bg-warning">Unresolved</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <summary class="fanout-details-toggle">Path Hop Details</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm mb-0">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Stage</th>
+                      <th>Object</th>
+                      <th>Cable Assembly</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for step in row.resolved_path.steps %}
+                      <tr>
+                        <td>{{ forloop.counter }}</td>
+                        <td>{{ step.step_type }}</td>
+                        <td>
+                          {% if step.label %}
+                            {{ step.label }}
+                          {% else %}
+                            {{ step.object_type }} #{{ step.object_id }}
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if step.cable_assembly %}
+                            {% if step.cable_assembly.url %}
+                              <a href="{{ step.cable_assembly.url }}">{{ step.cable_assembly.display }}</a>
+                            {% else %}
+                              {{ step.cable_assembly.display }}
+                            {% endif %}
+                          {% else %}
+                            <span class="text-muted">-</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+          </details>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% elif trace_requested and selected_interface %}
+  <div class="alert alert-info">No source optical lanes are available to trace on this interface.</div>
+{% else %}
+  <div class="alert alert-info">Select a device and physical interface, then click Trace Fanout.</div>
+{% endif %}
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-interface-group-spacing"></script>
+{% endblock %}

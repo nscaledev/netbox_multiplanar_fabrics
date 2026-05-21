@@ -1,20 +1,32 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
+{% url 'plugins:netbox_plant_graph:template_library' as template_library_url %}
+{% url 'plugins:netbox_plant_graph:spatial_template_compose' pk=spatial_template.pk as spatial_compose_url %}
+{% url 'plugins:netbox_plant_graph:spatial_stamp_wizard' pk=spatial_template.pk as spatial_stamp_wizard_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
   <div>
-    <h1>{{ page_title }}</h1>
+    <h1 class="mb-1">{{ page_title|default:"Connection Template Builder" }}</h1>
     {% if spatial_template.description %}
       <p class="text-muted mb-0">{{ spatial_template.description }}</p>
+    {% else %}
+      <p class="text-muted mb-0">Define inter-node connectivity patterns for deployment stamping.</p>
     {% endif %}
   </div>
-  <div class="d-flex gap-2">
-    <a href="{% url 'plugins:netbox_plant_graph:spatial_template_compose' pk=spatial_template.pk %}" class="btn btn-outline-secondary">
-      Node Composer
-    </a>
-    <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary">
-      &larr; Back to Detail
-    </a>
+  <div class="d-flex flex-wrap gap-2">
+    {% if template_library_url %}
+      <a href="{{ template_library_url }}" class="btn btn-outline-secondary btn-sm">Template Library</a>
+    {% endif %}
+    {% if spatial_compose_url %}
+      <a href="{{ spatial_compose_url }}" class="btn btn-outline-secondary btn-sm">Node Composer</a>
+    {% endif %}
+    {% if spatial_stamp_wizard_url %}
+      <a href="{{ spatial_stamp_wizard_url }}" class="btn btn-outline-primary btn-sm">Spatial Stamp Wizard</a>
+    {% endif %}
+    {% if spatial_template and spatial_template.get_absolute_url %}
+      <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary btn-sm">Template Detail</a>
+    {% endif %}
   </div>
 </div>
 
@@ -28,9 +40,9 @@
 
 <div class="row">
   <div class="col-lg-8 mb-3">
-    <div class="card">
+    <div class="card mb-3">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <strong>Connections</strong>
+        <strong>Connection Templates</strong>
         <span class="badge bg-secondary">{{ connections|length }}</span>
       </div>
       <div class="card-body p-0">
@@ -40,8 +52,7 @@
               <tr>
                 <th>Name</th>
                 <th>Assembly</th>
-                <th>Source</th>
-                <th>Dest</th>
+                <th>Endpoints</th>
                 <th>Mode</th>
                 <th></th>
               </tr>
@@ -50,13 +61,18 @@
               {% for conn in connections %}
                 <tr>
                   <td>
-                    <div class="fw-semibold">{{ conn.name }}</div>
-                    {% if conn.label_pattern %}<div class="small text-muted">{{ conn.label_pattern }}</div>{% endif %}
+                    <div class="fw-semibold">{{ conn.name|default:"Connection" }}</div>
+                    {% if conn.label_pattern %}
+                      <div class="small text-muted">{{ conn.label_pattern }}</div>
+                    {% endif %}
                   </td>
-                  <td>{{ conn.assembly_template }}</td>
-                  <td>{{ conn.source_node }} (slot {{ conn.source_slot_index }}, connector {{ conn.source_connector_number }})</td>
-                  <td>{{ conn.dest_node }} (slot {{ conn.dest_slot_index }}, connector {{ conn.dest_connector_number }})</td>
-                  <td>{{ conn.get_enumeration_mode_display }}</td>
+                  <td>{{ conn.assembly_template|default:"-" }}</td>
+                  <td>
+                    {{ conn.source_node|default:"-" }} (slot {{ conn.source_slot_index|default:"-" }}, connector {{ conn.source_connector_number|default:"-" }})
+                    <br>
+                    {{ conn.dest_node|default:"-" }} (slot {{ conn.dest_slot_index|default:"-" }}, connector {{ conn.dest_connector_number|default:"-" }})
+                  </td>
+                  <td>{{ conn.get_enumeration_mode_display|default:conn.enumeration_mode|default:"-" }}</td>
                   <td>
                     <form method="post" class="mb-0" onsubmit="return confirm('Remove this connection template?');">
                       {% csrf_token %}
@@ -70,22 +86,65 @@
             </tbody>
           </table>
         {% else %}
-          <p class="text-muted p-3 mb-0">No connection templates defined yet.</p>
+          <div class="p-3 text-muted">No connection templates are defined yet.</div>
         {% endif %}
       </div>
     </div>
+
+    {% with run_rows=recent_runs|default:stamp_runs %}
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Recent Build/Stamp Runs</strong>
+          <span class="badge bg-secondary">{{ run_rows|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          {% if run_rows %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for run in run_rows %}
+                  <tr>
+                    <td>{{ run.name|default:run.label|default:run.pk|default:"Run" }}</td>
+                    <td>{{ run.status|default:run.get_status_display|default:"-" }}</td>
+                    <td>{{ run.started_at|default:run.created|default:run.created_at|default:"-" }}</td>
+                    <td>
+                      {% if run.get_absolute_url %}
+                        <a href="{{ run.get_absolute_url }}">View</a>
+                      {% elif run.result and run.result.get_absolute_url %}
+                        <a href="{{ run.result.get_absolute_url }}">Result</a>
+                      {% else %}
+                        <span class="text-muted">-</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="p-3 text-muted">No recent runs are available.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endwith %}
   </div>
 
   <div class="col-lg-4 mb-3">
-    <div class="card">
+    <div class="card mb-3">
       <div class="card-header"><strong>Add Connection</strong></div>
       <div class="card-body">
-        <form method="post">
+        <form method="post"{% if execution_url %} action="{{ execution_url }}"{% endif %}>
           {% csrf_token %}
           <input type="hidden" name="action" value="add_connection">
 
           <div class="mb-3">
-            <label class="form-label">Name <span class="text-danger">*</span></label>
+            <label class="form-label">Name</label>
             <input type="text" name="name" class="form-control" required>
           </div>
 
@@ -95,38 +154,38 @@
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Assembly Template <span class="text-danger">*</span></label>
+            <label class="form-label">Assembly Template</label>
             <select name="assembly_template_pk" class="form-select" required>
               <option value="">-- Select --</option>
               {% for t in assembly_templates %}
-                <option value="{{ t.pk }}">{{ t.name }}</option>
+                <option value="{{ t.pk }}">{{ t.name|default:t }}</option>
               {% endfor %}
             </select>
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Source Node <span class="text-danger">*</span></label>
+            <label class="form-label">Source Node</label>
             <select name="source_node_pk" class="form-select" required>
               <option value="">-- Select --</option>
               {% for n in nodes %}
-                <option value="{{ n.pk }}">{{ n.name_pattern }}</option>
+                <option value="{{ n.pk }}">{{ n.name_pattern|default:n }}</option>
               {% endfor %}
             </select>
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Destination Node <span class="text-danger">*</span></label>
+            <label class="form-label">Destination Node</label>
             <select name="dest_node_pk" class="form-select" required>
               <option value="">-- Select --</option>
               {% for n in nodes %}
-                <option value="{{ n.pk }}">{{ n.name_pattern }}</option>
+                <option value="{{ n.pk }}">{{ n.name_pattern|default:n }}</option>
               {% endfor %}
             </select>
           </div>
 
           <div class="row g-2 mb-3">
             <div class="col-6">
-              <label class="form-label">Source Slot Index</label>
+              <label class="form-label">Source Slot</label>
               <input type="number" name="source_slot_index" class="form-control" min="1" value="1" required>
             </div>
             <div class="col-6">
@@ -137,7 +196,7 @@
 
           <div class="row g-2 mb-3">
             <div class="col-6">
-              <label class="form-label">Dest Slot Index</label>
+              <label class="form-label">Dest Slot</label>
               <input type="number" name="dest_slot_index" class="form-control" min="1" value="1" required>
             </div>
             <div class="col-6">
@@ -157,11 +216,39 @@
 
           <div class="mb-3">
             <label class="form-label">Label Pattern</label>
-            <input type="text" name="label_pattern" class="form-control" placeholder="e.g. conn-{index}">
+            <input type="text" name="label_pattern" class="form-control" placeholder="conn-{index}">
           </div>
 
-          <button type="submit" class="btn btn-primary">Add Connection</button>
+          <div class="d-flex flex-wrap gap-2">
+            <button type="submit" class="btn btn-primary">Add Connection</button>
+            {% if rollback_url %}
+              <a href="{{ rollback_url }}" class="btn btn-outline-danger">Rollback Latest Run</a>
+            {% endif %}
+          </div>
         </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Workflow Summary</strong></div>
+      <div class="card-body">
+        {% if workflow_summary %}
+          {% if workflow_summary.items %}
+            <table class="table table-sm mb-0">
+              {% for metric, value in workflow_summary.items %}
+                <tr><th>{{ metric }}</th><td>{{ value }}</td></tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <ul class="mb-0 ps-3">
+              {% for metric in workflow_summary %}
+                <li>{{ metric.name|default:metric.label|default:"Metric" }}: {{ metric.value|default:metric.count|default:metric }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">No summary metrics are available yet.</div>
+        {% endif %}
       </div>
     </div>
   </div>

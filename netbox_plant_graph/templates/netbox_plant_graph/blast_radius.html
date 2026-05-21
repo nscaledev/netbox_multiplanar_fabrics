@@ -4,29 +4,52 @@
 <h1>Physical Cable Blast Radius</h1>
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3">
-      <div class="col-md-4">
-        <label class="form-label" for="target_registry_key">Target Type</label>
-        <select class="form-select" id="target_registry_key" name="target_registry_key">
-          {% for choice in registry_choices %}
-            <option value="{{ choice.value }}"{% if choice.value == query.target_registry_key %} selected{% endif %}>{{ choice.label }}</option>
+    <form method="get" class="row g-3 align-items-end">
+      {% if fabrics %}
+        <div class="col-md-3">
+          <label class="form-label" for="fabric">Fabric</label>
+          <select id="fabric" name="fabric" class="form-select">
+            <option value="">All fabrics</option>
+            {% for fabric in fabrics %}
+              <option value="{{ fabric.pk }}"{% if selected_fabric and fabric.pk == selected_fabric.pk %} selected{% endif %}>
+                {{ fabric.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      {% endif %}
+      <div class="col-md-3">
+        <label class="form-label" for="failure_mode">Failure Scenario</label>
+        <select class="form-select" id="failure_mode" name="failure_mode">
+          {% for choice in failure_mode_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.failure_mode %} selected{% endif %}>{{ choice.label }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-4">
-        <label class="form-label" for="target_id">Target ID</label>
-        <input class="form-control" id="target_id" name="target_id" value="{{ query.target_id }}">
+      <div class="col-md-3">
+        <label class="form-label" for="connector_endpoint_id">Connector Endpoint</label>
+        <select class="form-select" id="connector_endpoint_id" name="connector_endpoint_id">
+          <option value="">Select connector endpoint</option>
+          {% for choice in connector_choices %}
+            <option value="{{ choice.value }}"{% if query.connector_endpoint_id == choice.value|stringformat:"s" %} selected{% endif %}>
+              {{ choice.label }}
+            </option>
+          {% endfor %}
+        </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label" for="resolution">Resolution</label>
-        <select class="form-select" id="resolution" name="resolution">
-          {% for choice in resolution_choices %}
-            <option value="{{ choice.value }}"{% if choice.value == query.resolution %} selected{% endif %}>{{ choice.label }}</option>
+      <div class="col-md-3">
+        <label class="form-label" for="cable_assembly_id">Cable Assembly</label>
+        <select class="form-select" id="cable_assembly_id" name="cable_assembly_id">
+          <option value="">Select cable assembly</option>
+          {% for choice in cable_choices %}
+            <option value="{{ choice.value }}"{% if query.cable_assembly_id == choice.value|stringformat:"s" %} selected{% endif %}>
+              {{ choice.label }}
+            </option>
           {% endfor %}
         </select>
       </div>
       <div class="col-md-2 align-self-end">
-        <button type="submit" class="btn btn-primary">Compute</button>
+        <button type="submit" class="btn btn-primary w-100">Compute</button>
       </div>
     </form>
   </div>
@@ -36,39 +59,261 @@
   <div class="alert alert-danger">{{ error }}</div>
 {% endif %}
 
-{% if result %}
-  <div class="card">
-    <div class="card-header">Impacted Objects</div>
-    <div class="card-body">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Distance</th>
-            <th>Object</th>
-            <th>Type</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in result.impacted_paths %}
-            <tr>
-              <td>{{ item.distance }}</td>
-              <td>
-                {% if item.object.url %}
-                  <a href="{{ item.object.url }}">{{ item.object.display }}</a>
-                {% else %}
-                  {{ item.object.display }}
-                {% endif %}
-              </td>
-              <td>{{ item.object.model }}</td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="3">No impacted objects were found.</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+{% with blast_radius|default:result as radius %}
+{% if radius and radius.mode == 'scenario' %}
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Blast Summary</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Scenario</dt>
+            <dd class="col-sm-7">{{ radius.failure_mode_label }}</dd>
+            <dt class="col-sm-5">Component</dt>
+            <dd class="col-sm-7">
+              {% if radius.target.url %}
+                <a href="{{ radius.target.url }}">{{ radius.target.display }}</a>
+              {% elif radius.target.display %}
+                {{ radius.target.display }}
+              {% else %}
+                <span class="text-muted">Unknown</span>
+              {% endif %}
+            </dd>
+            <dt class="col-sm-5">Simulated Parts</dt>
+            <dd class="col-sm-7">{{ radius.simulated_component_count }}</dd>
+            <dt class="col-sm-5">Impacted Endpoints</dt>
+            <dd class="col-sm-7">{{ radius.impacted_endpoint_count }}</dd>
+            <dt class="col-sm-5">Impacted Paths</dt>
+            <dd class="col-sm-7">{{ radius.impacted_path_count }}</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Impacted Endpoints</div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Endpoint</th>
+                  <th>Impacted Lanes</th>
+                  <th>Impacted Paths</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in radius.impacted_endpoints %}
+                  <tr>
+                    <td>
+                      {% if item.endpoint.url %}
+                        <a href="{{ item.endpoint.url }}">{{ item.endpoint.display }}</a>
+                      {% else %}
+                        {{ item.endpoint.display }}
+                      {% endif %}
+                      {% if item.endpoint.endpoint_context %}
+                        <div class="small text-muted">{{ item.endpoint.endpoint_context }}</div>
+                      {% endif %}
+                    </td>
+                    <td>{{ item.impacted_lane_total }}</td>
+                    <td>{{ item.impacted_path_total }}</td>
+                    <td>
+                      <div class="d-flex flex-wrap gap-2">
+                        {% if item.endpoint.lane_drilldown_url %}
+                          <a class="btn btn-sm btn-outline-primary" href="{{ item.endpoint.lane_drilldown_url }}">Drilldown</a>
+                        {% endif %}
+                        {% if item.sample_path_url %}
+                          <a class="btn btn-sm btn-outline-primary" href="{{ item.sample_path_url }}">Path</a>
+                        {% endif %}
+                        {% if item.endpoint.lane_workspace_url %}
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ item.endpoint.lane_workspace_url }}">Workspace</a>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="4" class="text-muted">No impacted endpoints were found for the selected failure scenario.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Impacted End-To-End Paths</div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Source Lane</th>
+              <th>Destination Lane</th>
+              <th>Failed Components On Path</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in radius.impacted_paths %}
+              <tr>
+                <td>
+                  {% if row.source_lane.url %}
+                    <a href="{{ row.source_lane.url }}">{{ row.source_lane.display }}</a>
+                  {% else %}
+                    {{ row.source_lane.display }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if row.destination_lane %}
+                    {% if row.destination_lane.url %}
+                      <a href="{{ row.destination_lane.url }}">{{ row.destination_lane.display }}</a>
+                    {% else %}
+                      {{ row.destination_lane.display }}
+                    {% endif %}
+                  {% else %}
+                    <span class="text-muted">No destination resolved</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% for component in row.matched_components %}
+                    <div>
+                      {% if component.url %}
+                        <a href="{{ component.url }}">{{ component.display }}</a>
+                      {% else %}
+                        {{ component.display }}
+                      {% endif %}
+                      {% if component.cable_assembly %}
+                        <span class="text-muted">({{ component.cable_assembly.display }})</span>
+                      {% endif %}
+                    </div>
+                  {% empty %}
+                    <span class="text-muted">None</span>
+                  {% endfor %}
+                </td>
+                <td>
+                  <div class="d-flex flex-wrap gap-2">
+                    {% if row.source_lane.lane_drilldown_url %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ row.source_lane.lane_drilldown_url }}">Drilldown</a>
+                    {% endif %}
+                    {% if row.path_url %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ row.path_url }}">Path</a>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="4" class="text-muted">No impacted paths were found for the selected failure scenario.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% elif radius %}
+  <div class="row">
+    <div class="col-lg-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Blast Summary</div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Resolution</dt>
+            <dd class="col-sm-7">{{ radius.resolution|default:query.resolution }}</dd>
+            <dt class="col-sm-5">Impacted</dt>
+            <dd class="col-sm-7">{{ radius.impacted_paths|length }}</dd>
+            <dt class="col-sm-5">Target</dt>
+            <dd class="col-sm-7">
+              {% if radius.target.display %}
+                {{ radius.target.display }}
+              {% elif radius.target %}
+                {{ radius.target }}
+              {% else %}
+                <span class="text-muted">Unknown</span>
+              {% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Impacted Objects</div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Distance</th>
+                  <th>Object</th>
+                  <th>Type</th>
+                  <th>Context</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in radius.impacted_paths %}
+                  <tr>
+                    <td><span class="badge bg-light text-dark border">{{ item.distance }}</span></td>
+                    <td>
+                      {% if item.object.url %}
+                        <a href="{{ item.object.url }}">{{ item.object.display }}</a>
+                      {% else %}
+                        {{ item.object.display }}
+                      {% endif %}
+                      {% if item.object.cable_assemblies %}
+                        <div class="small text-muted mt-1">
+                          Cables:
+                          {% for cable in item.object.cable_assemblies %}
+                            {% if not forloop.first %}, {% endif %}
+                            {% if cable.url %}
+                              <a href="{{ cable.url }}">{{ cable.display }}</a>
+                            {% else %}
+                              {{ cable.display }}
+                            {% endif %}
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    </td>
+                    <td>{{ item.object.model }}</td>
+                    <td>{{ item.object.endpoint_context|default:"-" }}</td>
+                    <td>
+                      <div class="d-flex flex-wrap gap-2">
+                        {% if item.object.lane_drilldown_url %}
+                          <a class="btn btn-sm btn-outline-primary" href="{{ item.object.lane_drilldown_url }}">Drilldown</a>
+                        {% endif %}
+                        {% if item.object.signal_path_resolver_url %}
+                          <a class="btn btn-sm btn-outline-primary" href="{{ item.object.signal_path_resolver_url }}">Path</a>
+                        {% endif %}
+                        {% if item.object.lane_workspace_url %}
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ item.object.lane_workspace_url }}">Workspace</a>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="5" class="text-muted">No impacted objects were found.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% elif query.connector_endpoint_id or query.cable_assembly_id %}
+  <div class="alert alert-warning">Blast-radius computation returned no data for the selected failure scenario.</div>
+{% elif query.target_id %}
+  <div class="alert alert-warning">Blast-radius computation returned no data for the selected target.</div>
+{% else %}
+  <div class="alert alert-info">Select a failure scenario and component instance to compute impacted endpoints and path drill-downs.</div>
 {% endif %}
+{% endwith %}
 {% endblock %}

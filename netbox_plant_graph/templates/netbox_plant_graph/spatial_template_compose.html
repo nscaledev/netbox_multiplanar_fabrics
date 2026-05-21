@@ -1,21 +1,35 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
+{% url 'plugins:netbox_plant_graph:template_library' as template_library_url %}
+{% url 'plugins:netbox_plant_graph:connection_template_builder' pk=spatial_template.pk as connection_builder_url %}
+{% url 'plugins:netbox_plant_graph:spatial_stamp_wizard' pk=spatial_template.pk as spatial_stamp_wizard_url %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
   <div>
-    <h1>{{ page_title }}</h1>
+    <h1 class="mb-1">{{ page_title|default:"Spatial Template Composer" }}</h1>
     {% if spatial_template.description %}
       <p class="text-muted mb-0">{{ spatial_template.description }}</p>
+    {% else %}
+      <p class="text-muted mb-0">Compose hierarchy nodes used by spatial stamping workflows.</p>
     {% endif %}
-    <small class="text-muted">Root node type: <strong>{{ spatial_template.get_root_node_type_display }}</strong></small>
+    {% if spatial_template %}
+      <small class="text-muted">Root node type: <strong>{{ spatial_template.get_root_node_type_display|default:spatial_template.root_node_type|default:"-" }}</strong></small>
+    {% endif %}
   </div>
-  <div class="d-flex gap-2">
-    <a href="{% url 'plugins:netbox_plant_graph:connection_template_builder' pk=spatial_template.pk %}" class="btn btn-outline-secondary">
-      Connections
-    </a>
-    <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary">
-      &larr; Back to Detail
-    </a>
+  <div class="d-flex flex-wrap gap-2">
+    {% if template_library_url %}
+      <a href="{{ template_library_url }}" class="btn btn-outline-secondary btn-sm">Template Library</a>
+    {% endif %}
+    {% if connection_builder_url %}
+      <a href="{{ connection_builder_url }}" class="btn btn-outline-secondary btn-sm">Connection Builder</a>
+    {% endif %}
+    {% if spatial_stamp_wizard_url %}
+      <a href="{{ spatial_stamp_wizard_url }}" class="btn btn-outline-primary btn-sm">Spatial Stamp Wizard</a>
+    {% endif %}
+    {% if spatial_template and spatial_template.get_absolute_url %}
+      <a href="{{ spatial_template.get_absolute_url }}" class="btn btn-outline-secondary btn-sm">Template Detail</a>
+    {% endif %}
   </div>
 </div>
 
@@ -28,11 +42,11 @@
 {% endif %}
 
 <div class="row">
-  <div class="col-md-8">
-    <div class="card mb-4">
+  <div class="col-lg-8 mb-3">
+    <div class="card mb-3">
       <div class="card-header d-flex justify-content-between align-items-center">
         <strong>Node Hierarchy</strong>
-        <span class="badge bg-secondary">{{ flat_nodes|length }} node{{ flat_nodes|length|pluralize }}</span>
+        <span class="badge bg-secondary">{{ flat_nodes|length }}</span>
       </div>
       <div class="card-body p-0">
         {% if flat_nodes %}
@@ -50,26 +64,23 @@
               {% for entry in flat_nodes %}
                 <tr>
                   <td>
-                    {% for i in entry.depth|rjust:entry.depth %}{% endfor %}
                     {% if entry.depth %}
-                      <span style="display:inline-block; width:{{ entry.depth }}rem; color:#aaa;">
+                      <span class="text-muted">
                         {% for i in "x"|rjust:entry.depth %}&nbsp;&nbsp;{% endfor %}
+                        &#x2514;&#xFE0E;
                       </span>
-                      &#x2514;&#xFE0E;
                     {% endif %}
-                    <strong>{{ entry.node.name_pattern }}</strong>
+                    <strong>{{ entry.node.name_pattern|default:"(unnamed)" }}</strong>
                   </td>
-                  <td>{{ entry.node.get_node_type_display }}</td>
-                  <td>{{ entry.node.quantity }}</td>
-                  <td>{% if entry.node.parent %}{{ entry.node.parent.name_pattern }}{% else %}&mdash;{% endif %}</td>
+                  <td>{{ entry.node.get_node_type_display|default:entry.node.node_type|default:"-" }}</td>
+                  <td>{{ entry.node.quantity|default:"1" }}</td>
+                  <td>{{ entry.node.parent.name_pattern|default:"-" }}</td>
                   <td>
-                    <form method="post" style="display:inline;" onsubmit="return confirm('Remove node and all its children?');">
+                    <form method="post" class="mb-0" onsubmit="return confirm('Remove node and all descendants?');">
                       {% csrf_token %}
                       <input type="hidden" name="action" value="remove_node">
                       <input type="hidden" name="node_pk" value="{{ entry.node.pk }}">
-                      <button type="submit" class="btn btn-sm btn-danger" title="Remove node">
-                        &times;
-                      </button>
+                      <button type="submit" class="btn btn-sm btn-danger">&times;</button>
                     </form>
                   </td>
                 </tr>
@@ -77,14 +88,57 @@
             </tbody>
           </table>
         {% else %}
-          <p class="text-muted p-3 mb-0">No nodes defined yet. Add the first node below.</p>
+          <div class="p-3 text-muted">No nodes defined yet. Add the first node.</div>
         {% endif %}
       </div>
     </div>
+
+    {% with run_rows=recent_runs|default:stamp_runs %}
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Recent Composer/Stamp Runs</strong>
+          <span class="badge bg-secondary">{{ run_rows|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          {% if run_rows %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for run in run_rows %}
+                  <tr>
+                    <td>{{ run.name|default:run.label|default:run.pk|default:"Run" }}</td>
+                    <td>{{ run.status|default:run.get_status_display|default:"-" }}</td>
+                    <td>{{ run.started_at|default:run.created|default:run.created_at|default:"-" }}</td>
+                    <td>
+                      {% if run.get_absolute_url %}
+                        <a href="{{ run.get_absolute_url }}">View</a>
+                      {% elif run.result and run.result.get_absolute_url %}
+                        <a href="{{ run.result.get_absolute_url }}">Result</a>
+                      {% else %}
+                        <span class="text-muted">-</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="p-3 text-muted">No recent runs are available.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endwith %}
   </div>
 
-  <div class="col-md-4">
-    <div class="card mb-4">
+  <div class="col-lg-4 mb-3">
+    <div class="card mb-3">
       <div class="card-header"><strong>Add Node</strong></div>
       <div class="card-body">
         <form method="post">
@@ -92,15 +146,14 @@
           <input type="hidden" name="action" value="add_node">
 
           <div class="mb-3">
-            <label class="form-label">Name Pattern <span class="text-danger">*</span></label>
-            <input type="text" name="name_pattern" class="form-control" placeholder="e.g. Rack-{n}" required>
-            <small class="form-text text-muted">Used to name generated nodes (e.g. <code>Row-{n}</code>).</small>
+            <label class="form-label">Name Pattern</label>
+            <input type="text" name="name_pattern" class="form-control" placeholder="Rack-{n}" required>
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Node Type <span class="text-danger">*</span></label>
+            <label class="form-label">Node Type</label>
             <select name="node_type" class="form-select" required>
-              <option value="">-- Select type --</option>
+              <option value="">-- Select --</option>
               {% for value, label in node_type_choices %}
                 <option value="{{ value }}">{{ label }}</option>
               {% endfor %}
@@ -115,11 +168,11 @@
           <div class="mb-3">
             <label class="form-label">Parent Node</label>
             <select name="parent_pk" class="form-select">
-              <option value="">(none — root node)</option>
+              <option value="">(root)</option>
               {% for entry in flat_nodes %}
                 <option value="{{ entry.node.pk }}">
                   {% for i in "x"|rjust:entry.depth %}&nbsp;{% endfor %}
-                  {{ entry.node.name_pattern }} ({{ entry.node.get_node_type_display }})
+                  {{ entry.node.name_pattern }} ({{ entry.node.get_node_type_display|default:entry.node.node_type }})
                 </option>
               {% endfor %}
             </select>
@@ -127,6 +180,29 @@
 
           <button type="submit" class="btn btn-primary">Add Node</button>
         </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Workflow Summary</strong></div>
+      <div class="card-body">
+        {% if workflow_summary %}
+          {% if workflow_summary.items %}
+            <table class="table table-sm mb-0">
+              {% for metric, value in workflow_summary.items %}
+                <tr><th>{{ metric }}</th><td>{{ value }}</td></tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <ul class="mb-0 ps-3">
+              {% for metric in workflow_summary %}
+                <li>{{ metric.name|default:metric.label|default:"Metric" }}: {{ metric.value|default:metric.count|default:metric }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">No summary metrics are available yet.</div>
+        {% endif %}
       </div>
     </div>
   </div>

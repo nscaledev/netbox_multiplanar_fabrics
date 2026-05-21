@@ -1,73 +1,169 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Stamp Spatial Template — {{ template.name }}</h1>
+{% url 'plugins:netbox_plant_graph:template_library' as template_library_url %}
+{% url 'plugins:netbox_plant_graph:spatial_template_compose' pk=template.pk as spatial_compose_url %}
+{% url 'plugins:netbox_plant_graph:connection_template_builder' pk=template.pk as connection_builder_url %}
 
-<div class="row">
-  <div class="col-md-4">
-    <div class="card mb-3">
-      <div class="card-header"><strong>Spatial Template</strong></div>
-      <div class="card-body">
-        <table class="table table-sm">
-          <tr><th>Root Node Type</th><td>{{ template.get_root_node_type_display }}</td></tr>
-          <tr><th>Nodes</th><td>{{ template.nodes.count }}</td></tr>
-          {% if template.description %}<tr><th>Description</th><td>{{ template.description }}</td></tr>{% endif %}
-        </table>
-      </div>
-    </div>
-
-    <div class="alert alert-info">
-      2D site/location layout now lives in <code>netbox-floorplan-plugin</code>.
-      Spatial stamping here still owns hierarchy and rack creation, but operators should use floorplan pages for layout editing and inspection.
-    </div>
-
-    {% if node_tree %}
-      <div class="card">
-        <div class="card-header"><strong>Node Tree Preview</strong></div>
-        <div class="card-body">
-          <ul class="list-unstyled mb-0" style="font-size:0.85rem">
-            {% include "netbox_plant_graph/includes/node_tree.html" with nodes=node_tree %}
-          </ul>
-        </div>
-      </div>
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Spatial Stamp Wizard</h1>
+    <p class="text-muted mb-0">Stamp location/rack hierarchy from a spatial template.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if template_library_url %}
+      <a href="{{ template_library_url }}" class="btn btn-outline-secondary btn-sm">Template Library</a>
+    {% endif %}
+    {% if spatial_compose_url %}
+      <a href="{{ spatial_compose_url }}" class="btn btn-outline-secondary btn-sm">Compose Nodes</a>
+    {% endif %}
+    {% if connection_builder_url %}
+      <a href="{{ connection_builder_url }}" class="btn btn-outline-secondary btn-sm">Build Connections</a>
     {% endif %}
   </div>
+</div>
 
-  <div class="col-md-8">
-    {% if messages %}
-      {% for message in messages %}
-        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
-          {{ message }}
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row">
+  <div class="col-lg-4 mb-3">
+    <div class="card mb-3">
+      <div class="card-header"><strong>Template Summary</strong></div>
+      <div class="card-body">
+        {% if template %}
+          <table class="table table-sm mb-0">
+            <tr><th>Name</th><td>{{ template.name|default:template }}</td></tr>
+            <tr><th>Root Node Type</th><td>{{ template.get_root_node_type_display|default:template.root_node_type|default:"-" }}</td></tr>
+            <tr><th>Nodes</th><td>{{ template.nodes.count|default:template.node_count|default:"0" }}</td></tr>
+            <tr><th>Description</th><td>{{ template.description|default:"-" }}</td></tr>
+          </table>
+        {% else %}
+          <div class="text-muted">No spatial template selected.</div>
+        {% endif %}
+      </div>
+      {% if template and template.get_absolute_url %}
+        <div class="card-footer">
+          <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary btn-sm">Template Detail</a>
         </div>
-      {% endfor %}
-    {% endif %}
+      {% endif %}
+    </div>
 
+    <div class="card mb-3">
+      <div class="card-header"><strong>Node Tree Preview</strong></div>
+      <div class="card-body">
+        {% if node_tree %}
+          <ul class="list-unstyled mb-0" style="font-size:0.9rem">
+            {% include "netbox_plant_graph/includes/node_tree.html" with nodes=node_tree %}
+          </ul>
+        {% else %}
+          <div class="text-muted">No node tree preview is available.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Workflow Summary</strong></div>
+      <div class="card-body">
+        {% if workflow_summary %}
+          {% if workflow_summary.items %}
+            <table class="table table-sm mb-0">
+              {% for metric, value in workflow_summary.items %}
+                <tr><th>{{ metric }}</th><td>{{ value }}</td></tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <ul class="mb-0 ps-3">
+              {% for metric in workflow_summary %}
+                <li>{{ metric.name|default:metric.label|default:"Metric" }}: {{ metric.value|default:metric.count|default:metric }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">No summary metrics are available yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8 mb-3">
     {% if result %}
       <div class="alert alert-success">
-        <strong>Stamp successful!</strong>
-        Created {{ result.locations|length }} location(s), {{ result.racks|length }} rack(s), {{ result.placements|length }} spatial placement(s).
-      </div>
-      <div class="d-flex gap-2">
-        {% if floorplan_urls %}
-          <a href="{{ floorplan_urls.object_url|default:floorplan_urls.add_url }}" class="btn btn-primary">Open Floorplan</a>
-        {% endif %}
-        <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Back to Template</a>
-      </div>
-    {% else %}
-      <div class="card">
-        <div class="card-header"><strong>Stamp Parameters</strong></div>
-        <div class="card-body">
-          <form method="post">
-            {% csrf_token %}
-            {{ form.as_p }}
-            <div class="d-flex gap-2 mt-3">
-              <button type="submit" class="btn btn-primary">Stamp Spatial Template</button>
-              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
-            </div>
-          </form>
-        </div>
+        <strong>Spatial stamp completed.</strong>
+        Created {{ result.locations|length }} location(s), {{ result.racks|length }} rack(s), and {{ result.placements|length }} placement(s).
       </div>
     {% endif %}
+
+    <div class="card mb-3">
+      <div class="card-header"><strong>Stamp Inputs</strong></div>
+      <div class="card-body">
+        <form method="post"{% if execution_url %} action="{{ execution_url }}"{% endif %}>
+          {% csrf_token %}
+          {% if form %}
+            {{ form.as_p }}
+          {% else %}
+            <div class="text-muted mb-0">No input form is currently available for this workflow.</div>
+          {% endif %}
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Run Spatial Stamp</button>
+            {% if rollback_url %}
+              <a href="{{ rollback_url }}" class="btn btn-outline-danger">Rollback Latest Run</a>
+            {% endif %}
+            {% if template and template.get_absolute_url %}
+              <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
+            {% endif %}
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% with run_rows=recent_runs|default:stamp_runs %}
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Recent Runs</strong>
+          <span class="badge bg-secondary">{{ run_rows|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          {% if run_rows %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for run in run_rows %}
+                  <tr>
+                    <td>{{ run.name|default:run.label|default:run.pk|default:"Run" }}</td>
+                    <td>{{ run.status|default:run.get_status_display|default:"-" }}</td>
+                    <td>{{ run.started_at|default:run.created|default:run.created_at|default:"-" }}</td>
+                    <td>
+                      {% if run.get_absolute_url %}
+                        <a href="{{ run.get_absolute_url }}">View</a>
+                      {% elif run.result and run.result.get_absolute_url %}
+                        <a href="{{ run.result.get_absolute_url }}">Result</a>
+                      {% else %}
+                        <span class="text-muted">-</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="p-3 text-muted">No run history has been recorded yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endwith %}
   </div>
 </div>
 {% endblock %}

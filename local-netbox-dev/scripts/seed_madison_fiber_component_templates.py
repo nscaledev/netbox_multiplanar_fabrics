@@ -12,10 +12,13 @@ from dcim.models import (
 )
 
 from netbox_plant_graph.models import (
-    AssemblyConnectorTemplate,
-    AssemblyMappingTemplate,
-    AssemblyTemplate,
-    BreakoutProfile,
+    StampTemplate,
+    TransferPattern,
+)
+from netbox_plant_graph.services.architecture import (
+    CHANNEL_MAP_MATRIX,
+    MPO_POSITION_COUNT,
+    ensure_roce_4plane_shuffle_architecture,
 )
 
 
@@ -66,84 +69,167 @@ def upsert_module_type(manufacturer, definition):
     return module_type
 
 
-def upsert_breakout_profile(definition):
-    return BreakoutProfile.objects.update_or_create(
+def connector_spec(connector):
+    return {
+        'label': connector['label'],
+        'connector_kind': connector.get('connector_type', 'mpo-12'),
+        'position_count': connector.get('position_count', 1),
+        'metadata': connector.get('metadata', {}),
+    }
+
+
+def upsert_transfer_pattern(architecture, definition):
+    rule = {
+        'type': 'breakout',
+        'parent_speed_gbps': definition.get('parent_speed_gbps'),
+        'child_count': definition['child_count'],
+        'child_speed_gbps': definition.get('child_speed_gbps'),
+        'mapping_mode': definition.get('mapping_mode', 'sequential'),
+        'position_map': definition.get('position_map', {}),
+    }
+    pattern, _ = TransferPattern.objects.update_or_create(
+        architecture=architecture,
         slug=definition['slug'],
         defaults={
             'name': definition['name'],
-            'description': definition['description'],
-            'parent_speed_gbps': definition.get('parent_speed_gbps'),
-            'child_count': definition['child_count'],
-            'child_speed_gbps': definition.get('child_speed_gbps'),
-            'mapping_mode': definition.get('mapping_mode', 'sequential'),
-            'position_map': definition.get('position_map', {}),
+            'pattern_kind': 'breakout',
+            'rule': rule,
             'metadata': {
                 'source': SOURCE,
-                **definition.get('metadata', {}),
-            },
-        },
-    )[0]
-
-
-def upsert_assembly_template(definition):
-    device_type = None
-    if definition.get('device_type_slug'):
-        device_type = DeviceType.objects.get(slug=definition['device_type_slug'])
-    template, _ = AssemblyTemplate.objects.update_or_create(
-        slug=definition['slug'],
-        defaults={
-            'name': definition['name'],
-            'description': definition['description'],
-            'assembly_type': definition.get('assembly_type', 'trunk_bundle'),
-            'cable_profile_hint': definition.get('cable_profile_hint', ''),
-            'device_type': device_type,
-            'metadata': {
-                'source': SOURCE,
+                'legacy_model': 'BreakoutProfile',
+                'v2_replacement': 'TransferPattern',
+                'description': definition['description'],
                 **definition.get('metadata', {}),
             },
         },
     )
-    template.connectors.all().delete()
+    return pattern
 
-    side_a = []
-    side_b = []
-    for side, connectors, bucket in (
-        ('A', definition['side_a'], side_a),
-        ('B', definition['side_b'], side_b),
-    ):
-        for number, connector in enumerate(connectors, start=1):
-            bucket.append(AssemblyConnectorTemplate.objects.create(
-                template=template,
-                side=side,
-                connector_number=number,
-                connector_type=connector.get('connector_type', 'mpo-8'),
-                position_count=connector.get('position_count', 1),
-                label=connector['label'],
-                metadata=connector.get('metadata', {}),
-            ))
 
-    if definition.get('identity_mapping'):
-        for a_connector, b_connector in zip(side_a, side_b):
-            max_positions = min(a_connector.position_count, b_connector.position_count)
-            for position in range(1, max_positions + 1):
-                AssemblyMappingTemplate.objects.create(
-                    template=template,
-                    a_connector=a_connector,
-                    a_position=position,
-                    b_connector=b_connector,
-                    b_position=position,
-                    mapping_type='identity',
-                    metadata={'source': SOURCE},
-                )
+def upsert_shuffle_transfer_pattern(architecture):
+    rule = {
+        'type': 'cassette_transfer_policy',
+        'connector_kind': 'mpo-12',
+        'positions_per_connector': MPO_POSITION_COUNT,
+        'active_position_matrix': [dict(entry) for entry in CHANNEL_MAP_MATRIX],
+        'rear_position_transform': {
+            'type': 'key_down_roll',
+            'position_count': MPO_POSITION_COUNT,
+            'formula': 'dst_position = position_count + 1 - base_dst_position',
+        },
+        'position_groups': {
+            'A': [1, 12, 2, 11],
+            'B': [3, 10, 4, 9],
+        },
+        'groups': [
+            {
+                'name': 'shuffle-1',
+                'front_mpos': [1, 2],
+                'rear_mpos': [1, 2],
+                'matrix': [
+                    {'front_mpo': 1, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'A'},
+                    {'front_mpo': 1, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'A'},
+                    {'front_mpo': 2, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'B'},
+                    {'front_mpo': 2, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'B'},
+                ],
+            },
+            {
+                'name': 'shuffle-2',
+                'front_mpos': [3, 4],
+                'rear_mpos': [3, 4],
+                'matrix': [
+                    {'front_mpo': 3, 'rear_mpo': 3, 'src_group': 'A', 'dst_group': 'A'},
+                    {'front_mpo': 3, 'rear_mpo': 4, 'src_group': 'B', 'dst_group': 'A'},
+                    {'front_mpo': 4, 'rear_mpo': 3, 'src_group': 'A', 'dst_group': 'B'},
+                    {'front_mpo': 4, 'rear_mpo': 4, 'src_group': 'B', 'dst_group': 'B'},
+                ],
+            },
+        ],
+    }
+    pattern, _ = TransferPattern.objects.update_or_create(
+        architecture=architecture,
+        slug='madison-shuffle-cassette-2x2-full-fanout',
+        defaults={
+            'name': 'Madison 2x2 MPO-12 shuffle cassette channel-group matrix with key-down roll',
+            'pattern_kind': 'shuffle_2x2',
+            'rule': rule,
+            'metadata': {
+                'source': SOURCE,
+                'v2_replacement_for': 'AssemblyMappingTemplate rows on shuffle-cassette-2x2-mpo',
+            },
+        },
+    )
+    return pattern
+
+
+def upsert_component_stamp_template(architecture, definition):
+    device_type_slug = definition.get('device_type_slug')
+    device_type_model = None
+    if device_type_slug:
+        device_type_model = DeviceType.objects.filter(slug=device_type_slug).values_list('model', flat=True).first()
+
+    side_a = [connector_spec(connector) for connector in definition['side_a']]
+    side_b = [connector_spec(connector) for connector in definition['side_b']]
+    template_spec = {
+        'kind': 'fiber_component_template',
+        'schema_version': 2,
+        'architecture_slug': architecture.slug,
+        'architecture_version': architecture.version,
+        'component_slug': definition['slug'],
+        'component_type': definition.get('assembly_type', 'trunk_bundle'),
+        'device_type_slug': device_type_slug,
+        'device_type_model': device_type_model,
+        'connectors': {
+            'A': side_a,
+            'B': side_b,
+        },
+        'transfer_policy': {
+            'map_kind': 'identity' if definition.get('identity_mapping') else 'custom',
+            'identity_mapping': bool(definition.get('identity_mapping')),
+        },
+        'v2_instantiation_targets': [
+            'CableAssembly',
+            'FiberSegment',
+            'FiberStrand',
+            'StrandTermination',
+            'TransferMap',
+        ],
+        'metadata': definition.get('metadata', {}),
+    }
+    template, _ = StampTemplate.objects.update_or_create(
+        slug=definition['slug'],
+        defaults={
+            'architecture': architecture,
+            'name': definition['name'],
+            'description': definition['description'],
+            'template': template_spec,
+            'metadata': {
+                'source': SOURCE,
+                'template_family': 'fiber_component',
+                'legacy_model': 'AssemblyTemplate',
+                'v2_replacement': 'StampTemplate',
+                **definition.get('metadata', {}),
+            },
+        },
+    )
     return template
 
 
-def mpo_connectors(prefix, count, connector_type='mpo-8'):
+def connector_position_count(connector_type: str) -> int:
+    if connector_type.startswith(('mpo-', 'mtp-')):
+        try:
+            return int(connector_type.split('-', 1)[1])
+        except (IndexError, TypeError, ValueError):
+            return 1
+    return 1
+
+
+def mpo_connectors(prefix, count, connector_type='mpo-12'):
     return [
         {
             'label': f'{prefix}-{index:02d}',
             'connector_type': connector_type,
-            'position_count': 1,
+            'position_count': connector_position_count(connector_type),
         }
         for index in range(1, count + 1)
     ]
@@ -278,7 +364,7 @@ ASSEMBLY_TEMPLATES = [
     {
         'slug': 'shuffle-cassette-2x2-mpo',
         'name': '2x2 MPO Shuffle Cassette',
-        'description': 'Passive 2x2 MPO shuffle cassette with two independent full-fanout shuffle groups.',
+        'description': 'Passive 2x2 MPO-12 shuffle cassette with two independent channel-group shuffle matrices and rear-side key-down position roll.',
         'assembly_type': 'shuffle_board',
         'device_type_slug': 'shuffle-cassette-2x2-mpo',
         'side_a': mpo_connectors('rear-mpo', 4),
@@ -287,17 +373,24 @@ ASSEMBLY_TEMPLATES = [
         'metadata': {
             'topology_authority': 'Reusable Madison shuffle cassette transfer policy',
             'transfer_policy': {
-                'policy_type': 'two_independent_2x2_full_fanout',
+                'policy_type': 'two_independent_2x2_channel_group_matrix',
+                'positions_per_connector': MPO_POSITION_COUNT,
+                'active_position_matrix': [dict(entry) for entry in CHANNEL_MAP_MATRIX],
+                'rear_position_transform': {
+                    'type': 'key_down_roll',
+                    'position_count': MPO_POSITION_COUNT,
+                    'formula': 'dst_position = position_count + 1 - base_dst_position',
+                },
                 'groups': [
                     {
                         'name': 'shuffle-1',
                         'front_mpos': [1, 2],
                         'rear_mpos': [1, 2],
                         'transfer_maps': [
-                            {'front_mpo': 1, 'rear_mpo': 1},
-                            {'front_mpo': 1, 'rear_mpo': 2},
-                            {'front_mpo': 2, 'rear_mpo': 1},
-                            {'front_mpo': 2, 'rear_mpo': 2},
+                            {'front_mpo': 1, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'A'},
+                            {'front_mpo': 1, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'A'},
+                            {'front_mpo': 2, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'B'},
+                            {'front_mpo': 2, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'B'},
                         ],
                     },
                     {
@@ -305,10 +398,10 @@ ASSEMBLY_TEMPLATES = [
                         'front_mpos': [3, 4],
                         'rear_mpos': [3, 4],
                         'transfer_maps': [
-                            {'front_mpo': 3, 'rear_mpo': 3},
-                            {'front_mpo': 3, 'rear_mpo': 4},
-                            {'front_mpo': 4, 'rear_mpo': 3},
-                            {'front_mpo': 4, 'rear_mpo': 4},
+                            {'front_mpo': 3, 'rear_mpo': 3, 'src_group': 'A', 'dst_group': 'A'},
+                            {'front_mpo': 3, 'rear_mpo': 4, 'src_group': 'B', 'dst_group': 'A'},
+                            {'front_mpo': 4, 'rear_mpo': 3, 'src_group': 'A', 'dst_group': 'B'},
+                            {'front_mpo': 4, 'rear_mpo': 4, 'src_group': 'B', 'dst_group': 'B'},
                         ],
                     },
                 ],
@@ -402,6 +495,8 @@ ASSEMBLY_TEMPLATES = [
 @transaction.atomic
 def main():
     counters = Counter()
+    fixture = ensure_roce_4plane_shuffle_architecture()
+    architecture = fixture.architecture
     nvidia = get_manufacturer('nvidia', 'Nvidia', 'NVIDIA/Mellanox optical and network components.')
     get_manufacturer('nscale', 'Nscale Internal', 'Nscale-owned passive fiber plant definitions.')
 
@@ -410,14 +505,17 @@ def main():
         counters['module_types'] += 1
 
     for definition in BREAKOUT_PROFILES:
-        upsert_breakout_profile(definition)
-        counters['breakout_profiles'] += 1
+        upsert_transfer_pattern(architecture, definition)
+        counters['transfer_patterns'] += 1
+
+    upsert_shuffle_transfer_pattern(architecture)
+    counters['transfer_patterns'] += 1
 
     for definition in ASSEMBLY_TEMPLATES:
-        upsert_assembly_template(definition)
-        counters['assembly_templates'] += 1
+        upsert_component_stamp_template(architecture, definition)
+        counters['stamp_templates'] += 1
 
-    print('Seeded Madison fiber component templates:')
+    print('Seeded Madison fiber component templates for netbox_plant_graph v2:')
     for key, value in sorted(counters.items()):
         print(f'  {key}: {value}')
 

@@ -8,6 +8,16 @@
       </a>
     </div>
   {% endif %}
+  {% if suppression_revoke_url and object.status == 'active' %}
+    <div class="d-flex justify-content-end mb-3">
+      <form method="post" action="{{ suppression_revoke_url }}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger">
+          <i class="mdi mdi-cancel" aria-hidden="true"></i> Revoke Suppression
+        </button>
+      </form>
+    </div>
+  {% endif %}
 
   <div class="card">
     <div class="card-header">
@@ -32,4 +42,185 @@
       </table>
     </div>
   </div>
+
+  {% if architecture_semantics %}
+    <div class="card mt-3">
+      <div class="card-header">
+        <strong>Role Taxonomy</strong>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Slug</th>
+              <th>Name</th>
+              <th>Role Kind</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for role in architecture_semantics.roles %}
+              <tr>
+                <td>{{ role.slug }}</td>
+                <td>{{ role.name }}</td>
+                <td>{{ role.role_kind|default:"None" }}</td>
+                <td>{{ role.description|default:"None" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="text-secondary">No roles defined.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Transfer Map Primitives</strong>
+        <a href="{% url 'plugins:netbox_plant_graph:transferpattern_list' %}" class="btn btn-sm btn-outline-primary">View All</a>
+      </div>
+      <div class="card-body">
+        {% for item in architecture_semantics.transfer_patterns %}
+          <div class="border rounded p-3 mb-3">
+            <div class="d-flex flex-wrap gap-3 mb-2">
+              <span><strong>{{ item.pattern.slug }}</strong></span>
+              <span class="text-secondary">{{ item.pattern.pattern_kind }}</span>
+              <span class="text-secondary">{{ item.kind }}</span>
+              {% if item.bidirectional %}
+                <span class="badge text-bg-info">Bidirectional</span>
+              {% endif %}
+            </div>
+            {% if item.pair_rows %}
+              <div class="table-responsive mb-2">
+                <table class="table table-sm table-bordered mb-0">
+                  <thead>
+                    <tr><th>Ingress MPO Position</th><th>Egress MPO Position</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for pair in item.pair_rows %}
+                      <tr>
+                        <td>{{ pair.0 }}</td>
+                        <td>{{ pair.1 }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+            <details>
+              <summary>Transfer Rule JSON</summary>
+              <pre class="mb-0 mt-2"><code>{{ item.rule_json }}</code></pre>
+            </details>
+          </div>
+        {% empty %}
+          <div class="text-secondary">No transfer patterns defined.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Allocation & Inference Rules</strong>
+        <a href="{% url 'plugins:netbox_plant_graph:allocationruleset_list' %}" class="btn btn-sm btn-outline-primary">View All</a>
+      </div>
+      <div class="card-body">
+        {% for item in architecture_semantics.allocation_rule_sets %}
+          <div class="border rounded p-3 mb-3">
+            <div class="mb-2">
+              <strong>{{ item.rule_set.slug }}</strong>
+            </div>
+            <details>
+              <summary>Allocation Rule JSON</summary>
+              <pre class="mb-0 mt-2"><code>{{ item.rule_json }}</code></pre>
+            </details>
+          </div>
+        {% empty %}
+          <div class="text-secondary">No allocation rules defined.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Stamping & Path Intent Semantics</strong>
+        <a href="{% url 'plugins:netbox_plant_graph:stamptemplate_list' %}" class="btn btn-sm btn-outline-primary">View Templates</a>
+      </div>
+      <div class="card-body">
+        {% for item in architecture_semantics.stamp_templates %}
+          <div class="border rounded p-3 mb-3">
+            <div class="d-flex flex-wrap gap-3 mb-2">
+              <strong><a href="{{ item.template.get_absolute_url }}">{{ item.template.slug }}</a></strong>
+              {% if item.executor.primitive %}
+                <span class="text-secondary">Executor: {{ item.executor.primitive }}</span>
+              {% endif %}
+              {% if item.executor.mode %}
+                <span class="text-secondary">Mode: {{ item.executor.mode }}</span>
+              {% endif %}
+            </div>
+            <div class="mb-2">
+              <span class="text-secondary">Plane Set:</span>
+              {% if item.planes %}
+                {{ item.planes|join:", " }}
+              {% else %}
+                None
+              {% endif %}
+            </div>
+            <details class="mb-2">
+              <summary>End-to-End Path Tuples ({{ item.proof_paths|length }})</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm table-bordered mb-0">
+                  <thead>
+                    <tr>
+                      <th>Plane</th>
+                      <th>GPU OSFP Index</th>
+                      <th>Shuffle Cassette Index</th>
+                      <th>Front MPO Position</th>
+                      <th>Rear MPO Position</th>
+                      <th>Leaf Endpoint Index</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in item.proof_paths %}
+                      <tr>
+                        <td>{{ row.plane|default:"-" }}</td>
+                        <td>{{ row.gpu_osfp|default:"-" }}</td>
+                        <td>{{ row.cassette|default:"-" }}</td>
+                        <td>{{ row.front_position|default:"-" }}</td>
+                        <td>{{ row.rear_position|default:"-" }}</td>
+                        <td>{{ row.leaf|default:"-" }}</td>
+                      </tr>
+                    {% empty %}
+                      <tr><td colspan="6" class="text-secondary">No proof paths defined.</td></tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+            <details class="mb-2">
+              <summary>NetBox Anchor Bindings ({{ item.source_bindings|length }})</summary>
+              <pre class="mb-0 mt-2"><code>{{ item.source_bindings }}</code></pre>
+            </details>
+            <details>
+              <summary>Stamp Template JSON</summary>
+              <pre class="mb-0 mt-2"><code>{{ item.template_json }}</code></pre>
+            </details>
+          </div>
+        {% empty %}
+          <div class="text-secondary">No stamp templates attached to this architecture.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header">
+        <strong>Architecture Semantic Metadata</strong>
+      </div>
+      <div class="card-body">
+        <details>
+          <summary>Semantic Metadata JSON</summary>
+          <pre class="mb-0 mt-2"><code>{{ architecture_semantics.architecture_metadata_json }}</code></pre>
+        </details>
+      </div>
+    </div>
+  {% endif %}
 {% endblock %}

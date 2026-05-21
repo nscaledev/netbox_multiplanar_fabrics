@@ -1,14 +1,100 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<div class="d-flex align-items-center mb-3 gap-3">
-  <h1 class="mb-0">{{ page_title }}</h1>
-  <a href="{{ fabric.get_absolute_url }}" class="btn btn-sm btn-outline-secondary">← Back to Fabric</a>
+{% url 'plugins:netbox_plant_graph:graph_overview' as graph_overview_url %}
+{% url 'plugins:netbox_plant_graph:health' as health_url %}
+{% url 'plugins:netbox_plant_graph:plane_audit' as plane_audit_url %}
+{% if fabric %}
+  {% url 'plugins:netbox_plant_graph:fabric_operations' pk=fabric.pk as fabric_operations_url %}
+{% endif %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">{{ page_title|default:"Fabric Plane Assignment" }}</h1>
+    <p class="text-muted mb-0">Assign endpoints to planes with matrix toggles and bulk controls.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if fabric and fabric.get_absolute_url %}
+      <a href="{{ fabric.get_absolute_url }}" class="btn btn-outline-secondary btn-sm">Back to Fabric</a>
+    {% endif %}
+    {% if fabric_operations_url %}
+      <a href="{{ fabric_operations_url }}" class="btn btn-outline-secondary btn-sm">Fabric Ops</a>
+    {% endif %}
+    {% if graph_overview_url %}
+      <a href="{{ graph_overview_url }}" class="btn btn-outline-secondary btn-sm">Graph Overview</a>
+    {% endif %}
+  </div>
 </div>
 
-{% if not attachment_units %}
-  <div class="alert alert-info">No attachment units are associated with this fabric.</div>
-{% else %}
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row mb-3">
+  <div class="col-lg-8 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Scope Summary</strong></div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="small text-muted mb-1">Fabric</div>
+              <div class="fw-semibold">{{ fabric.name|default:fabric|default:"-" }}</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="small text-muted mb-1">Planes</div>
+              <div class="fw-semibold">
+                {% if planes %}
+                  {{ planes|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="small text-muted mb-1">Endpoints</div>
+              <div class="fw-semibold">
+                {% if endpoints %}
+                  {{ endpoints|length }}
+                {% elif matrix_rows %}
+                  {{ matrix_rows|length }}
+                {% else %}
+                  0
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Related Workflows</strong></div>
+      <div class="card-body d-flex flex-wrap gap-2">
+        {% if fabric and health_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ health_url }}?fabric_id={{ fabric.pk }}">Health</a>
+        {% endif %}
+        {% if fabric and plane_audit_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ plane_audit_url }}?fabric_id={{ fabric.pk }}">Plane Audit</a>
+        {% endif %}
+      </div>
+      <div class="card-footer">
+        <div class="small text-muted">Validate membership policy after assignment changes.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if matrix_rows %}
   <div class="card">
     <div class="card-header"><strong>Plane Assignment Matrix</strong></div>
     <div class="card-body p-0">
@@ -16,9 +102,11 @@
         <table class="table table-sm table-bordered mb-0">
           <thead class="table-light">
             <tr>
-              <th>Attachment Unit</th>
+              <th>Endpoint</th>
               {% for plane in planes %}
-                <th class="text-center">Plane {{ plane.plane_number }}</th>
+                <th class="text-center">
+                  Plane {% if plane.plane_number or plane.plane_number == 0 %}{{ plane.plane_number }}{% elif plane.position or plane.position == 0 %}{{ plane.position }}{% else %}{{ forloop.counter }}{% endif %}
+                </th>
               {% endfor %}
               <th>Actions</th>
             </tr>
@@ -27,10 +115,20 @@
             {% for row in matrix_rows %}
               <tr>
                 <td>
-                  <a href="{{ row.unit.get_absolute_url }}">{{ row.unit.name }}</a>
-                  {% with tp=row.unit.termination_point %}
-                    <small class="text-muted d-block">{{ tp.plant_node.name }} / {{ tp.name }}</small>
-                  {% endwith %}
+                  {% if row.unit.get_absolute_url %}
+                    <a href="{{ row.unit.get_absolute_url }}">{{ row.unit.name|default:row.unit }}</a>
+                  {% else %}
+                    {{ row.unit.name|default:row.unit|default:"-" }}
+                  {% endif %}
+                  {% if row.unit.node %}
+                    <small class="text-muted d-block">
+                      {% if row.unit.node.get_absolute_url %}
+                        <a href="{{ row.unit.node.get_absolute_url }}">{{ row.unit.node.name|default:row.unit.node.address|default:"-" }}</a>
+                      {% else %}
+                        {{ row.unit.node.name|default:row.unit.node.address|default:"-" }}
+                      {% endif %}
+                    </small>
+                  {% endif %}
                 </td>
                 {% for cell in row.cells %}
                   <td class="text-center">
@@ -39,10 +137,11 @@
                       <input type="hidden" name="action" value="toggle">
                       <input type="hidden" name="unit_pk" value="{{ row.unit.pk }}">
                       <input type="hidden" name="plane_pk" value="{{ cell.plane.pk }}">
-                      <button type="submit"
-                              class="btn btn-sm {% if cell.assigned %}btn-success{% else %}btn-outline-secondary{% endif %}"
-                              title="{% if cell.assigned %}Assigned — click to remove{% else %}Not assigned — click to add{% endif %}">
-                        {% if cell.assigned %}✓{% else %}—{% endif %}
+                      <button
+                        type="submit"
+                        class="btn btn-sm {% if cell.assigned %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                        title="{% if cell.assigned %}Assigned (click to remove){% else %}Not assigned (click to add){% endif %}">
+                        {% if cell.assigned %}Assigned{% else %}Add{% endif %}
                       </button>
                     </form>
                   </td>
@@ -68,5 +167,7 @@
       </div>
     </div>
   </div>
+{% else %}
+  <div class="alert alert-info">No endpoints are associated with this fabric.</div>
 {% endif %}
 {% endblock %}

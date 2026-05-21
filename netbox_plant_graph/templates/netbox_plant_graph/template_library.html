@@ -1,46 +1,199 @@
 {% extends 'base/layout.html' %}
 
 {% block content %}
-<h1>Template Library</h1>
-<p class="text-muted">Browse all planning template types in one place.</p>
+{% url 'plugins:netbox_plant_graph:home' as home_url %}
+{% url 'plugins:netbox_plant_graph:path_query' as path_query_url %}
+{% url 'plugins:netbox_plant_graph:lane_workspace' as lane_workspace_url %}
+{% url 'plugins:netbox_plant_graph:policy_dashboard' as policy_dashboard_url %}
 
-<div class="row mb-4">
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="mb-1">Template Library</h1>
+    <p class="text-muted mb-0">Central workspace for stamping, template build, and deployment workflows.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if home_url %}
+      <a href="{{ home_url }}" class="btn btn-outline-secondary btn-sm">Overview</a>
+    {% endif %}
+    {% if path_query_url %}
+      <a href="{{ path_query_url }}" class="btn btn-outline-secondary btn-sm">Path Query</a>
+    {% endif %}
+    {% if lane_workspace_url %}
+      <a href="{{ lane_workspace_url }}" class="btn btn-outline-secondary btn-sm">Lane Workspace</a>
+    {% endif %}
+    {% if policy_dashboard_url %}
+      <a href="{{ policy_dashboard_url }}" class="btn btn-outline-secondary btn-sm">Policy Dashboard</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="row mb-3">
+  <div class="col-lg-8 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Workflow Jumpstart</strong></div>
+      <div class="card-body">
+        <div class="row g-2">
+          {% for section in sections %}
+            <div class="col-md-6">
+              <div class="border rounded p-2 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <strong>{{ section.label|default:"Section" }}</strong>
+                  <span class="badge bg-secondary">{{ section.count|default:"0" }}</span>
+                </div>
+                <div class="small text-muted mb-2">{{ section.description|default:"No description available." }}</div>
+                <div class="d-flex flex-wrap gap-2">
+                  {% if section.list_url %}
+                    <a href="{{ section.list_url }}" class="btn btn-sm btn-outline-primary">Browse</a>
+                  {% endif %}
+                  {% if section.add_url %}
+                    <a href="{{ section.add_url }}" class="btn btn-sm btn-outline-secondary">Create</a>
+                  {% endif %}
+                  {% if section.workflow_url %}
+                    <a href="{{ section.workflow_url }}" class="btn btn-sm btn-outline-secondary">Workflow</a>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% empty %}
+            <div class="col-12">
+              <div class="text-muted">No workflow sections are configured yet.</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><strong>Workflow Summary</strong></div>
+      <div class="card-body">
+        {% if workflow_summary %}
+          {% if workflow_summary.items %}
+            <table class="table table-sm mb-0">
+              {% for metric, value in workflow_summary.items %}
+                <tr><th>{{ metric }}</th><td>{{ value }}</td></tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <ul class="mb-0 ps-3">
+              {% for metric in workflow_summary %}
+                <li>{{ metric.name|default:metric.label|default:"Metric" }}: {{ metric.value|default:metric.count|default:metric }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">No summary metrics are available yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row mb-3">
   {% for section in sections %}
-    <div class="col-md-4 mb-3">
+    <div class="col-lg-4 col-md-6 mb-3">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <strong>{{ section.label }}</strong>
-          <span class="badge bg-secondary">{{ section.count }}</span>
+          <strong>{{ section.label|default:"Section" }}</strong>
+          <span class="badge bg-secondary">{{ section.count|default:"0" }}</span>
         </div>
         <div class="card-body p-0">
           {% if section.recent %}
             <ul class="list-group list-group-flush">
               {% for obj in section.recent %}
                 <li class="list-group-item">
-                  <div><a href="{{ obj.get_absolute_url }}">{{ obj }}</a></div>
-                  <div class="text-muted small">
-                    Tenant:
-                    {% if obj.resolved_tenant %}
-                      <a href="{{ obj.resolved_tenant.get_absolute_url }}">{{ obj.resolved_tenant }}</a>
+                  <div class="fw-semibold">
+                    {% if obj.get_absolute_url %}
+                      <a href="{{ obj.get_absolute_url }}">{{ obj.name|default:obj }}</a>
                     {% else %}
-                      &mdash;
+                      {{ obj.name|default:obj }}
+                    {% endif %}
+                  </div>
+                  <div class="small text-muted">
+                    {% if obj.resolved_tenant %}
+                      Tenant:
+                      {% if obj.resolved_tenant.get_absolute_url %}
+                        <a href="{{ obj.resolved_tenant.get_absolute_url }}">{{ obj.resolved_tenant }}</a>
+                      {% else %}
+                        {{ obj.resolved_tenant }}
+                      {% endif %}
+                    {% elif obj.status %}
+                      Status: {{ obj.get_status_display|default:obj.status }}
+                    {% else %}
+                      Added recently
                     {% endif %}
                   </div>
                 </li>
               {% endfor %}
             </ul>
           {% else %}
-            <p class="text-muted p-3 mb-0">No {{ section.label|lower }} defined yet.</p>
+            <div class="p-3 text-muted">No {{ section.label|lower|default:"items" }} have been created yet.</div>
           {% endif %}
         </div>
-        <div class="card-footer d-flex gap-2">
-          <a href="{{ section.list_url }}" class="btn btn-sm btn-outline-primary">Browse All</a>
+        <div class="card-footer d-flex flex-wrap gap-2">
+          {% if section.list_url %}
+            <a href="{{ section.list_url }}" class="btn btn-sm btn-outline-primary">Browse All</a>
+          {% endif %}
           {% if section.add_url %}
-            <a href="{{ section.add_url }}" class="btn btn-sm btn-outline-secondary">Add New</a>
+            <a href="{{ section.add_url }}" class="btn btn-sm btn-outline-secondary">Create New</a>
+          {% endif %}
+          {% if section.workflow_url %}
+            <a href="{{ section.workflow_url }}" class="btn btn-sm btn-outline-secondary">Run Workflow</a>
           {% endif %}
         </div>
       </div>
     </div>
   {% endfor %}
 </div>
+
+{% with run_rows=recent_runs|default:stamp_runs %}
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <strong>Recent Stamp/Deployment Runs</strong>
+      <span class="badge bg-secondary">{{ run_rows|length }}</span>
+    </div>
+    <div class="card-body p-0">
+      {% if run_rows %}
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in run_rows %}
+              <tr>
+                <td>{{ run.name|default:run.label|default:run.pk|default:"Run" }}</td>
+                <td>{{ run.status|default:run.get_status_display|default:"-" }}</td>
+                <td>{{ run.started_at|default:run.created|default:run.created_at|default:"-" }}</td>
+                <td>
+                  {% if run.get_absolute_url %}
+                    <a href="{{ run.get_absolute_url }}">View</a>
+                  {% elif run.result and run.result.get_absolute_url %}
+                    <a href="{{ run.result.get_absolute_url }}">Result</a>
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="p-3 text-muted">No run history has been recorded yet.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endwith %}
 {% endblock %}

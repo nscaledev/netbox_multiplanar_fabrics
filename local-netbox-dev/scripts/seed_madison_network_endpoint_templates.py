@@ -6,10 +6,12 @@ from django.db import transaction
 
 from dcim.models import DeviceType, InterfaceTemplate, ModuleBayTemplate
 
-from netbox_plant_graph.models import BreakoutProfile, DeviceBreakoutTemplate, DeviceChildInterfaceSpec
+from netbox_plant_graph.models import StampTemplate, TransferPattern
+from netbox_plant_graph.services.architecture import CHANNEL_MAP_MATRIX, ensure_roce_4plane_shuffle_architecture
 
 
 SOURCE = 'madison_network_endpoint_template_staging_2026_05_19'
+MPO12_CHANNEL_MAP_MATRIX = [dict(entry) for entry in CHANNEL_MAP_MATRIX]
 
 
 DEVICE_ENDPOINTS = [
@@ -137,51 +139,108 @@ def upsert_module_bay_template(device_type, port):
     )
 
 
-def upsert_breakout_template(device_type, definition):
-    breakout_template, _ = DeviceBreakoutTemplate.objects.update_or_create(
-        slug=definition['breakout_slug'],
+def ensure_transfer_pattern(architecture, port):
+    slug = port['breakout_profile_slug']
+    child_speed_gbps = port['child_speed_kbps'] // 1_000_000
+    parent_speed_gbps = 800 if port['type'].startswith('800g') else 400
+    pattern, _ = TransferPattern.objects.update_or_create(
+        architecture=architecture,
+        slug=slug,
         defaults={
-            'name': definition['breakout_name'],
-            'description': definition['description'][:200],
-            'device_type': device_type,
+            'name': slug.replace('-', ' ').upper(),
+            'pattern_kind': 'breakout',
+            'rule': {
+                'type': 'device_endpoint_breakout',
+                'parent_interface_type': port['type'],
+                'parent_speed_gbps': parent_speed_gbps,
+                'child_count': port['child_count'],
+                'child_speed_gbps': child_speed_gbps,
+                'mapping_mode': 'sequential',
+            },
             'metadata': {
                 'source': SOURCE,
-                'endpoint_template_target': device_type.slug,
+                'legacy_model': 'BreakoutProfile',
+                'v2_replacement': 'TransferPattern',
             },
         },
     )
+    return pattern
 
-    desired_parents = {port['name'] for port in definition['ports']}
-    DeviceChildInterfaceSpec.objects.filter(
-        breakout_template=breakout_template,
-    ).exclude(parent_interface_name__in=desired_parents).delete()
 
+def upsert_endpoint_stamp_template(architecture, device_type, definition):
+    ports = []
     for sort_order, port in enumerate(definition['ports'], start=1):
-        breakout_profile = BreakoutProfile.objects.filter(slug=port['breakout_profile_slug']).first()
-        DeviceChildInterfaceSpec.objects.update_or_create(
-            breakout_template=breakout_template,
-            parent_interface_name=port['name'],
-            defaults={
+        ports.append(
+            {
+                'name': port['name'],
+                'interface_type': port['type'],
+                'module_bay': port['module_bay'],
                 'child_name_pattern': '{parent}.plane{plane}',
                 'child_count': port['child_count'],
-                'child_interface_type': 'virtual',
                 'child_speed_kbps': port['child_speed_kbps'],
                 'fabric_plane_start': 1,
-                'breakout_profile': breakout_profile,
+                'transfer_pattern_slug': port['breakout_profile_slug'],
                 'sort_order': sort_order,
-                'metadata': {
-                    'source': SOURCE,
-                    'host_interface_type': port['type'],
-                    'module_bay_template': port['module_bay'],
-                },
-            },
+                'v2_targets': [
+                    'Endpoint',
+                    'ConnectorPosition',
+                    'TransportChannel',
+                    'OpticalLane',
+                ],
+            }
         )
-    return breakout_template
+    template_spec = {
+        'kind': 'network_endpoint_template',
+        'schema_version': 2,
+        'architecture_slug': architecture.slug,
+        'architecture_version': architecture.version,
+        'device_type_slug': device_type.slug,
+        'device_type_model': device_type.model,
+        'ports': ports,
+        'channel_subinterfaces': {
+            'enabled': True,
+            'name_pattern': '{parent_name}/{channel_index}',
+            'type': 'virtual',
+            'speed_gbps': 200,
+            'channel_map_matrix': MPO12_CHANNEL_MAP_MATRIX,
+        },
+        'aux_ports': [
+            {
+                'name': port['name'],
+                'interface_type': port['type'],
+                'module_bay': port['module_bay'],
+            }
+            for port in definition.get('aux_ports', [])
+        ],
+        'metadata': {
+            'description': definition['description'],
+            'source': SOURCE,
+        },
+    }
+    stamp_template, _ = StampTemplate.objects.update_or_create(
+        slug=definition['breakout_slug'],
+        defaults={
+            'architecture': architecture,
+            'name': definition['breakout_name'],
+            'description': definition['description'],
+            'template': template_spec,
+            'metadata': {
+                'source': SOURCE,
+                'template_family': 'network_endpoint',
+                'endpoint_template_target': device_type.slug,
+                'legacy_model': 'DeviceBreakoutTemplate',
+                'v2_replacement': 'StampTemplate',
+            },
+        },
+    )
+    return stamp_template
 
 
 @transaction.atomic
 def main():
     counters = Counter()
+    fixture = ensure_roce_4plane_shuffle_architecture()
+    architecture = fixture.architecture
     for definition in DEVICE_ENDPOINTS:
         device_type = get_device_type(definition['device_type_slug'])
         if device_type is None:
@@ -192,8 +251,10 @@ def main():
         for port in definition['ports']:
             upsert_interface_template(device_type, port)
             upsert_module_bay_template(device_type, port)
+            ensure_transfer_pattern(architecture, port)
             counters['interfaces'] += 1
             counters['module_bays'] += 1
+            counters['transfer_patterns'] += 1
 
         for port in definition.get('aux_ports', []):
             upsert_interface_template(device_type, port)
@@ -201,10 +262,10 @@ def main():
             counters['aux_interfaces'] += 1
             counters['aux_module_bays'] += 1
 
-        upsert_breakout_template(device_type, definition)
-        counters['device_breakout_templates'] += 1
+        upsert_endpoint_stamp_template(architecture, device_type, definition)
+        counters['stamp_templates'] += 1
 
-    print('Seeded Madison network endpoint templates:')
+    print('Seeded Madison network endpoint templates for netbox_plant_graph v2:')
     for key, value in sorted(counters.items()):
         print(f'  {key}: {value}')
 

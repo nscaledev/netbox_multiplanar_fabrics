@@ -1,0 +1,124 @@
+{% extends 'base/layout.html' %}
+
+{% block title %}Lane Workspace{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Lane Workspace</h1>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <form method="get" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Fabric</label>
+          <select class="form-select" name="fabric">
+            <option value="">All Fabrics</option>
+            {% for fabric in fabrics %}
+              <option value="{{ fabric.pk }}"{% if selected_fabric and selected_fabric.pk == fabric.pk %} selected{% endif %}>{{ fabric.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Plane</label>
+          <input class="form-control" type="number" min="1" name="plane" value="{{ selected_plane_id|default:'' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Direction</label>
+          <select class="form-select" name="direction">
+            <option value="">Both</option>
+            <option value="send"{% if selected_direction == 'send' %} selected{% endif %}>Send</option>
+            <option value="receive"{% if selected_direction == 'receive' %} selected{% endif %}>Receive</option>
+          </select>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Visible Lanes</div>
+          <div class="h3 mb-0">{{ lane_count }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary mb-2">Plane Distribution</div>
+          {% if plane_counts %}
+            <div class="d-flex flex-wrap gap-2">
+              {% for row in plane_counts %}
+                <span class="badge bg-secondary">Plane {{ row.plane_id|default:'-' }}: {{ row.total }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="text-secondary">No lanes for the current filter.</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Fabric</th>
+            <th>Endpoint</th>
+            <th>Plane</th>
+            <th>Lane</th>
+            <th>Direction</th>
+            <th>Lambda (nm)</th>
+            <th>Cable Assemblies</th>
+            <th>Suppressed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in lane_rows %}
+            <tr>
+              <td><a href="{{ row.lane.fabric.get_absolute_url }}">{{ row.lane.fabric.name }}</a></td>
+              <td><a href="{{ row.lane.endpoint.get_absolute_url }}">{{ row.lane.endpoint.address }}</a></td>
+              <td>{{ row.lane.plane.plane_number|default:'-' }}</td>
+              <td><a href="{{ row.lane.get_absolute_url }}">{{ row.lane.lane_index }}</a></td>
+              <td>{{ row.lane.direction }}</td>
+              <td>{{ row.lane.wavelength_nm }}</td>
+              <td>
+                {% if row.cable_assemblies %}
+                  {% for cable in row.cable_assemblies %}
+                    {% if cable.url %}
+                      <a href="{{ cable.url }}">{{ cable.display }}</a>
+                    {% else %}
+                      {{ cable.display }}
+                    {% endif %}
+                    {% if cable.model_id %}
+                      <div class="small text-muted">Model {{ cable.model_id }}</div>
+                    {% endif %}
+                    {% if not forloop.last %}<hr class="my-2">{% endif %}
+                  {% endfor %}
+                {% else %}
+                  <span class="text-secondary">-</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.suppressed %}
+                  <span class="badge bg-danger">Yes</span>
+                {% else %}
+                  <span class="badge bg-success">No</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8" class="text-secondary">No lanes found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

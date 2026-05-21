@@ -5,28 +5,37 @@ import os
 import re
 from collections import Counter
 from pathlib import Path
+import sys
 
-from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 from dcim.models import Device
-from netbox_plant_graph.models import (
-    AttachmentUnit,
-    CoarseEdge,
-    Fabric,
-    FineEdge,
-    PlaneMembership,
-    SignalLane,
+from netbox_plant_graph.models import FiberSegment
+
+
+for candidate in (
+    Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path('/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path(globals().get('__file__', '.')).resolve().parent,
+):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+from madison_v2_graph import (  # noqa: E402
+    ACTIVE_MPO_LANE_INDEXES,
+    delete_marked_connectivity,
+    ensure_fabric,
+    ensure_surfaces_for_devices,
+    stamp_path_segments,
 )
-from netbox_plant_graph.services.graph_external_edges import stamp_graph_external_path
 
 
 MAD_SITE_SLUG = 'mad-1'
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
 TARGET_NVL72_RACK = 'A2'
 TARGET_SU_TAG = 'nv_su_1'
-SOURCE_MARKER = 'madison_first_nvl72_fiber_policy_v1'
-PATH_KEY = 'madison-first-nvl72-a2-leaf16-four-plane-lane-aware-v1'
+SOURCE_MARKER = 'madison_first_nvl72_fiber_policy_v2'
+SUPERSEDED_SAMPLE_MARKER = 'madison_graph_endpoint_test_subset_v2'
+PATH_KEY = 'madison-first-nvl72-a2-leaf16-four-plane-lane-aware-v2'
 
 PATTERN_INPUT_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/generated/madison_elevation_shuffle_leaf_patterns.csv'),
@@ -125,7 +134,11 @@ def pattern_policy_rows(pattern_rows: list[dict[str, str]], trays: list[Device])
 
         for tray_index, (tray, cassette) in enumerate(zip(trays, cassettes, strict=True), start=1):
             for pair_index, (plane_number, leaf_device_name) in enumerate(zip(planes, leaf_devices, strict=True)):
-                lane_indexes = tuple(range(0, 4)) if pair_index == 0 else tuple(range(4, 8))
+                lane_indexes = (
+                    tuple(ACTIVE_MPO_LANE_INDEXES[:4])
+                    if pair_index == 0
+                    else tuple(ACTIVE_MPO_LANE_INDEXES[4:])
+                )
                 cassette_mpo = pair_index + 1
                 leaf_interface = f'swp{tray_index}'
                 common = {
@@ -162,7 +175,7 @@ def pattern_policy_rows(pattern_rows: list[dict[str, str]], trays: list[Device])
                         **common,
                         'a': endpoint(tray.name, osfp_name, gb_mpo),
                         'b': endpoint(cassette.name, f'front-mpo-{cassette_mpo:02d}', 1),
-                        'segment_role': 'gb300_to_shuffle_mpo8_lane_split',
+                        'segment_role': 'gb300_to_shuffle_mpo12_active_lane_split',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'gb300_to_shuffle',
@@ -172,7 +185,7 @@ def pattern_policy_rows(pattern_rows: list[dict[str, str]], trays: list[Device])
                         **common,
                         'a': endpoint(cassette.name, f'rear-mpo-{cassette_mpo:02d}', 1),
                         'b': endpoint(leaf_device_name, leaf_interface, 1),
-                        'segment_role': 'shuffle_to_leaf_mpo8_lane_split',
+                        'segment_role': 'shuffle_to_leaf_mpo12_active_lane_split',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'shuffle_to_leaf',
@@ -180,33 +193,6 @@ def pattern_policy_rows(pattern_rows: list[dict[str, str]], trays: list[Device])
                     },
                 ])
     return segments
-
-
-def delete_existing_managed_scope(fabric: Fabric, counters: Counter) -> None:
-    managed_coarse_ids = list(
-        CoarseEdge.objects.filter(metadata__graph_external_edge_stamp=True).values_list('pk', flat=True)
-    )
-    counters['existing_managed_fine_edges_deleted'], _ = FineEdge.objects.filter(
-        parent_coarse_edge_id__in=managed_coarse_ids,
-    ).delete()
-    counters['existing_managed_coarse_edges_deleted'], _ = CoarseEdge.objects.filter(
-        pk__in=managed_coarse_ids,
-    ).delete()
-    counters['existing_managed_plane_memberships_deleted'], _ = PlaneMembership.objects.filter(
-        plane__fabric=fabric,
-        metadata__graph_external_edge_stamp=True,
-    ).delete()
-
-
-def lane_membership_counts(fabric: Fabric) -> Counter:
-    signal_lane_type = ContentType.objects.get_for_model(SignalLane)
-    counts = Counter()
-    for plane_number in PlaneMembership.objects.filter(
-        plane__fabric=fabric,
-        member_type=signal_lane_type,
-    ).values_list('plane__plane_number', flat=True):
-        counts[f'plane_{plane_number}_signal_lane_memberships'] += 1
-    return counts
 
 
 def print_dry_run(pattern_rows: list[dict[str, str]], trays: list[Device], segments: list[dict]) -> None:
@@ -232,7 +218,7 @@ def print_dry_run(pattern_rows: list[dict[str, str]], trays: list[Device], segme
 
 
 def main() -> None:
-    fabric = Fabric.objects.get(name=FABRIC_NAME)
+    fabric = ensure_fabric()
     pattern_rows = read_pattern_rows()
     trays = target_gb300_trays()
     segments = pattern_policy_rows(pattern_rows, trays)
@@ -243,27 +229,20 @@ def main() -> None:
 
     counters = Counter()
     with transaction.atomic():
-        delete_existing_managed_scope(fabric, counters)
-        result = stamp_graph_external_path(
-            path_key=PATH_KEY,
-            fabric=fabric,
-            replace_existing=True,
-            metadata={
-                SOURCE_MARKER: True,
-                'modeled_status': 'planned',
-                'scope': 'first NVL72 rack A2 to SU1 BE leaf switches across all four planes',
-            },
-            segments=segments,
-        )
-        counters['coarse_edges_created'] = len(result.coarse_edges)
-        counters['fine_edges_created'] = len(result.fine_edges)
-        counters.update(lane_membership_counts(fabric))
+        devices = set(trays)
+        for segment in segments:
+            for device_name, _port_name, _mpo in (segment['a'], segment['b']):
+                device = Device.objects.filter(site__slug=MAD_SITE_SLUG, name=device_name).first()
+                if device is not None:
+                    devices.add(device)
+        ensure_surfaces_for_devices(fabric, sorted(devices, key=lambda device: device.name), marker=SOURCE_MARKER, counters=counters)
+        delete_marked_connectivity(SUPERSEDED_SAMPLE_MARKER, fabric=fabric, counters=counters)
+        counters.update(stamp_path_segments(fabric, marker=SOURCE_MARKER, path_key=PATH_KEY, segments=segments))
 
-    print('Madison first NVL72 fiber policy seed complete.')
+    print('Madison first NVL72 fiber policy seed complete for netbox_plant_graph v2.')
     for key in sorted(counters):
         print(f'{key}={counters[key]}')
-    print(f'marked_coarse_edges={CoarseEdge.objects.filter(metadata__path_key=PATH_KEY).count()}')
-    print(f'marked_fine_edges={FineEdge.objects.filter(metadata__path_key=PATH_KEY).count()}')
+    print(f'marked_fiber_segments={FiberSegment.objects.filter(fabric=fabric, metadata__path_key=PATH_KEY).count()}')
 
 
 main()

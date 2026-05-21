@@ -1,7 +1,6 @@
 PLUGINS = [
     "netbox_dns",
     "netbox_prometheus_sd",
-    "netbox_floorplan",
     "netbox_plant_graph",
     "netbox_power_plant",
 ]
