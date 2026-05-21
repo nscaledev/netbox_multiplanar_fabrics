@@ -19,10 +19,9 @@
 
 .fanout-schematic__svg {
   display: block;
-  width: 100%;
-  min-width: 1600px;
+  width: auto;
+  max-width: none;
   height: auto;
-  min-height: 300px;
 }
 
 .fanout-details-toggle {

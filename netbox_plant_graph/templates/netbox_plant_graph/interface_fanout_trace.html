@@ -5,7 +5,7 @@
 
 {% block head %}
   {{ block.super }}
-  <link rel="stylesheet" href="{% static 'netbox_plant_graph/fanout_trace.css' %}">
+  <link rel="stylesheet" href="{% static 'netbox_plant_graph/fanout_trace.css' %}?v=20260521-fanout-zoom-sync">
 {% endblock %}
 
 {% block content %}
@@ -80,8 +80,19 @@
 
   {% if subinterface_summaries %}
     <div class="card mb-3">
-      <div class="card-header">Child Sub-interfaces</div>
-      <div class="card-body">
+      <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <span>Child Sub-interfaces</span>
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-secondary"
+          data-fanout-toggle-section
+          aria-controls="fanout-child-subinterfaces-body"
+          aria-expanded="true"
+        >
+          Hide
+        </button>
+      </div>
+      <div class="card-body" id="fanout-child-subinterfaces-body" data-fanout-collapsible-section-body>
         <div class="row g-2">
           {% for summary in subinterface_summaries %}
             <div class="col-md-4">
@@ -99,8 +110,19 @@
 
 {% if trace_requested and fanout_pairs %}
   <div class="card mb-3">
-    <div class="card-header">Sub-interface Fanout Matrix</div>
-    <div class="card-body">
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <span>Sub-interface Fanout Matrix</span>
+      <button
+        type="button"
+        class="btn btn-sm btn-outline-secondary"
+        data-fanout-toggle-section
+        aria-controls="fanout-subinterface-matrix-body"
+        aria-expanded="true"
+      >
+        Hide
+      </button>
+    </div>
+    <div class="card-body" id="fanout-subinterface-matrix-body" data-fanout-collapsible-section-body>
       <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead>
@@ -127,10 +149,24 @@
 
 {% if trace_requested and trace_rows %}
   <div class="card mb-3">
-    <div class="card-header">
-      Visual Fanout Trace{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <span>Visual Fanout Trace{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}</span>
+      <div class="btn-list">
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-secondary"
+          data-fanout-toggle-visual
+          aria-controls="fanout-visual-trace-body"
+          aria-expanded="true"
+        >
+          Hide
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-primary" data-fanout-export-svg>
+          Export SVG
+        </button>
+      </div>
     </div>
-    <div class="card-body">
+    <div class="card-body" id="fanout-visual-trace-body" data-fanout-visual-body>
       <div
         class="fanout-schematic mb-3"
         data-fanout-schematic
@@ -153,7 +189,13 @@
           Resolved transfer maps for this trace are position-identity mappings, so no shuffle crossover is present in the modeled path data.
         </div>
       {% endif %}
-
+    </div>
+  </div>
+  <div class="card mb-3" data-fanout-details-section>
+    <div class="card-header">
+      Per-Strand Trace Details{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}
+    </div>
+    <div class="card-body">
       {% for row in trace_rows %}
         <div class="fanout-trace-row mb-3 p-3 border rounded" data-fanout-path-canvas>
           <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
@@ -301,5 +343,5 @@
 
 {% block javascript %}
   {{ block.super }}
-  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-fanout-links"></script>
+  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-fanout-zoom-sync"></script>
 {% endblock %}

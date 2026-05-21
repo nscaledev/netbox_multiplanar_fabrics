@@ -569,7 +569,23 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'data-fanout-schematic-stages')
         self.assertContains(response, 'data-fanout-trace-mode="expanded"')
         self.assertContains(response, 'data-fanout-source-title="Source: GPU-FANOUT-1-OSFP-1"')
-        self.assertContains(response, 'fanout_trace.js?v=20260521-fanout-links')
+        self.assertContains(response, 'aria-controls="fanout-child-subinterfaces-body"')
+        self.assertContains(response, 'aria-controls="fanout-subinterface-matrix-body"')
+        self.assertContains(response, 'data-fanout-toggle-section', count=2)
+        self.assertContains(response, 'data-fanout-collapsible-section-body', count=2)
+        self.assertContains(response, 'data-fanout-toggle-visual')
+        self.assertContains(response, 'data-fanout-visual-body')
+        self.assertContains(response, 'data-fanout-export-svg')
+        self.assertContains(response, 'Export SVG')
+        self.assertContains(response, 'data-fanout-details-section')
+        self.assertContains(response, 'Per-Strand Trace Details')
+        self.assertContains(response, 'fanout_trace.css?v=20260521-fanout-zoom-sync')
+        self.assertContains(response, 'fanout_trace.js?v=20260521-fanout-zoom-sync')
+        response_html = response.content.decode()
+        self.assertLess(
+            response_html.index('data-fanout-details-section'),
+            response_html.index('data-fanout-path-canvas'),
+        )
 
         schematic_paths = json.loads(response.context['aggregate_schematic_paths_json'])
         self.assertTrue(schematic_paths[0]['source_subinterface_label'])
@@ -653,6 +669,7 @@ class V2UITestCase(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Visual Fanout Trace (Consolidated By 200G Sub-interface)')
+        self.assertContains(response, 'Per-Strand Trace Details (Consolidated By 200G Sub-interface)')
         self.assertContains(response, 'Consolidated Member Paths')
         self.assertContains(response, 'lanes')
 

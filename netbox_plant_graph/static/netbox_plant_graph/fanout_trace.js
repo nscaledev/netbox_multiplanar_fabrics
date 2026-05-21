@@ -38,6 +38,8 @@
   var CABLE_CYLINDER_MIN_WIDTH = 150;
   var CABLE_CYLINDER_HORIZONTAL_PADDING = 24;
   var CABLE_CYLINDER_MAX_WIDTH = 420;
+  var DESTINATION_CABLE_CYLINDER_BOTTOM_OFFSET = 12;
+  var CABLE_ASSEMBLY_LABEL_ROW_TOLERANCE = 16;
 
   function createSvgNode(tagName, attrs) {
     var node = document.createElementNS(SVG_NS, tagName);
@@ -108,6 +110,96 @@
 
   function sourceStageUrl(container) {
     return container.getAttribute('data-fanout-source-url') || '';
+  }
+
+  function exportFileName(container) {
+    var title = sourceStageTitle(container).replace(/^source:\s*/i, '') || 'fanout-trace';
+    var mode = (container.getAttribute('data-fanout-trace-mode') || 'expanded').toLowerCase() || 'expanded';
+    var slug = (title + '-' + mode + '-fanout-trace')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return (slug || 'fanout-trace') + '.svg';
+  }
+
+  function exportedSvgMarkup(svg) {
+    var clone = svg.cloneNode(true);
+    var viewBox = clone.getAttribute('viewBox') || '0 0 980 280';
+    var parts = viewBox.split(/\s+/).map(Number);
+    var width = Number.isFinite(parts[2]) ? parts[2] : svg.clientWidth || 980;
+    var height = Number.isFinite(parts[3]) ? parts[3] : svg.clientHeight || 280;
+    clone.setAttribute('xmlns', SVG_NS);
+    clone.setAttribute('xmlns:xlink', XLINK_NS);
+    clone.setAttribute('width', String(width));
+    clone.setAttribute('height', String(height));
+    clone.setAttribute('aria-hidden', 'false');
+    clone.removeAttribute('focusable');
+    clone.removeAttribute('data-fanout-schematic-svg');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone) + '\n';
+  }
+
+  function exportSchematicSvg(container) {
+    var svg = container.querySelector('[data-fanout-schematic-svg]');
+    if (!svg) {
+      return;
+    }
+    var blob = new Blob([exportedSvgMarkup(svg)], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = exportFileName(container);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
+
+  function setVisualTraceCollapsed(button, body, collapsed) {
+    body.hidden = collapsed;
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    button.textContent = collapsed ? 'Show' : 'Hide';
+  }
+
+  function setCollapsibleSectionCollapsed(button, body, collapsed) {
+    body.hidden = collapsed;
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    button.textContent = collapsed ? 'Show' : 'Hide';
+  }
+
+  function bindCollapsibleSectionControls(root) {
+    (root || document).querySelectorAll('[data-fanout-toggle-section]').forEach(function (toggleButton) {
+      if (toggleButton.__fanoutSectionToggleBound) {
+        return;
+      }
+      var bodyId = toggleButton.getAttribute('aria-controls');
+      var body = bodyId ? document.getElementById(bodyId) : null;
+      if (!body) {
+        return;
+      }
+      toggleButton.__fanoutSectionToggleBound = true;
+      setCollapsibleSectionCollapsed(toggleButton, body, body.hidden);
+      toggleButton.addEventListener('click', function () {
+        setCollapsibleSectionCollapsed(toggleButton, body, !body.hidden);
+      });
+    });
+  }
+
+  function bindVisualTraceControls(card) {
+    if (!card) {
+      return;
+    }
+    var body = card.querySelector('[data-fanout-visual-body]');
+    var toggleButton = card.querySelector('[data-fanout-toggle-visual]');
+    if (!body || !toggleButton || toggleButton.__fanoutToggleBound) {
+      return;
+    }
+    toggleButton.__fanoutToggleBound = true;
+    setVisualTraceCollapsed(toggleButton, body, body.hidden);
+    toggleButton.addEventListener('click', function () {
+      setVisualTraceCollapsed(toggleButton, body, !body.hidden);
+    });
   }
 
   function asPosition(value, positionCount) {
@@ -1605,6 +1697,8 @@
                 x: boxX + boxW / 2,
                 yTop: rowY,
                 yBottom: rowY + connectorH,
+                stageRole: stage.role || '',
+                stageTitle: stage.title || '',
               };
             }
           });
@@ -2151,7 +2245,37 @@
     };
   }
 
+  function destinationLandingAnchor(segment) {
+    var fromAnchor = segment.fromAnchor;
+    var toAnchor = segment.toAnchor;
+    var lowerAnchor = fromAnchor.visualIndex <= toAnchor.visualIndex ? toAnchor : fromAnchor;
+    if (!lowerAnchor) {
+      return null;
+    }
+    if (
+      lowerAnchor.visualRole === 'destination_composite' ||
+      lowerAnchor.visualRole === 'destination_endpoint' ||
+      lowerAnchor.stageRole === 'destination_endpoint'
+    ) {
+      return lowerAnchor;
+    }
+    return null;
+  }
+
+  function destinationAnchoredCableCenterY(group, height) {
+    var destinationAnchors = group.segments.map(destinationLandingAnchor).filter(Boolean);
+    if (!destinationAnchors.length) {
+      return null;
+    }
+    var destinationTop = Math.min.apply(null, destinationAnchors.map(function (anchor) {
+      var visualTop = Number(anchor.visualTop);
+      return Number.isFinite(visualTop) ? visualTop : anchor.yTop;
+    }));
+    return destinationTop - DESTINATION_CABLE_CYLINDER_BOTTOM_OFFSET - height / 2;
+  }
+
   function cableCylinderGeometry(group, canvasWidth) {
+    var height = CABLE_CYLINDER_HEIGHT;
     var yStart = Math.min.apply(null, group.segments.map(function (segment) {
       return segment.fromAnchor.yBottom;
     }));
@@ -2166,7 +2290,10 @@
     }));
     var distance = yEnd - yStart;
     var centerY = bandBottom > bandTop ? bandTop + (bandBottom - bandTop) / 2 : yStart + distance / 2;
-    var height = CABLE_CYLINDER_HEIGHT;
+    var destinationCenterY = destinationAnchoredCableCenterY(group, height);
+    if (destinationCenterY !== null) {
+      centerY = destinationCenterY;
+    }
     var xValues = group.segments.map(function (segment) {
       return xAtCableY(segment, centerY);
     });
@@ -2188,10 +2315,9 @@
     };
   }
 
-  function drawCableAssemblyLabel(svg, group, geometry, width) {
+  function drawCableAssemblyLabel(svg, group, geometry, labelSide) {
     var label = cableAssemblyLabel(group.cableAssembly);
-    var labelFitsRight = geometry.x + geometry.width + 190 < width;
-    if (labelFitsRight) {
+    if (labelSide === 'right') {
       drawRightBraceLabel(svg, label, geometry.x + geometry.width + 16, geometry.y + 2, geometry.y + geometry.height - 2, {
         labelX: geometry.x + geometry.width + 28,
         width: 18,
@@ -2208,14 +2334,59 @@
     });
   }
 
+  function assignCableAssemblyLabelSides(records) {
+    var rows = [];
+    records
+      .slice()
+      .sort(function (a, b) {
+        return a.geometry.centerY - b.geometry.centerY || a.geometry.x - b.geometry.x;
+      })
+      .forEach(function (record) {
+        var row = rows.find(function (candidate) {
+          return Math.abs(candidate.centerY - record.geometry.centerY) <= CABLE_ASSEMBLY_LABEL_ROW_TOLERANCE;
+        });
+        if (!row) {
+          row = { centerY: record.geometry.centerY, records: [] };
+          rows.push(row);
+        }
+        row.records.push(record);
+        row.centerY =
+          row.records.reduce(function (sum, rowRecord) {
+            return sum + rowRecord.geometry.centerY;
+          }, 0) / row.records.length;
+      });
+
+    rows.forEach(function (row) {
+      row.records
+        .sort(function (a, b) {
+          return a.geometry.x - b.geometry.x;
+        })
+        .forEach(function (record, rowIndex) {
+          record.labelSide = rowIndex === 1 ? 'right' : 'left';
+        });
+    });
+
+    return records;
+  }
+
   function drawCableAssemblyOverlays(svg, paths, stageLayouts, width) {
-    cableAssemblyGroups(paths, stageLayouts).forEach(function (group) {
-      if (!group.segments.length) {
-        return;
-      }
-      var geometry = cableCylinderGeometry(group, width);
-      drawCableCylinder(svg, group, geometry);
-      drawCableAssemblyLabel(svg, group, geometry, width);
+    var records = cableAssemblyGroups(paths, stageLayouts)
+      .filter(function (group) {
+        return group.segments.length;
+      })
+      .map(function (group) {
+        return {
+          group: group,
+          geometry: cableCylinderGeometry(group, width),
+          labelSide: 'left',
+        };
+      });
+
+    assignCableAssemblyLabelSides(records).forEach(function (record) {
+      drawCableCylinder(svg, record.group, record.geometry);
+    });
+    records.forEach(function (record) {
+      drawCableAssemblyLabel(svg, record.group, record.geometry, record.labelSide);
     });
   }
 
@@ -2306,6 +2477,8 @@
 
     svg.replaceChildren();
     svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
     svg.appendChild(
       createSvgNode('rect', {
         x: 0,
@@ -2345,6 +2518,8 @@
             visualIndex: visualIndex,
             visualTop: top,
             visualBottom: top + layout.height,
+            visualRole: stage.role || '',
+            visualTitle: stage.title || '',
           });
         });
       });
@@ -2364,7 +2539,25 @@
     installTooltips(container, svg);
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
-    document.querySelectorAll('[data-fanout-schematic]').forEach(renderSchematic);
-  });
+  function initializeFanoutTracePage() {
+    bindCollapsibleSectionControls(document);
+    document.querySelectorAll('[data-fanout-schematic]').forEach(function (container) {
+      renderSchematic(container);
+      var card = container.closest('.card');
+      bindVisualTraceControls(card);
+      var exportButton = card && card.querySelector('[data-fanout-export-svg]');
+      if (exportButton && !exportButton.__fanoutExportBound) {
+        exportButton.__fanoutExportBound = true;
+        exportButton.addEventListener('click', function () {
+          exportSchematicSvg(container);
+        });
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeFanoutTracePage);
+  } else {
+    initializeFanoutTracePage();
+  }
 })();
