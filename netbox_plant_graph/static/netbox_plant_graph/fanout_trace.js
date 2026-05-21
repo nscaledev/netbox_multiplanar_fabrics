@@ -1,5 +1,6 @@
 (function () {
   var SVG_NS = 'http://www.w3.org/2000/svg';
+  var XLINK_NS = 'http://www.w3.org/1999/xlink';
   var LANE_COLORS = [
     '#ff3b3b', '#ffe34a', '#38d7ff', '#3dff75',
     '#c7c7c7', '#ff8f3b', '#b57dff', '#89ffb8',
@@ -31,6 +32,12 @@
   var CONNECTOR_ROW_STRIDE = 58;
   var GROUP_FRAME_TOP_OFFSET = 16;
   var CONNECTOR_ROW_TOP_OFFSET = 30;
+  var DEFAULT_STAGE_GAP = 20;
+  var CABLE_ASSEMBLY_STAGE_GAP = 148;
+  var CABLE_CYLINDER_HEIGHT = 120;
+  var CABLE_CYLINDER_MIN_WIDTH = 150;
+  var CABLE_CYLINDER_HORIZONTAL_PADDING = 24;
+  var CABLE_CYLINDER_MAX_WIDTH = 420;
 
   function createSvgNode(tagName, attrs) {
     var node = document.createElementNS(SVG_NS, tagName);
@@ -40,6 +47,33 @@
       });
     }
     return node;
+  }
+
+  function normalizeUrl(url) {
+    var value = String(url || '').trim();
+    if (!value || value === '#') {
+      return '';
+    }
+    return value;
+  }
+
+  function linkedSvgNode(node, url, titleText) {
+    var href = normalizeUrl(url);
+    if (!href) {
+      return node;
+    }
+    var link = createSvgNode('a', {
+      href: href,
+      class: 'fanout-object-link',
+      style: 'cursor: pointer;',
+    });
+    link.setAttributeNS(XLINK_NS, 'xlink:href', href);
+    if (titleText) {
+      appendTitle(link, titleText);
+      link.setAttribute('aria-label', String(titleText));
+    }
+    link.appendChild(node);
+    return link;
   }
 
   function parsePayload(container) {
@@ -70,6 +104,10 @@
 
   function sourceStageTitle(container) {
     return container.getAttribute('data-fanout-source-title') || 'Source Endpoint';
+  }
+
+  function sourceStageUrl(container) {
+    return container.getAttribute('data-fanout-source-url') || '';
   }
 
   function asPosition(value, positionCount) {
@@ -199,7 +237,71 @@
     return Math.min(POSITION_COUNT, Math.round(parsed));
   }
 
-  function ensureConnector(stage, key, label, positionCount, kind) {
+  function positionUrlMap(positions) {
+    var urls = {};
+    (positions || []).forEach(function (position) {
+      var positionNumber = asPosition(position.position || position.position_number, POSITION_COUNT);
+      var url = normalizeUrl(position.url);
+      if (positionNumber && url) {
+        urls[positionNumber] = url;
+      }
+    });
+    return urls;
+  }
+
+  function mergePositionUrls(target, source) {
+    Object.keys(source || {}).forEach(function (position) {
+      if (!target[position]) {
+        target[position] = source[position];
+      }
+    });
+  }
+
+  function connectorPositionUrl(connector, position) {
+    return normalizeUrl((connector.positionUrls || {})[position] || connector.url);
+  }
+
+  function activePositionValue(connector, position) {
+    var value = connector.active ? connector.active[position] : null;
+    if (!value) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      return {
+        color: value,
+        url: connectorPositionUrl(connector, position),
+      };
+    }
+    return value;
+  }
+
+  function activePositionColor(connector, position) {
+    var value = activePositionValue(connector, position);
+    return value ? value.color : '';
+  }
+
+  function activePositionUrl(connector, position) {
+    var value = activePositionValue(connector, position);
+    return normalizeUrl(value && value.url) || connectorPositionUrl(connector, position);
+  }
+
+  function markActivePosition(connector, position, color, options) {
+    var url = normalizeUrl(options && options.url) || connectorPositionUrl(connector, position);
+    var existing = activePositionValue(connector, position);
+    if (!existing) {
+      connector.active[position] = {
+        color: color,
+        url: url,
+      };
+      return;
+    }
+    if (!existing.url && url) {
+      existing.url = url;
+      connector.active[position] = existing;
+    }
+  }
+
+  function ensureConnector(stage, key, label, positionCount, kind, options) {
     if (!stage.connectors[key]) {
       stage.connectors[key] = {
         key: key,
@@ -207,11 +309,23 @@
         familyKey: connectorFamilyKey(label || key),
         positionCount: normalizedPositionCount(positionCount),
         kind: kind || 'mpo',
+        url: normalizeUrl(options && options.url),
+        parentUrl: normalizeUrl(options && options.parentUrl),
+        positionUrls: positionUrlMap(options && options.positions),
         active: {},
       };
       stage.connectorOrder.push(key);
     } else if (positionCount) {
       stage.connectors[key].positionCount = normalizedPositionCount(positionCount);
+      if (options) {
+        if (!stage.connectors[key].url && options.url) {
+          stage.connectors[key].url = normalizeUrl(options.url);
+        }
+        if (!stage.connectors[key].parentUrl && options.parentUrl) {
+          stage.connectors[key].parentUrl = normalizeUrl(options.parentUrl);
+        }
+        mergePositionUrls(stage.connectors[key].positionUrls, positionUrlMap(options.positions));
+      }
     }
     return stage.connectors[key];
   }
@@ -251,6 +365,9 @@
       cloned.connector_hops = [
         {
           endpoint_label: sourceLabel,
+          endpoint_url: path.source_subinterface_url,
+          url: path.source_lane_url,
+          position_url: path.source_lane_url,
           position: sourcePosition,
           position_count: CHANNEL_POSITION_COUNT,
           schematic_kind: 'interface_channel',
@@ -259,12 +376,23 @@
       ].concat(path.connector_hops || [], [
         {
           endpoint_label: destinationLabel,
+          endpoint_url: path.destination_interface_layer_url || path.destination_subinterface_url,
+          url: path.destination_lane_url,
+          position_url: path.destination_lane_url,
           position: destinationPosition,
           position_count: CHANNEL_POSITION_COUNT,
           schematic_kind: 'interface_channel',
           step_type: 'destination_interface',
         },
       ]);
+      cloned.cable_spans = (path.cable_spans || []).map(function (span) {
+        var fromHopIndex = Number(span.from_hop_index);
+        var toHopIndex = Number(span.to_hop_index);
+        return Object.assign({}, span, {
+          from_hop_index: Number.isFinite(fromHopIndex) ? fromHopIndex + 1 : span.from_hop_index,
+          to_hop_index: Number.isFinite(toHopIndex) ? toHopIndex + 1 : span.to_hop_index,
+        });
+      });
       return cloned;
     });
   }
@@ -310,7 +438,11 @@
       (stageDefinition.connectors || []).forEach(function (connector) {
         var label = connector.endpoint_label || String(connector.endpoint_id || '');
         var key = connectorKey(label, 'stage-' + stageIndex + '-connector-' + connector.endpoint_id);
-        ensureConnector(stage, key, label, connector.position_count || POSITION_COUNT);
+        ensureConnector(stage, key, label, connector.position_count || POSITION_COUNT, 'mpo', {
+          url: connector.endpoint_url || connector.url,
+          parentUrl: connector.parent_endpoint_url,
+          positions: connector.positions || [],
+        });
       });
     });
 
@@ -329,11 +461,15 @@
           key,
           hop.endpoint_label || key,
           positionCount,
-          hop.schematic_kind === 'interface_channel' ? 'interface_channel' : 'mpo'
+          hop.schematic_kind === 'interface_channel' ? 'interface_channel' : 'mpo',
+          {
+            url: hop.endpoint_url,
+            positions: hop.position_url ? [{ position: position, url: hop.position_url }] : [],
+          }
         );
-        if (!connector.active[position]) {
-          connector.active[position] = color;
-        }
+        markActivePosition(connector, position, color, {
+          url: hop.position_url || hop.url || hop.lane_url,
+        });
         if (stage.activeFamilyOrder.indexOf(connector.familyKey) === -1) {
           stage.activeFamilyOrder.push(connector.familyKey);
         }
@@ -405,6 +541,7 @@
 
   function visualStagePlan(stages, options) {
     var sourceTitle = (options && options.sourceTitle) || 'Source Endpoint';
+    var sourceUrl = normalizeUrl(options && options.sourceUrl);
     var visualStages = [];
     var depthsByVisualIndex = [];
     stages.forEach(function (stage, index) {
@@ -422,6 +559,7 @@
         visualStages.push({
           depth: stage.depth,
           title: sourceTitle,
+          url: sourceUrl,
           role: 'source_composite',
           isSourceComposite: true,
           subStages: [stage, stages[index + 1]],
@@ -453,7 +591,7 @@
         return;
       }
 
-      visualStages.push(stage.role === 'source_endpoint' ? Object.assign({}, stage, { title: sourceTitle }) : stage);
+      visualStages.push(stage.role === 'source_endpoint' ? Object.assign({}, stage, { title: sourceTitle, url: sourceUrl }) : stage);
       depthsByVisualIndex.push([stage.depth]);
     });
 
@@ -513,6 +651,7 @@
       blocks.push({
         depth: destinationStage.depth,
         title: destinationCompositeTitle(destinationGroup, interfaceGroup),
+        url: normalizeUrl((interfaceGroup && interfaceGroup.url) || (destinationGroup && destinationGroup.url)),
         role: 'destination_composite',
         isDestinationComposite: true,
         subStages: subStages,
@@ -575,6 +714,9 @@
     return orderedKeys.map(function (key) {
       var group = groupsByKey[key];
       group.columnCount = group.connectors.length > 1 ? 2 : 1;
+      group.url = normalizeUrl(
+        (group.connectors[0] && (group.connectors[0].parentUrl || group.connectors[0].url)) || ''
+      );
       if (stage.isShuffle && group.connectors.length >= GRID_CONNECTOR_COLUMNS) {
         group.columnCount = GRID_CONNECTOR_COLUMNS;
       }
@@ -795,6 +937,107 @@
     );
   }
 
+  function drawRightBraceLabel(svg, label, x, yTop, yBottom, options) {
+    var height = Math.max(10, yBottom - yTop);
+    var width = options && options.width ? options.width : 18;
+    var lineHeight = options && options.lineHeight ? options.lineHeight : 12;
+    var fontSize = options && options.fontSize ? options.fontSize : 11;
+    var color = options && options.color ? options.color : ANNOTATION_BRACE_COLOR;
+    var labelX = options && options.labelX ? options.labelX : x + 10;
+    var centerY = yTop + height / 2;
+    var curve = Math.min(18, Math.max(8, height / 4));
+    var midGap = Math.min(8, Math.max(4, height / 10));
+    var lines = String(label || '').split('\n');
+    var textY = centerY - ((lines.length - 1) * lineHeight) / 2;
+    var innerX = x - width * 0.35;
+    var outerX = x - width * 1.35;
+
+    svg.appendChild(
+      appendTitle(
+        createSvgNode('path', {
+        d:
+          'M ' +
+          outerX +
+          ' ' +
+          yTop +
+          ' C ' +
+          innerX +
+          ' ' +
+          yTop +
+          ', ' +
+          innerX +
+          ' ' +
+          (yTop + curve) +
+          ', ' +
+          innerX +
+          ' ' +
+          (centerY - midGap) +
+          ' C ' +
+          innerX +
+          ' ' +
+          centerY +
+          ', ' +
+          x +
+          ' ' +
+          centerY +
+          ', ' +
+          x +
+          ' ' +
+          centerY +
+          ' C ' +
+          innerX +
+          ' ' +
+          centerY +
+          ', ' +
+          innerX +
+          ' ' +
+          (centerY + midGap) +
+          ', ' +
+          innerX +
+          ' ' +
+          (yBottom - curve) +
+          ' C ' +
+          innerX +
+          ' ' +
+          yBottom +
+          ', ' +
+          outerX +
+          ' ' +
+          yBottom +
+          ', ' +
+          outerX +
+          ' ' +
+          yBottom,
+        fill: 'none',
+        stroke: color,
+        'stroke-width': options && options.strokeWidth ? options.strokeWidth : 2,
+        'stroke-linecap': 'round',
+        opacity: options && options.opacity ? options.opacity : 0.88,
+        class: 'fanout-annotation-brace',
+        }),
+        label.replace(/\n/g, ' ')
+      )
+    );
+
+    drawMultilineText(
+      svg,
+      label,
+      {
+        x: labelX,
+        y: textY,
+        fill: options && options.textColor ? options.textColor : ANNOTATION_TEXT_COLOR,
+        'font-size': fontSize,
+        'font-weight': options && options.fontWeight ? options.fontWeight : 600,
+        'text-anchor': 'start',
+        'dominant-baseline': 'middle',
+        'font-family': 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        class: 'fanout-annotation-label',
+      },
+      lineHeight,
+      label.replace(/\n/g, ' ')
+    );
+  }
+
   function layoutMetrics(width) {
     var connectorX = CONNECTOR_RAIL_X;
     var connectorAreaW = BASE_SCHEMATIC_WIDTH - connectorX - 32;
@@ -997,6 +1240,7 @@
     var shellX = options && Number.isFinite(Number(options.x)) ? Number(options.x) : 16;
     var shellW = options && Number.isFinite(Number(options.width)) ? Number(options.width) : width - 32;
     var title = options && options.title ? options.title : stage.title;
+    var shellUrl = normalizeUrl(options && options.url) || normalizeUrl(stage.url);
     var titleAnchor = options && options.titleAnchor ? options.titleAnchor : 'start';
     var titleX =
       options && Number.isFinite(Number(options.titleX))
@@ -1006,7 +1250,8 @@
           : shellX + 14;
 
     svg.appendChild(
-      createSvgNode('rect', {
+      linkedSvgNode(
+        createSvgNode('rect', {
         x: shellX,
         y: top,
         width: shellW,
@@ -1017,7 +1262,10 @@
         'stroke-width': 1,
         'data-fanout-stage-role': stage.role || '',
         'data-fanout-stage-title': title || '',
-      })
+        }),
+        shellUrl,
+        title
+      )
     );
 
     drawStageTitle(svg, title, {
@@ -1081,6 +1329,7 @@
               columnIndex: columnIndex,
               left: groupBounds.left,
               right: groupBounds.right,
+              url: group.url,
             };
             entries.push(entriesByName[name]);
           }
@@ -1088,6 +1337,9 @@
           entriesByName[name].columnIndex = Math.min(entriesByName[name].columnIndex, columnIndex);
           entriesByName[name].left = Math.min(entriesByName[name].left, groupBounds.left);
           entriesByName[name].right = Math.max(entriesByName[name].right, groupBounds.right);
+          if (!entriesByName[name].url && group.url) {
+            entriesByName[name].url = group.url;
+          }
         });
       });
     });
@@ -1103,6 +1355,7 @@
     if (entries.length <= 1) {
       drawStageShell(svg, stage, top, width, stageH, {
         title: entries.length ? 'Shuffle Cassette: ' + entries[0].name : stage.title,
+        url: entries.length ? entries[0].url : stage.url,
       });
       return;
     }
@@ -1116,6 +1369,7 @@
         width: shellRight - shellX,
         title: 'Shuffle Cassette: ' + entry.name,
         titleAnchor: index === 0 ? 'start' : 'end',
+        url: entry.url,
       });
       previousShellRight = shellRight;
     });
@@ -1235,8 +1489,9 @@
 
         if (stage.isInterfaceLayer) {
           svg.appendChild(
-            appendTitle(
-              createSvgNode('rect', {
+            linkedSvgNode(
+              appendTitle(
+                createSvgNode('rect', {
               x: groupFrame.x,
               y: groupTop + GROUP_FRAME_TOP_OFFSET,
               width: groupFrame.width,
@@ -1246,7 +1501,10 @@
               opacity: 0.62,
               stroke: '#253447',
               'stroke-width': 1,
-              }),
+                }),
+                group.label
+              ),
+              group.url,
               group.label
             )
           );
@@ -1285,8 +1543,9 @@
 
             if (connector.kind !== 'interface_channel') {
               svg.appendChild(
-                appendTitle(
-                  createSvgNode('rect', {
+                linkedSvgNode(
+                  appendTitle(
+                    createSvgNode('rect', {
                   x: connectorFrame.x,
                   y: connectorFrameY,
                   width: connectorFrame.width,
@@ -1295,7 +1554,10 @@
                   fill: '#080d14',
                   stroke: '#3c4450',
                   'stroke-width': 1.1,
-                  }),
+                    }),
+                    connector.label
+                  ),
+                  connector.url,
                   connector.label
                 )
               );
@@ -1305,11 +1567,12 @@
             for (var position = 1; position <= positionCount; position += 1) {
               var boxX = boxGeometry.startX + (position - 1) * boxGeometry.step;
               var boxW = boxGeometry.boxW;
-              var activeColor = connector.active[position] || '';
+              var activeColor = activePositionColor(connector, position);
               var isActive = Boolean(activeColor);
               svg.appendChild(
-                appendTitle(
-                  createSvgNode('rect', {
+                linkedSvgNode(
+                  appendTitle(
+                    createSvgNode('rect', {
                   x: boxX,
                   y: rowY + 8,
                   width: boxW,
@@ -1319,7 +1582,12 @@
                   opacity: isActive ? 0.95 : 0.42,
                   stroke: isActive ? '#f6f8fb' : '#303744',
                   'stroke-width': isActive ? 1.1 : 0.8,
-                  }),
+                    }),
+                    connector.kind === 'interface_channel'
+                      ? connector.label + ' lane ' + position
+                      : connector.label + ' position ' + position
+                  ),
+                  activePositionUrl(connector, position),
                   connector.kind === 'interface_channel'
                     ? connector.label + ' lane ' + position
                     : connector.label + ' position ' + position
@@ -1664,6 +1932,293 @@
     });
   }
 
+  function pathsHaveCableAssemblySpans(paths) {
+    return (paths || []).some(function (path) {
+      return (path.cable_spans || []).some(function (span) {
+        return span && span.cable_assembly;
+      });
+    });
+  }
+
+  function cableAssemblyDisplay(cableAssembly) {
+    if (!cableAssembly) {
+      return 'Unassigned cable assembly';
+    }
+    return cableAssembly.display || cableAssembly.label || cableAssembly.cable_id || 'Cable assembly';
+  }
+
+  function cableAssemblyLabel(cableAssembly) {
+    if (!cableAssembly) {
+      return 'cable-\nassembly:\nunassigned';
+    }
+    return 'cable-\nassembly:\n' + compactMiddle(cableAssembly.label || cableAssembly.cable_id || cableAssembly.display, 24);
+  }
+
+  function anchorForHopIndex(stageLayouts, hops, hopIndex) {
+    var normalizedIndex = Number(hopIndex);
+    if (!Number.isFinite(normalizedIndex)) {
+      return null;
+    }
+    var hop = hops[normalizedIndex];
+    var layout = stageLayouts[normalizedIndex];
+    if (!hop || !layout) {
+      return null;
+    }
+    return anchorForHop(layout.anchors, hop);
+  }
+
+  function xAtCableY(segment, y) {
+    var yStart = segment.fromAnchor.yBottom;
+    var yEnd = segment.toAnchor.yTop;
+    var distance = yEnd - yStart;
+    if (Math.abs(distance) < 1) {
+      return (segment.fromAnchor.x + segment.toAnchor.x) / 2;
+    }
+    var t = Math.max(0, Math.min(1, (y - yStart) / distance));
+    return segment.fromAnchor.x + (segment.toAnchor.x - segment.fromAnchor.x) * t;
+  }
+
+  function cableAssemblyGroups(paths, stageLayouts) {
+    var groupsByKey = {};
+    (paths || []).forEach(function (path, pathIndex) {
+      var hops = path.connector_hops || [];
+      (path.cable_spans || []).forEach(function (span) {
+        var cableAssembly = span.cable_assembly;
+        if (!cableAssembly) {
+          return;
+        }
+        var fromIndex = Number(span.from_hop_index);
+        var toIndex = Number(span.to_hop_index);
+        var fromAnchor = anchorForHopIndex(stageLayouts, hops, fromIndex);
+        var toAnchor = anchorForHopIndex(stageLayouts, hops, toIndex);
+        if (!fromAnchor || !toAnchor) {
+          return;
+        }
+        if (fromAnchor.visualIndex === toAnchor.visualIndex) {
+          return;
+        }
+        var groupKey = [
+          cableAssembly.key || cableAssembly.display || cableAssembly.label || 'cable',
+          fromIndex,
+          toIndex,
+          fromAnchor.visualIndex,
+          toAnchor.visualIndex,
+        ].join('|');
+        if (!groupsByKey[groupKey]) {
+          groupsByKey[groupKey] = {
+            cableAssembly: cableAssembly,
+            fromIndex: fromIndex,
+            toIndex: toIndex,
+            fromVisualIndex: fromAnchor.visualIndex,
+            toVisualIndex: toAnchor.visualIndex,
+            segments: [],
+          };
+        }
+        groupsByKey[groupKey].segments.push({
+          fromAnchor: fromAnchor,
+          toAnchor: toAnchor,
+          pathIndex: pathIndex,
+        });
+      });
+    });
+    return Object.keys(groupsByKey).map(function (key) {
+      return groupsByKey[key];
+    });
+  }
+
+  function ensureCableCylinderGradient(svg) {
+    var gradientId = 'fanout-cable-cylinder-gradient';
+    if (svg.querySelector('#' + gradientId)) {
+      return gradientId;
+    }
+    var defs = svg.querySelector('defs');
+    if (!defs) {
+      defs = createSvgNode('defs');
+      svg.insertBefore(defs, svg.firstChild);
+    }
+    var gradient = createSvgNode('linearGradient', {
+      id: gradientId,
+      x1: '0%',
+      y1: '0%',
+      x2: '100%',
+      y2: '0%',
+    });
+    gradient.appendChild(createSvgNode('stop', { offset: '0%', 'stop-color': '#737b84', 'stop-opacity': 0.2 }));
+    gradient.appendChild(createSvgNode('stop', { offset: '50%', 'stop-color': '#aeb5bd', 'stop-opacity': 0.34 }));
+    gradient.appendChild(createSvgNode('stop', { offset: '100%', 'stop-color': '#737b84', 'stop-opacity': 0.2 }));
+    defs.appendChild(gradient);
+    return gradientId;
+  }
+
+  function drawCableCylinder(svg, group, geometry) {
+    var gradientId = ensureCableCylinderGradient(svg);
+    var tooltip = 'Cable assembly: ' + cableAssemblyDisplay(group.cableAssembly);
+    var cylinder = appendTitle(
+      createSvgNode('g', {
+        class: 'fanout-cable-assembly-cylinder',
+        'data-fanout-cable-assembly': cableAssemblyDisplay(group.cableAssembly),
+      }),
+      tooltip
+    );
+    var x = geometry.x;
+    var y = geometry.y;
+    var width = geometry.width;
+    var height = geometry.height;
+    var radiusY = Math.max(5, Math.min(9, height * 0.08));
+
+    cylinder.appendChild(
+      createSvgNode('rect', {
+        x: x,
+        y: y + radiusY,
+        width: width,
+        height: Math.max(4, height - radiusY * 2),
+        fill: 'url(#' + gradientId + ')',
+        opacity: 0.46,
+      })
+    );
+    cylinder.appendChild(
+      createSvgNode('ellipse', {
+        cx: x + width / 2,
+        cy: y + radiusY,
+        rx: width / 2,
+        ry: radiusY,
+        fill: 'url(#' + gradientId + ')',
+        opacity: 0.24,
+      })
+    );
+    cylinder.appendChild(
+      createSvgNode('ellipse', {
+        cx: x + width / 2,
+        cy: y + height - radiusY,
+        rx: width / 2,
+        ry: radiusY,
+        fill: '#717982',
+        opacity: 0.16,
+      })
+    );
+    cylinder.appendChild(
+      createSvgNode('path', {
+        d:
+          'M ' +
+          x +
+          ' ' +
+          (y + radiusY) +
+          ' C ' +
+          x +
+          ' ' +
+          (y + height * 0.5) +
+          ', ' +
+          x +
+          ' ' +
+          (y + height - radiusY) +
+          ', ' +
+          x +
+          ' ' +
+          (y + height - radiusY) +
+          ' M ' +
+          (x + width) +
+          ' ' +
+          (y + radiusY) +
+          ' C ' +
+          (x + width) +
+          ' ' +
+          (y + height * 0.5) +
+          ', ' +
+          (x + width) +
+          ' ' +
+          (y + height - radiusY) +
+          ', ' +
+          (x + width) +
+          ' ' +
+          (y + height - radiusY),
+        fill: 'none',
+        stroke: '#c3c9cf',
+        'stroke-width': 0.8,
+        opacity: 0.14,
+      })
+    );
+    svg.appendChild(linkedSvgNode(cylinder, group.cableAssembly && group.cableAssembly.url, tooltip));
+  }
+
+  function visualBandForSegment(segment) {
+    var fromAnchor = segment.fromAnchor;
+    var toAnchor = segment.toAnchor;
+    var upperAnchor = fromAnchor.visualIndex <= toAnchor.visualIndex ? fromAnchor : toAnchor;
+    var lowerAnchor = fromAnchor.visualIndex <= toAnchor.visualIndex ? toAnchor : fromAnchor;
+    return {
+      top: Number.isFinite(Number(upperAnchor.visualBottom)) ? Number(upperAnchor.visualBottom) : upperAnchor.yBottom,
+      bottom: Number.isFinite(Number(lowerAnchor.visualTop)) ? Number(lowerAnchor.visualTop) : lowerAnchor.yTop,
+    };
+  }
+
+  function cableCylinderGeometry(group, canvasWidth) {
+    var yStart = Math.min.apply(null, group.segments.map(function (segment) {
+      return segment.fromAnchor.yBottom;
+    }));
+    var yEnd = Math.max.apply(null, group.segments.map(function (segment) {
+      return segment.toAnchor.yTop;
+    }));
+    var bandTop = Math.max.apply(null, group.segments.map(function (segment) {
+      return visualBandForSegment(segment).top;
+    }));
+    var bandBottom = Math.min.apply(null, group.segments.map(function (segment) {
+      return visualBandForSegment(segment).bottom;
+    }));
+    var distance = yEnd - yStart;
+    var centerY = bandBottom > bandTop ? bandTop + (bandBottom - bandTop) / 2 : yStart + distance / 2;
+    var height = CABLE_CYLINDER_HEIGHT;
+    var xValues = group.segments.map(function (segment) {
+      return xAtCableY(segment, centerY);
+    });
+    var minX = Math.min.apply(null, xValues);
+    var maxX = Math.max.apply(null, xValues);
+    var spanWidth = Math.max(1, maxX - minX);
+    var width = Math.max(CABLE_CYLINDER_MIN_WIDTH, spanWidth + CABLE_CYLINDER_HORIZONTAL_PADDING);
+    var maxWidth = Math.min(CABLE_CYLINDER_MAX_WIDTH, Math.max(CABLE_CYLINDER_MIN_WIDTH, canvasWidth - 64));
+    width = Math.min(width, maxWidth);
+    var centerX = minX + spanWidth / 2;
+    var x = centerX - width / 2;
+    x = Math.max(32, Math.min(canvasWidth - width - 32, x));
+    return {
+      x: x,
+      y: centerY - height / 2,
+      width: width,
+      height: height,
+      centerY: centerY,
+    };
+  }
+
+  function drawCableAssemblyLabel(svg, group, geometry, width) {
+    var label = cableAssemblyLabel(group.cableAssembly);
+    var labelFitsRight = geometry.x + geometry.width + 190 < width;
+    if (labelFitsRight) {
+      drawRightBraceLabel(svg, label, geometry.x + geometry.width + 16, geometry.y + 2, geometry.y + geometry.height - 2, {
+        labelX: geometry.x + geometry.width + 28,
+        width: 18,
+        fontSize: 10,
+        lineHeight: 12,
+      });
+      return;
+    }
+    drawBraceLabel(svg, label, geometry.x - 38, geometry.y + 2, geometry.y + geometry.height - 2, {
+      labelX: geometry.x - 48,
+      width: 18,
+      fontSize: 10,
+      lineHeight: 12,
+    });
+  }
+
+  function drawCableAssemblyOverlays(svg, paths, stageLayouts, width) {
+    cableAssemblyGroups(paths, stageLayouts).forEach(function (group) {
+      if (!group.segments.length) {
+        return;
+      }
+      var geometry = cableCylinderGeometry(group, width);
+      drawCableCylinder(svg, group, geometry);
+      drawCableAssemblyLabel(svg, group, geometry, width);
+    });
+  }
+
   function pathLegendLabel(path) {
     if (path.bundle_label) {
       return path.bundle_label + ' (' + (path.bundle_size || 1) + ' lanes)';
@@ -1681,7 +2236,18 @@
         rowY += 24;
       }
       var color = LANE_COLORS[index % LANE_COLORS.length];
-      svg.appendChild(
+      var legendLabel = pathLegendLabel(path);
+      var legendGroup = createSvgNode('g');
+      legendGroup.appendChild(
+        createSvgNode('rect', {
+          x: x,
+          y: rowY - 15,
+          width: itemW - 8,
+          height: 18,
+          fill: 'transparent',
+        })
+      );
+      legendGroup.appendChild(
         createSvgNode('rect', {
           x: x,
           y: rowY - 10,
@@ -1691,13 +2257,16 @@
           rx: 2,
         })
       );
-      drawText(svg, compactMiddle(pathLegendLabel(path), 20), {
+      var legendText = createSvgNode('text', {
         x: x + 24,
         y: rowY - 3,
         fill: '#a9b2bf',
         'font-size': 10,
         'font-family': 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      }, pathLegendLabel(path));
+      });
+      legendText.textContent = compactMiddle(legendLabel, 20);
+      legendGroup.appendChild(legendText);
+      svg.appendChild(linkedSvgNode(appendTitle(legendGroup, legendLabel), path.source_lane_url || path.destination_lane_url, legendLabel));
       x += itemW;
     });
   }
@@ -1719,11 +2288,11 @@
     var interfaceLayers = hasExpandedInterfaceLayers(container, paths);
     var renderPaths = interfaceLayers ? withInterfaceLayerHops(paths) : paths;
     var stages = buildStages(renderPaths, parseStagePayload(container), { interfaceLayers: interfaceLayers });
-    var plan = visualStagePlan(stages, { sourceTitle: sourceStageTitle(container) });
+    var plan = visualStagePlan(stages, { sourceTitle: sourceStageTitle(container), sourceUrl: sourceStageUrl(container) });
     var visualStages = plan.stages;
     var width = schematicWidthForStages(visualStages);
     var top = 18;
-    var gap = 20;
+    var gap = pathsHaveCableAssemblySpans(renderPaths) ? CABLE_ASSEMBLY_STAGE_GAP : DEFAULT_STAGE_GAP;
     var stageLayouts = [];
 
     visualStages.forEach(function (stage) {
@@ -1771,7 +2340,13 @@
         if (!stageLayoutsByDepth[depth]) {
           stageLayoutsByDepth[depth] = { anchors: {} };
         }
-        Object.assign(stageLayoutsByDepth[depth].anchors, layout.anchors);
+        Object.keys(layout.anchors || {}).forEach(function (anchorKey) {
+          stageLayoutsByDepth[depth].anchors[anchorKey] = Object.assign({}, layout.anchors[anchorKey], {
+            visualIndex: visualIndex,
+            visualTop: top,
+            visualBottom: top + layout.height,
+          });
+        });
       });
       top += layout.height + gap;
     });
@@ -1783,6 +2358,7 @@
     for (var i = 0; i < paths.length; i += 1) {
       drawLanePath(svg, renderPaths[i], i, stageLayoutsByDepth, LANE_COLORS[i % LANE_COLORS.length]);
     }
+    drawCableAssemblyOverlays(svg, renderPaths, stageLayoutsByDepth, width);
     drawLegend(svg, paths, width, legendTop);
     bringTextToFront(svg);
     installTooltips(container, svg);

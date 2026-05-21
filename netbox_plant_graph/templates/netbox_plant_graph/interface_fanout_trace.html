@@ -136,13 +136,14 @@
         data-fanout-schematic
         data-fanout-trace-mode="{{ trace_mode }}"
         data-fanout-source-title="Source: {{ selected_interface.device.name }}-{{ selected_interface.name }}"
+        data-fanout-source-url="{{ selected_interface.get_absolute_url }}"
       >
         <svg
           class="fanout-schematic__svg"
           data-fanout-schematic-svg
           viewBox="0 0 980 280"
-          aria-hidden="true"
-          focusable="false"
+          aria-hidden="false"
+          focusable="true"
         ></svg>
         <script type="application/json" data-fanout-schematic-data>{{ aggregate_schematic_paths_json|safe }}</script>
         <script type="application/json" data-fanout-schematic-stages>{{ aggregate_schematic_stage_connectors_json|safe }}</script>
@@ -300,5 +301,5 @@
 
 {% block javascript %}
   {{ block.super }}
-  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-section-title-linebreaks"></script>
+  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-fanout-links"></script>
 {% endblock %}

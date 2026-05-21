@@ -2088,6 +2088,37 @@ def _subinterface_name_for_lane(lane: OpticalLane | None) -> str:
     return ''
 
 
+def _object_absolute_url(obj) -> str:
+    if obj is None or not hasattr(obj, 'get_absolute_url'):
+        return ''
+    try:
+        return obj.get_absolute_url()
+    except Exception:
+        return ''
+
+
+def _subinterface_for_lane(lane: OpticalLane | None) -> Interface | None:
+    if lane is None or lane.channel is None:
+        return None
+    source_subinterface = getattr(lane.channel, 'source_subinterface', None)
+    return source_subinterface if isinstance(source_subinterface, Interface) else None
+
+
+def _remote_interface_for_lane(destination_lane: OpticalLane | None) -> Interface | None:
+    if destination_lane is None:
+        return None
+    channel_subinterface = getattr(destination_lane.channel, 'source_subinterface', None)
+    if isinstance(channel_subinterface, Interface):
+        return channel_subinterface
+    endpoint_source = destination_lane.endpoint.source
+    if isinstance(endpoint_source, Interface):
+        return endpoint_source
+    node_source = destination_lane.endpoint.node.source
+    if isinstance(node_source, Interface):
+        return node_source
+    return None
+
+
 def _position_number_from_step_label(label: str | None) -> int | None:
     if not label:
         return None
@@ -2101,16 +2132,48 @@ def _position_number_from_step_label(label: str | None) -> int | None:
     return position
 
 
+def _schematic_cable_assembly_payload(cable_assembly) -> dict | None:
+    if cable_assembly is None:
+        return None
+    cable_id = getattr(cable_assembly, 'cable_id', '') or ''
+    site_id = getattr(cable_assembly, 'site_id', None)
+    display = str(getattr(cable_assembly, 'display', '') or cable_id)
+    label = cable_id or display
+    key = f'{site_id}:{cable_id}' if site_id and cable_id else display
+    url = getattr(cable_assembly, 'url', None) or _object_absolute_url(cable_assembly)
+    return {
+        'key': key,
+        'label': label,
+        'display': display,
+        'site': str(getattr(cable_assembly, 'site', '') or ''),
+        'site_id': site_id,
+        'cable_id': cable_id,
+        'url': url,
+    }
+
+
 def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: OpticalLane | None, resolved_path) -> dict:
+    steps = tuple(getattr(resolved_path, 'steps', ()) or ())
+    connector_position_ids = {
+        getattr(step, 'object_id', None)
+        for step in steps
+        if getattr(step, 'object_type', '') == 'connector_position' and getattr(step, 'object_id', None)
+    }
+    connector_positions_by_id = {
+        position.pk: position
+        for position in ConnectorPosition.objects.filter(pk__in=connector_position_ids).select_related('endpoint')
+    }
     source_position = None
     destination_position = None
     middle_positions = []
     connector_hops = []
+    pending_cable_spans = []
+    cable_spans = []
     first_fiber_label = ''
     second_fiber_label = ''
     transfer_map_label = ''
 
-    for step in tuple(getattr(resolved_path, 'steps', ()) or ()):
+    for step in steps:
         if getattr(step, 'object_type', '') == 'fiber_strand':
             label = str(getattr(step, 'label', '') or '')
             if label:
@@ -2118,6 +2181,15 @@ def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: Optic
                     first_fiber_label = label
                 elif not second_fiber_label and label != first_fiber_label:
                     second_fiber_label = label
+            cable_assembly = _schematic_cable_assembly_payload(getattr(step, 'cable_assembly', None))
+            if cable_assembly and connector_hops:
+                pending_cable_spans.append(
+                    {
+                        'from_hop_index': len(connector_hops) - 1,
+                        'cable_assembly': cable_assembly,
+                        'strand_label': label,
+                    }
+                )
         elif getattr(step, 'object_type', '') == 'transfer_map':
             transfer_map_label = str(getattr(step, 'label', '') or '')
 
@@ -2126,6 +2198,10 @@ def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: Optic
         position = _position_number_from_step_label(getattr(step, 'label', None))
         if position is None:
             continue
+        position_id = getattr(step, 'object_id', None)
+        position_obj = connector_positions_by_id.get(position_id)
+        endpoint_obj = position_obj.endpoint if position_obj is not None else None
+        endpoint_id = getattr(endpoint_obj, 'pk', None) or (getattr(step, 'metadata', {}) or {}).get('endpoint_id')
         step_type = getattr(step, 'step_type', '')
         if step_type == 'source_position':
             source_position = position
@@ -2143,18 +2219,44 @@ def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: Optic
                 continue
         connector_hops.append(
             {
-                'endpoint_id': (getattr(step, 'metadata', {}) or {}).get('endpoint_id'),
+                'endpoint_id': endpoint_id,
                 'endpoint_label': endpoint_label,
+                'endpoint_url': _object_absolute_url(endpoint_obj),
+                'position_id': position_id,
+                'position_url': _object_absolute_url(position_obj),
                 'position': position,
                 'step_type': step_type,
             }
         )
+        if pending_cable_spans:
+            current_hop_index = len(connector_hops) - 1
+            unresolved_spans = []
+            for pending_span in pending_cable_spans:
+                if current_hop_index <= pending_span['from_hop_index']:
+                    unresolved_spans.append(pending_span)
+                    continue
+                cable_spans.append(
+                    {
+                        'from_hop_index': pending_span['from_hop_index'],
+                        'to_hop_index': current_hop_index,
+                        'cable_assembly': pending_span['cable_assembly'],
+                        'strand_label': pending_span['strand_label'],
+                    }
+                )
+            pending_cable_spans = unresolved_spans
 
     shuffle_front_position = middle_positions[0] if middle_positions else source_position
     shuffle_rear_position = middle_positions[-1] if middle_positions else destination_position
+    source_subinterface = _subinterface_for_lane(source_lane)
+    destination_subinterface = _subinterface_for_lane(destination_lane)
+    remote_interface = _remote_interface_for_lane(destination_lane)
 
     return {
         'lane_index': source_lane.lane_index,
+        'source_lane_id': source_lane.pk,
+        'source_lane_url': _object_absolute_url(source_lane),
+        'destination_lane_id': getattr(destination_lane, 'pk', None),
+        'destination_lane_url': _object_absolute_url(destination_lane),
         'wavelength_nm': str(source_lane.wavelength_nm),
         'path_found': bool(getattr(resolved_path, 'path_found', False)),
         'source_position': source_position,
@@ -2162,6 +2264,7 @@ def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: Optic
         'shuffle_rear_position': shuffle_rear_position,
         'destination_position': destination_position,
         'connector_hops': tuple(connector_hops),
+        'cable_spans': tuple(cable_spans),
         'first_fiber_label': first_fiber_label,
         'second_fiber_label': second_fiber_label,
         'transfer_map_label': transfer_map_label,
@@ -2172,8 +2275,13 @@ def _extract_schematic_path(*, source_lane: OpticalLane, destination_lane: Optic
         ),
         'remote_attachment_label': _remote_attachment_label(destination_lane),
         'source_subinterface_label': _subinterface_name_for_lane(source_lane),
+        'source_subinterface_url': _object_absolute_url(source_subinterface),
         'destination_subinterface_label': _subinterface_name_for_lane(destination_lane),
+        'destination_subinterface_url': _object_absolute_url(destination_subinterface),
         'destination_interface_layer_label': _remote_attachment_label(destination_lane),
+        'destination_interface_layer_url': _object_absolute_url(
+            remote_interface or destination_subinterface or getattr(destination_lane, 'endpoint', None)
+        ),
     }
 
 
@@ -2181,7 +2289,18 @@ def _schematic_connector_entry(endpoint: Endpoint) -> dict:
     return {
         'endpoint_id': endpoint.pk,
         'endpoint_label': endpoint.address,
+        'endpoint_url': endpoint.get_absolute_url(),
+        'parent_endpoint_id': endpoint.parent_id,
+        'parent_endpoint_url': _object_absolute_url(endpoint.parent),
         'position_count': endpoint.position_count or 12,
+        'positions': tuple(
+            {
+                'position': position.position_number,
+                'position_id': position.pk,
+                'url': position.get_absolute_url(),
+            }
+            for position in endpoint.positions.all()
+        ),
     }
 
 
@@ -2261,7 +2380,10 @@ def _expanded_schematic_stage_connectors(paths: tuple[dict, ...]) -> tuple[dict,
     }
     expanded_endpoints = {
         endpoint.pk: endpoint
-        for endpoint in Endpoint.objects.filter(pk__in=all_expanded_ids).order_by('address')
+        for endpoint in Endpoint.objects.filter(pk__in=all_expanded_ids)
+        .select_related('parent')
+        .prefetch_related('positions')
+        .order_by('address')
     }
     return tuple(
         {

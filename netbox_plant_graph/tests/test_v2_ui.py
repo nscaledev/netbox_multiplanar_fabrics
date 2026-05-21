@@ -569,12 +569,26 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'data-fanout-schematic-stages')
         self.assertContains(response, 'data-fanout-trace-mode="expanded"')
         self.assertContains(response, 'data-fanout-source-title="Source: GPU-FANOUT-1-OSFP-1"')
-        self.assertContains(response, 'fanout_trace.js?v=20260521-section-title-linebreaks')
+        self.assertContains(response, 'fanout_trace.js?v=20260521-fanout-links')
 
         schematic_paths = json.loads(response.context['aggregate_schematic_paths_json'])
         self.assertTrue(schematic_paths[0]['source_subinterface_label'])
+        self.assertTrue(schematic_paths[0]['source_lane_url'])
+        self.assertTrue(schematic_paths[0]['source_subinterface_url'])
         self.assertTrue(schematic_paths[0]['destination_interface_layer_label'])
+        self.assertTrue(schematic_paths[0]['destination_lane_url'])
+        self.assertTrue(schematic_paths[0]['destination_interface_layer_url'])
+        self.assertTrue(schematic_paths[0]['cable_spans'])
+        self.assertTrue(schematic_paths[0]['cable_spans'][0]['cable_assembly']['label'])
+        self.assertTrue(schematic_paths[0]['cable_spans'][0]['cable_assembly']['url'])
+        self.assertTrue(schematic_paths[0]['connector_hops'][0]['endpoint_url'])
+        self.assertTrue(schematic_paths[0]['connector_hops'][0]['position_url'])
         stage_payload = json.loads(response.context['aggregate_schematic_stage_connectors_json'])
+        self.assertTrue(stage_payload[0]['connectors'][0]['endpoint_url'])
+        connector_with_positions = next(
+            connector for stage in stage_payload for connector in stage['connectors'] if connector['positions']
+        )
+        self.assertTrue(connector_with_positions['positions'][0]['url'])
         stage_labels = [
             [connector['endpoint_label'] for connector in stage['connectors']]
             for stage in stage_payload
