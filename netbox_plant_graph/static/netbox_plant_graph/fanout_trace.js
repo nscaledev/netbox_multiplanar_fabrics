@@ -17,15 +17,20 @@
   var POSITION_BRACE_LABEL_X = 300;
   var RANGE_BRACE_X = 92;
   var RANGE_BRACE_LABEL_X = 78;
-  var SHUFFLE_CASSETTE_SIDE_GAP = 84;
-  var SOURCE_COMPOSITE_LAYER_GAP = 62;
-  var DESTINATION_COMPOSITE_LAYER_GAP = 62;
+  var SHUFFLE_CASSETTE_SIDE_GAP = 42;
+  var SOURCE_COMPOSITE_LAYER_GAP = 20;
+  var DESTINATION_COMPOSITE_LAYER_GAP = 3;
   var UNUSED_STRAND_COLOR = '#9aa3b2';
   var SHUFFLE_CASSETTE_STRAND_OPACITY = 0.5;
   var ANNOTATION_BRACE_COLOR = '#9fbce4';
   var ANNOTATION_TEXT_COLOR = '#9fbce4';
   var GROUP_ROW_GAP = 18;
   var INTERFACE_CHANNEL_GROUP_SPACER_RATIO = 0.5;
+  var OUTER_TO_INNER_LABEL_GAP = 8;
+  var MONO_TEXT_WIDTH_FACTOR = 0.62;
+  var CONNECTOR_ROW_STRIDE = 58;
+  var GROUP_FRAME_TOP_OFFSET = 16;
+  var CONNECTOR_ROW_TOP_OFFSET = 30;
 
   function createSvgNode(tagName, attrs) {
     var node = document.createElementNS(SVG_NS, tagName);
@@ -426,21 +431,19 @@
       }
 
       if (stage.role === 'destination_endpoint' && stages[index + 1] && stages[index + 1].role === 'destination_interface_layer') {
-        visualStages.push({
-          depth: stage.depth,
-          title: 'Destination Endpoint',
-          role: 'destination_composite',
-          isDestinationComposite: true,
-          subStages: [stage, stages[index + 1]],
+        destinationCompositeStages(stage, stages[index + 1]).forEach(function (destinationStage) {
+          visualStages.push(destinationStage);
+          depthsByVisualIndex.push(destinationStage.subStages.map(function (subStage) {
+            return subStage.depth;
+          }));
         });
-        depthsByVisualIndex.push([stage.depth, stages[index + 1].depth]);
         return;
       }
 
       if (stage.role === 'shuffle_ingress' && stages[index + 1] && stages[index + 1].role === 'shuffle_egress') {
         visualStages.push({
           depth: stage.depth,
-          title: 'Shuffle Cassette',
+          title: shuffleCassetteStageTitle(stage, stages[index + 1]),
           role: 'shuffle_cassette',
           isShuffle: true,
           isShuffleCassette: true,
@@ -458,6 +461,88 @@
       stages: visualStages,
       depthsByVisualIndex: depthsByVisualIndex,
     };
+  }
+
+  function cloneStageWithGroup(stage, group) {
+    var cloned = Object.assign({}, stage);
+    cloned.connectorList = (group.connectors || []).slice();
+    cloned.connectorGroups = [group];
+    cloned.groupRows = [[group]];
+    cloned.activeFamilyOrder = [group.key];
+    return cloned;
+  }
+
+  function destinationCagePortLabel(label) {
+    var text = String(label || '').trim();
+    var withoutMpo = text
+      .replace(/(?:[._-])?MPO(?:[-.]?0*\d+)?$/i, '')
+      .replace(/[._-]+$/, '');
+    var lastDot = withoutMpo.lastIndexOf('.');
+    if (lastDot !== -1) {
+      return withoutMpo.slice(0, lastDot) + '-' + withoutMpo.slice(lastDot + 1);
+    }
+    return withoutMpo || text || 'destination';
+  }
+
+  function destinationCompositeTitle(destinationGroup, interfaceGroup) {
+    var label = destinationGroup && destinationGroup.label ? destinationGroup.label : '';
+    if (!label && interfaceGroup && interfaceGroup.label) {
+      label = interfaceGroup.label.replace(/\/\d+$/, '');
+    }
+    return 'Destination: ' + destinationCagePortLabel(label);
+  }
+
+  function destinationCompositeStages(destinationStage, interfaceStage) {
+    var destinationGroups = destinationStage.connectorGroups || [];
+    var interfaceGroups = interfaceStage.connectorGroups || [];
+    var blockCount = Math.max(destinationGroups.length, interfaceGroups.length);
+    var blocks = [];
+    for (var index = 0; index < blockCount; index += 1) {
+      var destinationGroup = destinationGroups[index];
+      var interfaceGroup = interfaceGroups[index];
+      var subStages = [];
+      if (destinationGroup) {
+        subStages.push(cloneStageWithGroup(destinationStage, destinationGroup));
+      }
+      if (interfaceGroup) {
+        subStages.push(cloneStageWithGroup(interfaceStage, interfaceGroup));
+      }
+      if (!subStages.length) {
+        continue;
+      }
+      blocks.push({
+        depth: destinationStage.depth,
+        title: destinationCompositeTitle(destinationGroup, interfaceGroup),
+        role: 'destination_composite',
+        isDestinationComposite: true,
+        subStages: subStages,
+      });
+    }
+    return blocks;
+  }
+
+  function cassetteNameFromConnectorLabel(label) {
+    var text = String(label || '').trim();
+    var name = text
+      .replace(/(?:[._-])?(?:front|rear)[.-]?mpo[-.]?0*\d+\b/i, '')
+      .replace(/[._-]+$/, '');
+    return name || text;
+  }
+
+  function shuffleCassetteStageTitle(ingressStage, egressStage) {
+    var names = [];
+    [ingressStage, egressStage].forEach(function (stage) {
+      (stage.connectorList || []).forEach(function (connector) {
+        var name = cassetteNameFromConnectorLabel(connector.label);
+        if (name && names.indexOf(name) === -1) {
+          names.push(name);
+        }
+      });
+    });
+    if (!names.length) {
+      return 'Shuffle Cassette';
+    }
+    return 'Shuffle Cassette: ' + names.join(' / ');
   }
 
   function connectorGroupsForStage(stage) {
@@ -504,7 +589,7 @@
       for (var index = 0; index < group.connectors.length; index += group.columnCount) {
         group.connectorRows.push(group.connectors.slice(index, index + group.columnCount));
       }
-      group.height = 24 + Math.max(1, group.connectorRows.length) * 58;
+      group.height = 24 + Math.max(1, group.connectorRows.length) * CONNECTOR_ROW_STRIDE;
       return group;
     });
   }
@@ -601,6 +686,12 @@
       var lineAttrs = Object.assign({}, attrs, { y: y + index * lineHeight });
       drawText(svg, line, lineAttrs);
     });
+  }
+
+  function estimatedMultilineTextWidth(label, fontSize) {
+    return String(label || '').split('\n').reduce(function (maxWidth, line) {
+      return Math.max(maxWidth, line.length * fontSize * MONO_TEXT_WIDTH_FACTOR);
+    }, 0);
   }
 
   function drawBraceLabel(svg, label, x, yTop, yBottom, options) {
@@ -858,42 +949,175 @@
   function stageHeight(stage) {
     if (stage.isSourceComposite) {
       return 42 + stage.subStages.reduce(function (total, subStage, index) {
-        return total + groupRowsHeight(subStage) + (index === 0 ? SOURCE_COMPOSITE_LAYER_GAP : 0);
+        return total + groupRowsHeight(subStage) + (index < stage.subStages.length - 1 ? SOURCE_COMPOSITE_LAYER_GAP : 0);
       }, 0);
     }
     if (stage.isDestinationComposite) {
       return 42 + stage.subStages.reduce(function (total, subStage, index) {
-        return total + groupRowsHeight(subStage) + (index === 0 ? DESTINATION_COMPOSITE_LAYER_GAP : 0);
+        return total + groupRowsHeight(subStage) + (index < stage.subStages.length - 1 ? DESTINATION_COMPOSITE_LAYER_GAP : 0);
       }, 0);
     }
     if (stage.isShuffleCassette) {
       return 42 + stage.subStages.reduce(function (total, subStage, index) {
-        return total + groupRowsHeight(subStage) + (index === 0 ? SHUFFLE_CASSETTE_SIDE_GAP : 0);
+        return total + groupRowsHeight(subStage) + (index < stage.subStages.length - 1 ? SHUFFLE_CASSETTE_SIDE_GAP : 0);
       }, 0);
     }
     return 42 + groupRowsHeight(stage);
   }
 
-  function drawStageShell(svg, stage, top, width, stageH) {
+  function sectionTitleLines(title) {
+    var text = String(title || '');
+    var colonIndex = text.indexOf(':');
+    if (colonIndex === -1) {
+      return [text];
+    }
+    return [
+      text.slice(0, colonIndex + 1),
+      '     ' + text.slice(colonIndex + 1).trimStart(),
+    ];
+  }
+
+  function drawStageTitle(svg, title, attrs) {
+    var lines = sectionTitleLines(title);
+    var lineHeight = 16;
+    var baseY = lines.length > 1 ? Number(attrs.y) - 4 : Number(attrs.y);
+    lines.forEach(function (line, index) {
+      drawText(
+        svg,
+        line,
+        Object.assign({}, attrs, {
+          y: baseY + index * lineHeight,
+          'xml:space': 'preserve',
+        })
+      );
+    });
+  }
+
+  function drawStageShell(svg, stage, top, width, stageH, options) {
+    var shellX = options && Number.isFinite(Number(options.x)) ? Number(options.x) : 16;
+    var shellW = options && Number.isFinite(Number(options.width)) ? Number(options.width) : width - 32;
+    var title = options && options.title ? options.title : stage.title;
+    var titleAnchor = options && options.titleAnchor ? options.titleAnchor : 'start';
+    var titleX =
+      options && Number.isFinite(Number(options.titleX))
+        ? Number(options.titleX)
+        : titleAnchor === 'end'
+          ? shellX + shellW - 14
+          : shellX + 14;
+
     svg.appendChild(
       createSvgNode('rect', {
-        x: 16,
+        x: shellX,
         y: top,
-        width: width - 32,
+        width: shellW,
         height: stageH,
         rx: 4,
         fill: '#0b111c',
         stroke: '#202936',
         'stroke-width': 1,
+        'data-fanout-stage-role': stage.role || '',
+        'data-fanout-stage-title': title || '',
       })
     );
 
-    drawText(svg, stage.title, {
-      x: 30,
+    drawStageTitle(svg, title, {
+      x: titleX,
       y: top + 20,
       fill: '#9eabbc',
       'font-size': 14,
+      'text-anchor': titleAnchor,
       'font-family': 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+    });
+  }
+
+  function cassetteNameFromGroup(group) {
+    var connector = group && group.connectors && group.connectors[0];
+    return cassetteNameFromConnectorLabel(connector ? connector.label : group && group.label);
+  }
+
+  function renderedConnectorGroupBounds(stage, group, currentGroupX, groupW, metrics, boxGap) {
+    var connectorW = metrics.connectorW;
+    var left = Number.POSITIVE_INFINITY;
+    var right = Number.NEGATIVE_INFINITY;
+    (group.connectorRows || []).forEach(function (connectorRow) {
+      connectorRow.forEach(function (connector, columnIndex) {
+        var cellX = currentGroupX + columnIndex * (connectorW + metrics.innerGap);
+        var connectorFrame = connectorFrameGeometry(connector, stage, cellX, connectorW, boxGap);
+        left = Math.min(left, connectorFrame.x);
+        right = Math.max(right, connectorFrame.x + connectorFrame.width);
+      });
+    });
+
+    if (Number.isFinite(left) && Number.isFinite(right)) {
+      return {
+        left: left,
+        right: right,
+      };
+    }
+
+    var groupFrame = groupFrameGeometry(stage, group, currentGroupX, groupW, metrics, boxGap);
+    return {
+      left: groupFrame.x,
+      right: groupFrame.x + groupFrame.width,
+    };
+  }
+
+  function shuffleCassetteShellEntries(stage, metrics, boxGap) {
+    var entries = [];
+    var entriesByName = {};
+
+    (stage.subStages || []).forEach(function (subStage) {
+      (subStage.groupRows || []).forEach(function (groupRow) {
+        groupRow.forEach(function (group) {
+          var name = cassetteNameFromGroup(group);
+          var columnIndex = Number.isFinite(Number(group.stageColumnIndex)) ? Number(group.stageColumnIndex) : entries.length;
+          var groupW = groupSlotWidth(group, metrics);
+          var currentGroupX = groupX(subStage, group, metrics, boxGap);
+          var groupBounds = renderedConnectorGroupBounds(subStage, group, currentGroupX, groupW, metrics, boxGap);
+
+          if (!entriesByName[name]) {
+            entriesByName[name] = {
+              name: name || 'cassette',
+              columnIndex: columnIndex,
+              left: groupBounds.left,
+              right: groupBounds.right,
+            };
+            entries.push(entriesByName[name]);
+          }
+
+          entriesByName[name].columnIndex = Math.min(entriesByName[name].columnIndex, columnIndex);
+          entriesByName[name].left = Math.min(entriesByName[name].left, groupBounds.left);
+          entriesByName[name].right = Math.max(entriesByName[name].right, groupBounds.right);
+        });
+      });
+    });
+
+    entries.sort(function (first, second) {
+      return first.columnIndex - second.columnIndex;
+    });
+    return entries;
+  }
+
+  function drawShuffleCassetteShells(svg, stage, top, width, stageH, metrics, boxGap) {
+    var entries = shuffleCassetteShellEntries(stage, metrics, boxGap);
+    if (entries.length <= 1) {
+      drawStageShell(svg, stage, top, width, stageH, {
+        title: entries.length ? 'Shuffle Cassette: ' + entries[0].name : stage.title,
+      });
+      return;
+    }
+
+    var previousShellRight = 16;
+    entries.forEach(function (entry, index) {
+      var shellX = index === 0 ? 16 : previousShellRight + 4;
+      var shellRight = Math.max(shellX + 48, Math.ceil(entry.right + 4));
+      drawStageShell(svg, stage, top, width, stageH, {
+        x: shellX,
+        width: shellRight - shellX,
+        title: 'Shuffle Cassette: ' + entry.name,
+        titleAnchor: index === 0 ? 'start' : 'end',
+      });
+      previousShellRight = shellRight;
     });
   }
 
@@ -920,27 +1144,46 @@
     return 'Fiber\npositions';
   }
 
-  function drawStageLayerAnnotations(svg, stage, yTop, yBottom) {
+  function stageAnnotationOffsetX(stage, metrics, boxGap) {
+    if (!(stage.isDestination || stage.isDestinationInterfaceLayer)) {
+      return 0;
+    }
+    var firstGroup = stage.groupRows && stage.groupRows[0] && stage.groupRows[0][0];
+    if (!firstGroup) {
+      return 0;
+    }
+    var currentGroupX = groupX(stage, firstGroup, metrics, boxGap);
+    if (stage.isDestinationInterfaceLayer && firstGroup.connectors && firstGroup.connectors[0]) {
+      return connectorFrameGeometry(firstGroup.connectors[0], stage, currentGroupX, metrics.connectorW, boxGap).x - metrics.connectorX;
+    }
+    return currentGroupX - metrics.connectorX;
+  }
+
+  function drawStageLayerAnnotations(svg, stage, yTop, yBottom, options) {
     if (yBottom <= yTop) {
       return;
     }
-    var secondaryTop = yTop + 6;
-    var secondaryBottom = yBottom - 6;
-    if (stage.isInterfaceLayer) {
-      var centerY = yTop + (yBottom - yTop) / 2;
-      secondaryTop = centerY - 17;
-      secondaryBottom = centerY + 17;
-    }
-    drawBraceLabel(svg, stageLayerLabel(stage), STAGE_BRACE_X, yTop, yBottom, {
-      labelX: STAGE_BRACE_LABEL_X,
-      width: 16,
+    var offsetX = options && Number.isFinite(Number(options.offsetX)) ? Number(options.offsetX) : 0;
+    var centerY = yTop + (yBottom - yTop) / 2;
+    var secondaryTop = centerY - 17;
+    var secondaryBottom = centerY + 17;
+    var primaryLabel = stageLayerLabel(stage);
+    var secondaryLabel = secondaryLayerLabel(stage);
+    var primaryBraceWidth = 16;
+    var secondaryFontSize = 9;
+    var secondaryLabelX = POSITION_BRACE_LABEL_X + offsetX;
+    var secondaryLabelLeft = secondaryLabelX - estimatedMultilineTextWidth(secondaryLabel, secondaryFontSize);
+    var primaryBraceX = secondaryLabelLeft - OUTER_TO_INNER_LABEL_GAP - primaryBraceWidth * 1.35;
+    drawBraceLabel(svg, primaryLabel, primaryBraceX, yTop, yBottom, {
+      labelX: primaryBraceX - 10,
+      width: primaryBraceWidth,
       fontSize: 10,
       lineHeight: 11,
     });
-    drawBraceLabel(svg, secondaryLayerLabel(stage), POSITION_BRACE_X, secondaryTop, secondaryBottom, {
-      labelX: POSITION_BRACE_LABEL_X,
+    drawBraceLabel(svg, secondaryLabel, POSITION_BRACE_X + offsetX, secondaryTop, secondaryBottom, {
+      labelX: secondaryLabelX,
       width: 14,
-      fontSize: 9,
+      fontSize: secondaryFontSize,
       lineHeight: 10,
       strokeWidth: 1.5,
       opacity: 0.76,
@@ -990,30 +1233,41 @@
           );
         }
 
-        svg.appendChild(
-          appendTitle(
-            createSvgNode('rect', {
-            x: groupFrame.x,
-            y: groupTop + 16,
-            width: groupFrame.width,
-            height: rowHeight - 20,
-            rx: 4,
-            fill: '#080d14',
-            opacity: 0.62,
-            stroke: '#253447',
-            'stroke-width': 1,
-            }),
-            group.label
-          )
-        );
+        if (stage.isInterfaceLayer) {
+          svg.appendChild(
+            appendTitle(
+              createSvgNode('rect', {
+              x: groupFrame.x,
+              y: groupTop + GROUP_FRAME_TOP_OFFSET,
+              width: groupFrame.width,
+              height: rowHeight - 20,
+              rx: 4,
+              fill: '#080d14',
+              opacity: 0.62,
+              stroke: '#253447',
+              'stroke-width': 1,
+              }),
+              group.label
+            )
+          );
+        }
 
         group.connectorRows.forEach(function (connectorRow, rowIndex) {
-          var rowY = groupTop + 30 + rowIndex * 58;
+          var rowY = groupTop + CONNECTOR_ROW_TOP_OFFSET + rowIndex * CONNECTOR_ROW_STRIDE;
           connectorRow.forEach(function (connector, columnIndex) {
             var cellX = currentGroupX + columnIndex * (connectorW + metrics.innerGap);
             var connectorLabel = compactMiddle(shortConnectorLabel(connector.label), 28);
             var positionCount = connector.positionCount || POSITION_COUNT;
             var connectorFrame = connectorFrameGeometry(connector, stage, cellX, connectorW, boxGap);
+            var connectorFrameY = rowY;
+            var connectorFrameH = connectorH;
+            if (connector.kind !== 'interface_channel') {
+              connectorFrameY = groupTop + GROUP_FRAME_TOP_OFFSET + rowIndex * CONNECTOR_ROW_STRIDE;
+              connectorFrameH =
+                rowIndex === group.connectorRows.length - 1
+                  ? rowHeight - 20 - rowIndex * CONNECTOR_ROW_STRIDE
+                  : CONNECTOR_ROW_STRIDE;
+            }
             if (showInlineLabels) {
               drawText(
                 svg,
@@ -1034,9 +1288,9 @@
                 appendTitle(
                   createSvgNode('rect', {
                   x: connectorFrame.x,
-                  y: rowY,
+                  y: connectorFrameY,
                   width: connectorFrame.width,
-                  height: connectorH,
+                  height: connectorFrameH,
                   rx: 4,
                   fill: '#080d14',
                   stroke: '#3c4450',
@@ -1131,11 +1385,12 @@
         stage: subStage,
         yTop: subStageTop + 8,
         yBottom: subStageTop + result.height - 14,
+        offsetX: stageAnnotationOffsetX(subStage, metrics, boxGap),
       });
-      groupTop += result.height + compositeStageGap(stage, index);
+      groupTop += result.height + (index < stage.subStages.length - 1 ? compositeStageGap(stage, index) : 0);
     });
     subStageRanges.forEach(function (range) {
-      drawStageLayerAnnotations(svg, range.stage, range.yTop, range.yBottom);
+      drawStageLayerAnnotations(svg, range.stage, range.yTop, range.yBottom, { offsetX: range.offsetX });
     });
 
     return {
@@ -1153,8 +1408,7 @@
     var groupTop = top + 42;
     var subStageRanges = [];
 
-    drawStageShell(svg, stage, top, width, stageH);
-    drawStageRangeAnnotation(svg, 'Fiber\nShuffle\nBox', top + 50, top + stageH - 22);
+    drawShuffleCassetteShells(svg, stage, top, width, stageH, metrics, boxGap);
 
     stage.subStages.forEach(function (subStage, index) {
       var subStageTop = groupTop;
@@ -1166,11 +1420,12 @@
         stage: subStage,
         yTop: subStageTop + 8,
         yBottom: subStageTop + result.height - 14,
+        offsetX: stageAnnotationOffsetX(subStage, metrics, boxGap),
       });
-      groupTop += result.height + (index === 0 ? SHUFFLE_CASSETTE_SIDE_GAP : 0);
+      groupTop += result.height + (index < stage.subStages.length - 1 ? SHUFFLE_CASSETTE_SIDE_GAP : 0);
     });
     subStageRanges.forEach(function (range) {
-      drawStageLayerAnnotations(svg, range.stage, range.yTop, range.yBottom);
+      drawStageLayerAnnotations(svg, range.stage, range.yTop, range.yBottom, { offsetX: range.offsetX });
     });
 
     return {
@@ -1193,7 +1448,9 @@
     var boxGap = 3;
     drawStageShell(svg, stage, top, width, stageH);
     var result = drawGroupRows(svg, stage, top + 42, metrics, connectorH, boxGap, { hideInlineLabels: true });
-    drawStageLayerAnnotations(svg, stage, top + 50, top + 42 + result.height - 14);
+    drawStageLayerAnnotations(svg, stage, top + 50, top + 42 + result.height - 14, {
+      offsetX: stageAnnotationOffsetX(stage, metrics, boxGap),
+    });
     return {
       height: stageH,
       anchors: result.anchors,
@@ -1511,7 +1768,10 @@
       var layout = drawStage(svg, stage, top, width);
       stageLayouts.push(layout);
       (plan.depthsByVisualIndex[visualIndex] || []).forEach(function (depth) {
-        stageLayoutsByDepth[depth] = layout;
+        if (!stageLayoutsByDepth[depth]) {
+          stageLayoutsByDepth[depth] = { anchors: {} };
+        }
+        Object.assign(stageLayoutsByDepth[depth].anchors, layout.anchors);
       });
       top += layout.height + gap;
     });

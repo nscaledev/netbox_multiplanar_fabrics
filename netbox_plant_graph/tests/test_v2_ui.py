@@ -569,7 +569,7 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'data-fanout-schematic-stages')
         self.assertContains(response, 'data-fanout-trace-mode="expanded"')
         self.assertContains(response, 'data-fanout-source-title="Source: GPU-FANOUT-1-OSFP-1"')
-        self.assertContains(response, 'fanout_trace.js?v=20260521-interface-group-spacing')
+        self.assertContains(response, 'fanout_trace.js?v=20260521-section-title-linebreaks')
 
         schematic_paths = json.loads(response.context['aggregate_schematic_paths_json'])
         self.assertTrue(schematic_paths[0]['source_subinterface_label'])
