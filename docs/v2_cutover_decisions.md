@@ -1,6 +1,6 @@
 # V2 Cutover Decisions
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 ## Scope
 
@@ -34,6 +34,14 @@ This document records final cutover decisions for the V2 rewrite of `netbox_plan
 ## Deferred To Post-MVP
 
 - V1-to-V2 data translation tooling.
-- Legacy dashboard parity (audit, suppressions, contamination/policy surfaces).
-- Floorplan and spatial integration parity.
 
+## Post-MVP Decisions Already Applied
+
+- Audit, suppression, policy, operations, and exception workflow surfaces were
+  added back on top of the V2 model.
+- Floorplan-plugin parity is no longer a goal; runtime reliance on
+  `netbox_floorplan` is explicitly forbidden.
+- Spatial/layout work, when present, must be plugin-native or local lab support,
+  not an external floorplan handoff.
+- GraphQL V2 is formally versioned as `2.0.0`; REST remains the workflow
+  mutation surface.

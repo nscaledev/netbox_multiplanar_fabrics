@@ -4,6 +4,13 @@ Date: 2026-05-20
 Baseline (original plugin): commit `8d3a4ea`
 Current target (v2): local working tree on branch `codex-mencken/v2-ground-up-rewrite` (HEAD `ccb5a9d`)
 
+> **Status update, 2026-05-21:** This document is a point-in-time gap
+> analysis. The highest-priority gaps identified here have since been addressed:
+> REST mutation endpoints were reintroduced for workflow/finding/exception and
+> stamp actions, GraphQL V2 was formally versioned as contract `2.0.0`, and
+> stamp-preview naming compatibility was added. Menu discoverability was
+> intentionally consolidated rather than restored to the V1 table-menu layout.
+
 ## Scope and Method
 
 This pass compares baseline vs current across:
@@ -95,23 +102,35 @@ Current v2 restores workflow behavior primarily through UI views and summary/que
 
 Baseline GraphQL had broader typed operational coverage in key areas; current GraphQL is improved but still centered on JSON-shaped operational payloads and renamed fields. If downstream consumers expect baseline field names/types, compatibility work remains.
 
-## 5) Priority Recommendations (Remaining Gaps)
+## 5) Priority Recommendations (Point-in-Time)
 
-1. **P0 — Decide API mutation parity target**
+1. **P0 — Decide API mutation parity target** - closed 2026-05-21.
    - If external automation should match baseline capability, reintroduce API mutation endpoints for lifecycle/stamp/execute/rollback actions.
+   - Current state: REST mutation endpoints exist for workflow finding
+     lifecycle, disjointness exception lifecycle, stamp execution/rollback, and
+     operation-run summaries.
 
-2. **P1 — Restore menu discoverability parity for registry tables**
+2. **P1 — Restore menu discoverability parity for registry tables** - closed by
+   product decision.
    - Add grouped navigation for the full v2 registry table surfaces (or a discoverable index page with equivalent reachability).
+   - Current state: V2 intentionally uses a consolidated operator menu plus
+     `Model Catalog` rather than restoring the full V1 registry table menu.
 
-3. **P1 — GraphQL compatibility policy**
+3. **P1 — GraphQL compatibility policy** - closed 2026-05-21.
    - Either:
      - add baseline-compatible aliases/fields (`stamp_preview`, `resolve_path`, etc.), or
      - formally version and document v2 GraphQL contract breaks.
+   - Current state: GraphQL V2 is formally versioned as `2.0.0`; baseline
+     breaks are documented in `v2_graphql_contract_v2.md`.
 
-4. **P2 — Optional route-name compatibility alias**
+4. **P2 — Optional route-name compatibility alias** - closed 2026-05-21.
    - Add `stamp-preview` name alias to remove reverse-name drift.
+   - Current state: stamp-preview compatibility naming exists alongside the
+     plural route name.
 
 ## Bottom Line
 
 Compared to the original plugin baseline, v2 now has near-complete workflow page/route parity and solid operational test coverage.
-The meaningful remaining gaps are API/GraphQL contract compatibility and UI discoverability breadth, plus intentionally removed floorplan-related surfaces.
+As of the 2026-05-21 refresh, the action items above are no longer open gaps.
+The remaining baseline deltas are intentional data-model/API-shape differences
+and intentionally removed floorplan-related surfaces.

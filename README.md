@@ -1,70 +1,95 @@
-# NetBox Plant Graph Plugin
+# NetBox Multiplanar Fabrics
 
-Lane-aware, plane-aware topology extension for multi-plane RoCE fabrics.
+`netbox_plant_graph` is a NetBox plugin for modeling multi-planar optical
+fabrics, with the current V2 implementation focused on RoCE/GPU fabrics that
+use OSFP endpoints, MPO12 fanout, shuffle cassettes, bundled cable assemblies,
+and 200gbps transport channels.
 
-## Overview
+The plugin is intentionally **plugin-native** for modeled fabric connectivity.
+It anchors to NetBox devices and interfaces where those objects exist, but it
+does not rely on NetBox `Cable`, `CablePath`, `CableTermination`, or
+`PortMapping` objects as the source of truth for fabrics it owns.
 
-This NetBox plugin layers a **plant-graph model** on top of native NetBox inventory and cabling. It is intended for environments with GPU clusters using multi-plane RoCEv2 fabrics, shuffle cables/modules, and 800G ports subdivided into 200G child transport units.
+## Current V2 Scope
 
-The plugin maintains a derived, normalized, graph-oriented topology layer that advanced consumers can query for automation, troubleshooting, validation, and visualization.
+V2 provides:
 
-## Current Coverage
+- a normalized fabric data model for architectures, fabrics, planes, nodes,
+  endpoints, connector positions, transport channels, cable assemblies, fiber
+  segments, fiber strands, strand terminations, optical lanes, transfer maps,
+  and path intents;
+- a seeded architecture definition for
+  `roce-4-plane-gb300-2x2-shuffle`, including a 4-plane topology, OSFP ->
+  MPO12 child connector semantics, a 200gbps sub-interface channel-map matrix,
+  and the active-position 2x2 shuffle transform;
+- first-class `CableAssembly` rows for jumpers, trunks, and parent/child cable
+  hierarchy, with each `FiberStrand` able to resolve back to an assembly by
+  site-local cable ID;
+- on-demand optical path resolution at connector-position resolution across
+  arbitrary strand and transfer-map hops;
+- stamping templates and `StampRun` provenance for creating V2 fabrics from
+  architecture rules;
+- generated list/detail/CRUD/API surfaces from the V2 registry for standard
+  model inventory objects;
+- hand-wired operator workflows for path tracing, interface fanout tracing,
+  physical cable blast-radius analysis, onboarding, operations, and audit
+  triage;
+- a read-oriented GraphQL V2 contract plus REST API workflow mutations for
+  stamping, audit lifecycle actions, exception requests, path query, and
+  operational summaries.
 
-The current implementation is centered on **attachment-unit resolution**, with an initial **signal-lane** slice:
+## Operator UI
 
-- rebuilds derive topology from NetBox `CablePath` objects
-- cable profile expansion uses NetBox cable profile position mapping at sync time
-- channelized parent interfaces are mapped onto child-interface attachment units
-- plane memberships sourced from child interfaces are propagated across passive attachment hops
-- signal lanes, signal-lane `FineEdge`s, and `LaneMap`s are materialized for channelized topologies
-- resolver support includes both attachment-unit and signal-lane path resolution
-- operational pages expose graph overview, health, audit dashboard, path resolution, plane audit, lane drilldown, lane compare, lane workspace, and blast-radius results in the plugin UI
-- ambiguous blank-profile fanout cables are left unresolved in sync and surfaced by plane audit as missing-profile findings
-- profile-derived breakout mappings now require explicit child interfaces; when those are missing, sync leaves the path unresolved and plane audit reports a missing-child-interface finding
-- profile-derived breakouts with only a partial child-interface set now materialize only the positions that exist, and plane audit reports an incomplete-child-interface-set finding
-- profile-derived breakouts with missing peer termination positions are now surfaced by plane audit as partial-profile-mapping findings
-- explicit child-interface attachment units that never participate in any derived path are now surfaced by plane audit as orphaned-attachment-unit findings
-- cabled passive front/rear ports without `PortMapping` coverage are surfaced by plane audit as missing-port-mapping findings
-- operational resolver/blast-radius flows now accept core NetBox `Interface`, `FrontPort`, and `RearPort` objects directly, and object-page badges provide shortcuts into those workflows
-- lane drilldown is available from object badges, operational pages, detail cards, and GraphQL for lane-first inspection of materialized `SignalLane` objects
-- fabric health is available from operational UI, detail cards, and GraphQL as an on-demand summary over audit and graph state
-- typed lane-first GraphQL now exists alongside the legacy JSON operational fields, including `lanePath`, `laneDrilldownTyped`, and `fabricHealthTyped`
-- grouped lane-set and lane-allocation summaries now exist as reusable graph services, with typed GraphQL exposure via `laneSet` and `laneAllocationSummary`
-- a dedicated lane workspace page now exposes grouped lane views by attachment, node/passive artifact, and plane, and detail pages for `CoarseEdge`, `PlantNode`, `TerminationPoint`, and `FabricPlane` now surface lane coverage cards
-- the lane workspace now has a typed composition service, normalized `group_by` query handling, smarter node/plane deep links, and a primary-grouping UI that promotes the selected grouping while keeping supporting views in context
-- the richer lane workspace Phase 0/1/2 slice is now in place: the workspace has a normalized query/state contract for `mode`, `group_by`, `focus`, `group_key`, `lane_index`, and `plane_id`, renders as a composed shell with query/summary/main/context regions, supports exact-lane mode inside the page, preserves selected-group state, and accepts `SignalLane`/drilldown handoffs directly into lane mode
-- the richer lane workspace Phase 3 slice is now in place: `group_by=path` now collapses repeated representative path shapes into deterministic grouped rows, `path_lane_index` pins representative-lane selection when needed, the workspace renders server-side textual representative-path detail without requiring JavaScript, and `CoarseEdge`/`FabricPlane` workspace deep links are now narrower by default
-- the richer lane workspace Phase 4 slice is now in place: the workspace query contract now carries optional compare/backlink/export state, audit findings and detail cards can deep-link into narrowed workspace states with `source_finding_id`, the workspace now renders scoped related-findings, next-actions, compact compare context, and server-side CSV/JSON exports for the visible scope
-- the richer lane workspace Phase 5 slice is now in place: representative path detail now has an additive SVG path-canvas enhancement built from the existing textual stage model, workspace navigation/focus targets are keyboard-friendly, grouped/lane/path tables use mobile-safe overflow wrappers, and the shell now degrades cleanly without JavaScript because the canvas carries no unique semantics
-- plane-audit findings now render lane-aware impact summaries, remediation hints, and guided next-action links for the highest-value unresolved and cross-plane cases
-- compare-mode lane review now exists as both an operational page and a typed GraphQL query via `laneCompare`, with regression summaries for completeness, mapping symmetry, and plane isolation plus policy contamination-domain deltas and policy regression summaries
-- persistent audit foundations now exist via durable `AuditRun` records and fingerprinted `AuditFinding` upsert/resolution lifecycle support for full-fabric audits, while the existing live audit page remains on-demand
-- durable finding workflow state now includes acknowledged and in-progress statuses, event history via `AuditFindingEvent`, and explicit audit-finding detail actions for acknowledge, start-remediation, resolve, and reopen
-- durable finding suppressions now exist via `AuditSuppression`, including detail-page suppress/unsuppress actions, expiration handling, and an audit-retention job that can expire suppressions and prune stale inactive runs/events
-- the plugin API now exposes explicit audit-finding workflow action endpoints for acknowledge, start-remediation, resolve, reopen, suppress, and unsuppress on top of the generated read-only durable object APIs
-- durable audit reporting now exists via an audit dashboard plus typed GraphQL `auditWorkflowSummary`, with counts, recent runs/events, stale findings, and expiring suppressions
-- explicit durable GraphQL query surfaces now exist for audit finding search/detail and audit run timelines via `auditFindingSearch`, `auditFindingDetail`, and `auditRunTimeline`
-- durable finding list filtering now includes suppression-state and minimum-age filters, and the audit dashboard plus audit run/suppression detail views now deep-link operators into the relevant durable workflow surfaces
-- recent-churn reporting is now explicit in both the audit dashboard and typed GraphQL workflow summary, with 7-day and 30-day opened/reopened/resolved/auto-resolved/suppressed counts
-- explicit REST durability reporting endpoints now exist for workflow summary, filtered finding search, finding detail, and run timelines under the plugin API, instead of relying only on generated CRUD plus workflow actions
-- the live plane-audit page now bridges into durable workflow state when a matching persisted finding exists, including current status, suppression context, detail links, and workflow actions inline with the live result
-- audit workflow history is now easier to drill into from the dashboard via filtered event-history links from recent churn metrics and a fabric-scoped recent-events shortcut
-- graph rebuilds now persist durable `GraphBuildRun` rows with scope, trigger mode, completion status, graph stats, revision metadata, generated list/detail/API/GraphQL surfaces, and retention pruning alongside the audit-retention flow
-- optional unresolved-topology durability now has its Phase B foundation: full-fabric rebuilds can persist canonical `UnresolvedStateSummary` and append-only `UnresolvedStateObservation` rows for missing cable profiles, missing/incomplete child-interface sets, missing passive `PortMapping` coverage, normalized profile-mapping failures (`profile_error`, `profile_returned_none`, `missing_peer_position`), and orphaned attachment units, with reopen/resolve lifecycle driven by rebuild fingerprints instead of audit cadence
-- unresolved-topology durability now also has its Phase C read surfaces: generated read-only list/detail/API/GraphQL surfaces exist for unresolved summaries and observations, health and lane workspace now surface durable unresolved state independently from audit-finding counts, and fabric/plane/unresolved-summary detail pages now link operators into the rebuild-driven unresolved backlog without forcing an audit-dashboard-first workflow
-- unresolved-topology durability now also has its Phase D audit-linkage/reporting slice: persistent audit findings can carry explicit related-summary fingerprints, live plane-audit rows and audit-finding detail pages now link back to matching durable unresolved summaries when the mapping is clear, and the audit dashboard now exposes separate unresolved-topology widgets for active backlog, aging summaries, multi-build recurrence, reopen counts, top causes, and oldest active unresolved cohorts
-- unresolved-topology durability now also has its Phase E hardening slice: incremental/site-scoped refreshes explicitly skip unresolved-summary resolution for non-comparable partial builds, and optional unresolved overview/dashboard caching now exists behind plugin settings keyed by fabric graph revision plus latest summary mutation timestamp so cache remains deterministic and non-authoritative
-- policy/disjointness work now includes extracted policy-evidence services for passive artifact sharing and cross-plane edge bridges, deterministic contamination-domain construction, enriched audit metadata (`rule_id`, plane-pair evidence, contamination-domain keys), a Policy Review page with exception coverage/drift reporting, and explicit `DisjointnessException` lifecycle support for approved topology exceptions
-- typed policy summary, policy dashboard, and contamination-domain GraphQL queries now exist, the audit dashboard now surfaces policy widgets for highest-risk domains, plane-pair rollups, exception coverage, and oldest active durable policy findings, and `Fabric`, `FabricPlane`, and passive `PlantNode` detail pages now surface policy-oriented summary cards alongside the existing lane-first cards
-- optional policy-reporting caching now exists behind plugin settings, keyed by fabric, policy mode, rule catalog version, and a rebuild-stamped graph revision token on `Fabric.metadata`, so cached policy evaluation remains a performance optimization rather than a semantic dependency
-- operational path, audit, and blast-radius pages now render direct object links, contextual metadata, and guided next-action links for follow-on investigation
-- the plugin menu now exposes the operational pages directly instead of leaving them as URL-only utilities
+The plugin menu is grouped around current workflows:
 
-The test suite includes a multiplane shuffle fixture with one 800G host interface, four 200G child interfaces, one shuffle module with `PortMapping` rows, and one leaf switch.
+- **Operate**
+  - Fabric Overview
+  - Interface Fanout Trace
+  - Path Query
+  - Physical Cable Blast Radius
+- **Build & Run**
+  - Onboard Fabric
+  - Operations Center
+- **Audit**
+  - Audit Dashboard
+  - Audit Triage
+  - Exception Requests
+- **Model Inventory**
+  - Fabrics
+  - Architectures
+  - Cable Assemblies
+  - Lane Inventory
+  - Model Catalog
+
+The visual trace workflows render source/destination 200gbps interface groups,
+MPO12 connector positions, shuffle cassette transforms, cable assemblies, and
+per-lane paths. The trace sections support collapse/expand behavior and SVG
+export.
+
+The Physical Cable Blast Radius workflow supports operator-first selection by
+site, device type, role, rack label, rack row, rack elevation, and partial device
+name. It can model cable-assembly failures, connector unplug events, and an
+unseated OSFP transceiver, then reports impacted endpoints and devices with
+drill-down links.
+
+## NetBox Integration Boundary
+
+V2 uses NetBox as inventory context, not as the fabric connection graph:
+
+- `Fabric` can scope to a NetBox site, location, and tenant.
+- `FabricNode` and `Endpoint` can anchor to NetBox objects through generic
+  foreign keys.
+- `TransportChannel.source_subinterface` can link to NetBox child interfaces
+  created for 200gbps channels.
+- NetBox interface detail pages expose incoming multiplanar context through a
+  plugin template extension.
+- NetBox-native cable/path objects are not required or created for owned
+  fabric connectivity.
+- The plugin has no runtime dependency on `netbox_floorplan`.
 
 ## Requirements
 
-- NetBox 4.2.3+ (supported lines: 4.2.x and 4.5.x; 4.3.x and 4.4.x are not validated)
+- NetBox 4.2.3+ through 4.5.x
 - Python 3.12+
 
 ## Installation
@@ -73,17 +98,44 @@ The test suite includes a multiplane shuffle fixture with one 800G host interfac
 pip install netbox_plant_graph
 ```
 
-Install and enable the plugin in your NetBox `configuration.py`:
+Enable the plugin in NetBox configuration:
 
 ```python
-PLUGINS = ['netbox_plant_graph']
+PLUGINS = ["netbox_plant_graph"]
+```
+
+Seed the built-in V2 architecture fixture when needed:
+
+```bash
+python manage.py mpf_seed_v2 --architecture-only
 ```
 
 ## Development
 
-See [LOCAL_DEV_SETUP.md](LOCAL_DEV_SETUP.md) for local development environment setup.
-The `devrun` wrapper uses a repo-specific Docker Compose project name so its PostgreSQL and Redis volumes stay isolated from other NetBox plugin repos.
-The compose stack intentionally avoids fixed `container_name` values so multiple local NetBox plugin repos do not collide on global Docker container names.
+The local NetBox development stack for this repo is driven from:
+
+```bash
+/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts
+```
+
+Common stack commands:
+
+```bash
+./local-netbox-dev/scripts/up.sh
+./local-netbox-dev/scripts/down.sh
+```
+
+See [LOCAL_DEV_SETUP.md](LOCAL_DEV_SETUP.md) for local environment notes and
+[docs/README.md](docs/README.md) for the current documentation map.
+
+## Key Documents
+
+- [V2 data model](docs/data_model.md)
+- [External automation contracts](docs/v2_external_contracts.md)
+- [GraphQL contract](docs/v2_graphql_contract_v2.md)
+- [Cutover runbook](docs/v2_cutover_runbook.md)
+- [Post-MVP expansion plan](docs/v2_post_mvp_expansion_plan.md)
+- [First-class cabling plan](docs/v2_first_class_cabling_plan.md)
 
 ## License
 

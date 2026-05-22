@@ -1,5 +1,12 @@
 # V2 Gap Analysis: Original Plugin vs Current V2
 
+> **Historical note:** This was an early V2 gap analysis. Many gaps listed here
+> were later closed by the gap-closure execution plan, including UI workflows,
+> registry maturity, REST action endpoints, blast radius, first-class cabling,
+> and visual path traces. Use
+> `docs/v2_gap_analysis_refresh_2026-05-20.md` plus current code/docs for the
+> latest state.
+
 ## Scope & Method
 - Baseline ("original"): commit `8d3a4ea`.
 - Target ("current v2"): branch `codex-mencken/v2-ground-up-rewrite` at `ccb5a9d`.

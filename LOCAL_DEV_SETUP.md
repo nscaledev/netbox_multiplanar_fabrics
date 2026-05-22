@@ -1,33 +1,69 @@
 # Local Development Setup
 
-This project follows the same local dev patterns as `netbox_rpki`.
-
-## Expected environment
-
-- NetBox source tree at `$HOME/src/netbox-v<RELEASE>/netbox`
-  (default: `$HOME/src/netbox-v4.2.3/netbox`; set `NETBOX_RELEASE=4.5.7` to
-  target the newer validated line)
-- Virtualenv at `$HOME/.virtualenvs/netbox-<RELEASE>`
-  (default: `$HOME/.virtualenvs/netbox-4.2.3`)
-- Docker for PostgreSQL and Redis
-- `PLUGINS = ['netbox_plant_graph']` in local NetBox configuration
-- `devrun` uses its own Docker Compose project name, `netbox_plant_graph_devrun`, so its local volumes do not collide with other NetBox plugin repos
-
-## Common commands
+The current local NetBox environment for the multiplanar fabrics plugin is
+driven by the scripts in:
 
 ```bash
-./devrun/dev.sh start
-./devrun/dev.sh stop
-./devrun/dev.sh status
-./devrun/dev.sh test fast
-./devrun/dev.sh test contract
-./devrun/seed-data.sh --dry-run
-./devrun/seed-data.sh --cleanup-only --fabric nvidia
+/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts
 ```
 
-## Notes
+## Expected Environment
 
-- If you previously ran this repo before the Compose project-name fix, remove the old generic `devrun_*` volumes once with `docker compose -p devrun down -v` from the `devrun/` directory before starting again.
-- If you started this repo before removing hardcoded `container_name` entries, remove the old legacy containers once with `docker rm -f netbox-plant-graph-postgres netbox-plant-graph-redis` before the next `./dev.sh start`.
-- If `~/.config/netbox-rpki-dev/credentials.env` exists, `./dev.sh start` reuses that repo's NetBox database/admin/app secrets by default and now reconciles the preserved local PostgreSQL role password automatically. You no longer need a manual `ALTER ROLE netbox ...` step when switching between the two plugin repos.
-- If a seed run is interrupted, use `./devrun/seed-data.sh --cleanup-only --fabric nvidia|arista|all` to remove partial sample inventory before rerunning.
+- Docker available locally.
+- NetBox configured with `netbox_plant_graph` enabled.
+- The local stack reachable at `http://localhost:8000` after startup.
+- The plugin checkout mounted or installed into the local NetBox container.
+- No `netbox_floorplan` runtime dependency is required for V2.
+
+The local development stack commonly includes other NetBox plugins used in the
+same lab environment, but `netbox_plant_graph` must be able to run without
+floorplan integration enabled.
+
+## Stack Commands
+
+From the repository root:
+
+```bash
+./local-netbox-dev/scripts/up.sh
+./local-netbox-dev/scripts/down.sh
+```
+
+Use the NetBox container's `manage.py` entry point for migrations, focused
+tests, and seed commands. For example:
+
+```bash
+docker compose exec netbox python manage.py mpf_seed_v2 --architecture-only
+docker compose exec netbox python manage.py test netbox_plant_graph.tests.test_v2_ui --keepdb
+```
+
+If the local compose project name differs in your environment, run the same
+`manage.py` commands through the active NetBox service/container.
+
+## Useful Seed/Backfill Scripts
+
+Madison-specific operational scripts live under
+`local-netbox-dev/scripts/`. They are useful for lab data and validation, but
+they are not plugin core behavior. Treat them as local-environment helpers, not
+as required runtime dependencies.
+
+Common examples:
+
+- `mpf_seed_v2 --architecture-only` seeds the generic V2 architecture fixture.
+- `backfill_madison_transport_channels.py` repairs or enriches lab transport
+  channel data.
+- `backfill_madison_fiber_cable_assemblies.py` links existing lab strands to
+  first-class cable assemblies.
+- `smoke_madison_su1_fiber_ui.py` performs a lab-oriented UI smoke check.
+
+## Development Notes
+
+- The plugin's modeled-fabric graph is plugin-native. Do not add NetBox-native
+  cables or `CablePath` dependencies for owned V2 fabrics.
+- Keep standard model CRUD/API surfaces registry-driven through
+  `netbox_plant_graph/v2_registry.py`.
+- Hand-wire workflow pages when they need custom behavior beyond model CRUD.
+- Keep first-class cable-assembly semantics in the plugin model, with
+  `FiberStrand.cable_site` and `FiberStrand.cable_id` remaining nullable for
+  topology-first planning.
+- Avoid reintroducing floorplan-plugin runtime coupling; spatial/layout work is
+  plugin-native or lab-script-specific unless explicitly redesigned.

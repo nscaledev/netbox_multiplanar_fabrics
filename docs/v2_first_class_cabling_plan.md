@@ -1,7 +1,7 @@
 # V2 First-Class Physical Cabling Plan
 
-Status: in-progress
-Last updated: 2026-05-20
+Status: implementation-complete for current V2 scope
+Last updated: 2026-05-21
 
 ## Objective
 
@@ -56,11 +56,13 @@ Delivered:
 3. Added managed object tracking for `cable_assemblies`.
 4. Updated rollback model maps to include `cable_assemblies`.
 
-### Slice 4: Test updates (in progress)
+### Slice 4: Test updates (completed for focused V2 coverage)
 
-1. Update model/resolver/stamping tests to include cable assembly semantics.
-2. Update registry/API contract tests for the expanded V2 model surface.
-3. Run focused tests:
+Delivered:
+
+1. Updated model/resolver/stamping tests to include cable assembly semantics.
+2. Updated registry/API contract tests for the expanded V2 model surface.
+3. Ran focused coverage during implementation for:
    - `test_v2_models`
    - `test_v2_resolver`
    - `test_v2_stamping`
@@ -78,6 +80,8 @@ Delivered:
    - `Lane Compare`
    - `Physical Cable Blast Radius`
    - `Lane Workspace`
+4. Added cable-assembly representation in visual path traces as translucent
+   grouped cable cylinders with brace labels and SVG export support.
 
 ### Slice 5: Hardening and migration policy (completed for current phase)
 

@@ -1,5 +1,10 @@
 # Response: Plugin Changes Implied by the RoCEv2 Automation Strategy
 
+> **Historical note:** This response was written before the V2 data-model
+> rewrite. Its plugin/platform ownership boundary remains directionally useful,
+> but the concrete model examples use V1 names. Current V2 objects are
+> documented in `docs/data_model.md`.
+
 This document responds to [docs/roce_v2_automation_strategy.md](./roce_v2_automation_strategy.md)
 from the perspective of the current `netbox_multiplanar_fabrics` repository and
 the `netbox_plant_graph` plugin.

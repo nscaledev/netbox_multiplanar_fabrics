@@ -1,13 +1,20 @@
 # NetBox Plant-Graph Plugin Design Sketch
 ## Lane-aware, plane-aware topology extension for shuffle-heavy multi-plane RoCE fabrics
 
+> **Historical note:** This document predates the V2 ground-up rewrite and
+> still uses V1-era concepts such as `PlantNode`, `AttachmentUnit`,
+> `SignalLane`, `FineEdge`, `LaneMap`, NetBox `CablePath` extraction, and the
+> superseded floorplan handoff plan. It is retained for design history only.
+> For the current implementation contract, start with `README.md`,
+> `docs/data_model.md`, and `docs/v2_graphql_contract_v2.md`.
+
 **Status:** implementation sketch with repo-status notes  
 **Target platform:** NetBox plugin for NetBox 4.5+  
 **Primary objective:** extend NetBox from inventory and structured cabling source-of-truth into a **lane-aware physical plant topology service** for GPU fabrics with shuffle cables/modules and multi-plane path semantics.
 
-### Current repo status
+### Historical repo status
 
-As of this repo snapshot:
+As of the pre-V2 snapshot this design sketch described:
 
 - **Phase 0 is largely complete**: plugin skeleton, registry metadata, generated standard CRUD/read-only surfaces, API surfaces, GraphQL registration, navigation, shared detail template, migrations, and baseline tests are present
 - **Phase 1 is substantially complete**: `Fabric`-scoped graph rebuild, `CablePath` extraction, cable-profile expansion via `get_mapped_position()`, attachment-unit resolver, plane propagation across passive paths, and multiplane integration fixtures/tests are implemented
@@ -18,7 +25,7 @@ As of this repo snapshot:
 - **Unresolved-lane durability Phase A/B/C/D/E are now implemented**: the repo now includes durable `GraphBuildRun`, `UnresolvedStateSummary`, and append-only `UnresolvedStateObservation` models; rebuild-time unresolved candidate extraction and stable unresolved fingerprinting based on source-object identity plus selectors; rebuild-driven create/update/resolve/reopen behavior for missing cable profiles, missing/incomplete child-interface sets, missing passive `PortMapping` coverage, normalized profile-mapping failures, and orphaned attachment units; generated read-only list/detail/API/GraphQL surfaces; health-page and lane-workspace unresolved sections; fabric/fabric-plane/unresolved-summary detail-card integrations; explicit live-audit and durable-audit links back to matching unresolved summaries; unresolved-topology reporting widgets on the audit dashboard for active backlog, aging, recurrence, and reopen counts; plus explicit partial-refresh non-resolution guards and optional deterministic unresolved-reporting cache keys based on rebuild revision and summary mutation timestamps
 - **Policy/disjointness work is now underway**: current cross-plane checks have been extracted into dedicated policy-evidence services, contamination domains are now built deterministically from passive artifact shares and cross-plane bridges, audit findings now carry stable `rule_id` plus plane-pair/domain metadata for policy-shaped cases, the UI now exposes Policy Review with exception coverage/drift reporting, and explicit `DisjointnessException` lifecycle surfaces now exist for reviewed topology exceptions
 - **Policy/disjointness operator/query surfaces have expanded**: typed GraphQL `policySummary`, `policyDashboard`, and `contaminationDomains` queries now expose the derived policy layer, the audit dashboard now includes policy widgets for domain/plane-pair risk and oldest active durable policy findings, `Fabric`, `FabricPlane`, and passive `PlantNode` detail pages now show policy summary cards that deep-link back into Policy Review and existing operational workflows, compare-mode now reports contamination-domain deltas plus policy regression summaries through both the operational UI and typed `laneCompare`, and optional policy-evaluation caching now exists behind rebuild-stamped graph revision tokens rather than raw object-save invalidation
-- **Floorplan integration/handoff is now implemented**: operator-facing site/location layout is delegated to `netbox-floorplan-plugin`, the old `coordinate-layout/` page is a handoff surface only, spatial stamps can push managed rack positions into floorplans, `SpatialPlacement` is now a read-only planning-metadata surface, and an explicit reconciliation endpoint can pull managed floorplan rack moves back into placement `x`/`y`/orientation without clobbering `z` or arbitrary metadata
+- **Superseded floorplan integration/handoff note**: this sketch described delegating operator-facing site/location layout to `netbox-floorplan-plugin`; that direction is no longer active in V2.
 - **Milestone B is functionally complete in the current repo snapshot**: signal-lane graph semantics and lane-first operational/query ergonomics now exist, and durable audit/remediation lifecycle support now includes workflow state, event history, suppressions, retention, and reporting/dashboard summaries
 
 ---

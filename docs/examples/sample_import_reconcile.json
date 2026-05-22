@@ -1,0 +1,33 @@
+{
+  "payload_version": "v2.import_reconcile/1",
+  "source_label": "example-fiber-bom",
+  "items": [
+    {
+      "kind": "cable_assembly",
+      "site": "example-site",
+      "cable_id": "CAB-EXAMPLE-001",
+      "manufacturer": "Example Fiber",
+      "model_id": "MPO-12 trunk",
+      "description": "Stable example cable assembly imported from an external BOM.",
+      "source_system": "external-bom",
+      "source_document": "fiber-bom.xlsx",
+      "source_row": 12,
+      "external_id": "bom-row-12",
+      "idempotency_key": "example-site:CAB-EXAMPLE-001"
+    },
+    {
+      "kind": "fiber_strand_cable",
+      "fabric": "example-fabric",
+      "segment": "SEG-EXAMPLE-001",
+      "strand_index": 1,
+      "cable_site": "example-site",
+      "cable_id": "CAB-EXAMPLE-001",
+      "label": "strand-1",
+      "source_system": "external-bom",
+      "source_document": "fiber-bom.xlsx",
+      "source_row": 13,
+      "external_id": "strand-row-13",
+      "idempotency_key": "example-fabric:SEG-EXAMPLE-001:strand-1"
+    }
+  ]
+}

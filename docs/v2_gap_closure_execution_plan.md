@@ -1,7 +1,7 @@
 # V2 Gap Closure Execution Plan (Delegation-Ready)
 
-Status: in-progress (all slices complete; full-suite pass complete; manual smoke pending)
-Last updated: 2026-05-20
+Status: implementation-complete execution record
+Last updated: 2026-05-21
 Source gap analysis: [v2_gap_analysis_original_vs_v2.md](/Users/mencken/github-repos/netbox_multiplanar_fabrics/docs/v2_gap_analysis_original_vs_v2.md)
 
 ## Objective
@@ -35,7 +35,10 @@ Focused test evidence (latest):
 
 Current active slice:
 
-- Final hardening gate: manual smoke is next.
+- None. This document is now a completed execution record. Later UX changes
+  such as menu consolidation, first-class cable visualization, and fanout/path
+  visual polish are tracked by current code and the refreshed docs, not this
+  original gap-closure queue.
 
 ## Post-Closure Delta Follow-ups (2026-05-20)
 

@@ -1,0 +1,8 @@
+{
+  "template_type": "stamp_template",
+  "template_id": 10,
+  "parameters": {
+    "fabric_name": "Example Fabric",
+    "fabric_slug": "example-fabric"
+  }
+}

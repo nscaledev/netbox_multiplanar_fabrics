@@ -138,17 +138,22 @@ Exit criteria:
 
 - Operator can investigate lane/path state and manage policy workflow end-to-end in UI.
 
-## Slice 5: Madison Operationalization as Plugin Core (5-7 days)
+## Slice 5: Operation Profiles and Madison Lab Support (5-7 days)
 
-Goal: make Madison operations reproducible and supported as core behavior.
+Goal: make repeatable operations available through plugin-owned provenance and
+profile selection, while keeping Madison-specific local scripts out of required
+runtime behavior.
 
 Implementation:
 
-- [x] Convert Madison scripts into plugin-native services/management commands with typed inputs.
-- [x] Introduce operation profiles (`madison_default`, `generic_roce`) so Madison logic is core but selectable.
-- [x] Add idempotent execution and provenance recording in `StampRun` or dedicated operation run model.
+- [x] Introduce operation profiles (`madison_default`, `generic_roce`) so lab
+  behavior can be selected without hardcoding Madison as the only mode.
+- [x] Add idempotent execution and provenance recording in a dedicated
+  `OperationRun` model.
 - [x] Add operator workflow pages for launching and reviewing operations.
-- [x] Add rollback/safe-retry semantics for partially completed runs.
+- [x] Add safe-retry/dedupe semantics for completed runs.
+- [x] Keep Madison local seed/audit/report scripts under `local-netbox-dev/` as
+  lab helpers rather than plugin runtime dependencies.
 
 Primary files:
 
@@ -159,7 +164,9 @@ Primary files:
 
 Exit criteria:
 
-- Madison operational workflows execute from plugin UI/API/commands with repeatable outcomes.
+- Operation workflows execute from plugin UI/API/commands with repeatable
+  outcomes.
+- Madison helper scripts remain optional local-environment tooling.
 
 ## Slice 6: Plugin-Native Spatial UX Completion (4-6 days)
 
@@ -215,8 +222,9 @@ Exit criteria:
    - Add first-class GraphQL for all V2 entities now, keep REST for workflow actions.
 4. Spatial ownership mode:
    - Plugin-native spatial editor/workflows are the only supported spatial interface.
-5. Madison packaging:
-   - Ship as core module with profile toggles (default `generic_roce`, optional `madison_default`).
+5. Operation packaging:
+   - Ship generic operation provenance with profile toggles (default
+     `generic_roce`, optional `madison_default` for lab-oriented checks).
 
 ## Suggested Implementation Order
 
@@ -234,5 +242,5 @@ Exit criteria:
 - Suppression and audit coverage for 100% of mutating V2 workflows.
 - Lane workspace load under 2 seconds for 10k+ lanes with scoped filters.
 - Plugin-native spatial workflows run with no external plugin dependency.
-- Madison operation runs are idempotent and replay-safe.
+- Operation runs are idempotent and replay-safe.
 - GraphQL queries satisfy dashboard/workflow needs with no direct SQL consumers.

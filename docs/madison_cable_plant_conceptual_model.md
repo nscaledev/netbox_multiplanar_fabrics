@@ -1,5 +1,11 @@
 # Madison Cable Plant Conceptual Model
 
+> **Historical note:** This document predates the current V2 data model and
+> still refers to V1 graph objects in later sections. Use it for Madison design
+> context only. The current implementation contract is
+> `docs/data_model.md`, especially the `CableAssembly`, `TransportChannel`,
+> `OpticalLane`, `StrandTermination`, and `TransferMap` sections.
+
 This document translates the Madison RoCE shuffle architecture and fiber BOM into
 a NetBox-oriented conceptual model. It is intended to guide the next data-model
 and seed-script work for the local Madison NetBox instance.

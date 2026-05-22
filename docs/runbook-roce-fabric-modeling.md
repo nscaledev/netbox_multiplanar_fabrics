@@ -1,5 +1,12 @@
 # Runbook: Modeling a Multi-Tenant Multi-Planar RoCEv2 Fabric in NetBox
 
+> **Historical note:** This runbook was written for the original graph model and
+> uses V1-era objects such as `PlantNode`, `AttachmentUnit`, `SignalLane`,
+> `CoarseEdge`, `FineEdge`, and NetBox `CablePath` extraction. It is retained as
+> a record of earlier modeling work. For current V2 operation, use
+> `docs/data_model.md`, `docs/v2_cutover_runbook.md`, and the NetBox
+> `Multi-planar v2` menu.
+
 **Purpose:** Step-by-step operator procedure for modeling a shared RoCEv2 backside fabric used by
 two tenants, proving out the NetBox core + `netbox_plant_graph` plugin data model end-to-end.
 

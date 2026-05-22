@@ -1,5 +1,10 @@
 # Strategy Position Paper: Automation Architecture for Extremely Large RoCEv2 GPU Fabrics
 
+> **Context note:** This is a platform strategy paper, not the current
+> `netbox_plant_graph` implementation contract. Use it for product direction
+> and ownership boundaries; use `docs/data_model.md` and
+> `docs/v2_graphql_contract_v2.md` for current plugin behavior.
+
 **Audience:** Network engineering leadership, AI infrastructure/platform engineering, SRE/operations, automation engineering, and data-center deployment teams  
 **Scope:** Data-center RoCEv2 Ethernet fabrics supporting extremely large GPU clusters, including fabrics with tens of thousands of GPUs  
 **Position:** Large-scale GPU fabrics require a purpose-built AI-fabric operations architecture. Conventional network automation is necessary, but insufficient.
@@ -1338,4 +1343,3 @@ RDMA over Converged Ethernet version 2. Allows RDMA over routable Ethernet/IP ne
 
 **Training fabric slice**  
 The set of GPUs, NICs, switch ports, paths, rails, and jobs affected by a particular operational change.
-

@@ -1,11 +1,18 @@
 # Stamp System Gap Closure Plan
 
+> **Historical note:** This plan predates the V2 rewrite and describes the
+> original stamp/template/deployment stack (`DeploymentPlan`, `StampRecord`,
+> spatial/rack/assembly templates, and NetBox-native cable-oriented behavior).
+> It remains useful for design history, but current V2 stamping semantics are
+> documented in `docs/data_model.md`, `docs/v2_ground_up_rewrite_plan.md`, and
+> `docs/v2_cutover_runbook.md`.
+
 **Date:** 2026-04-21  
 **Context:** Assessment of the plugin's ability to define a reference design/architecture for a
 multi-planar fabric from which implementations can be stamped. Six gaps were identified. This
 document records the closure plan.
 
-## Current implementation status
+## Historical implementation status
 
 | Workstream | Status | Notes |
 |------------|--------|-------|

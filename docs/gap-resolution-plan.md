@@ -1,5 +1,11 @@
 # Gap Resolution Plan
 
+> **Historical note:** This plan belongs to the original/V1 graph model and
+> refers to objects such as `PlantNode`, `AttachmentUnit`, `FineEdge`,
+> `BreakoutProfile`, and `CablePath`. It is retained as an implementation
+> history record, not as current V2 guidance. For active V2 semantics, use
+> `docs/data_model.md`.
+
 **Source:** `docs/runbook-roce-fabric-modeling.md`, gaps #1–24  
 **Guidance applied:**
 - Create an "operator" tenant as the registered owner of shared/multi-tenant resources

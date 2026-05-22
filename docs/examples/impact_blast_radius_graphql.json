@@ -1,0 +1,7 @@
+{
+  "query": "query BlastRadius($target_registry_key: String!, $target_id: ID!) { graphql_contract_version blast_radius(target_registry_key: $target_registry_key, target_id: $target_id) }",
+  "variables": {
+    "target_registry_key": "cableassembly",
+    "target_id": "1"
+  }
+}
