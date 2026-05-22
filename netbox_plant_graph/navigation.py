@@ -29,6 +29,28 @@ menu = PluginMenu(
             'Build & Run',
             (
                 PluginMenuItem(
+                    link='plugins:netbox_plant_graph:architectureworkspace_list',
+                    link_text='Architecture Workspaces',
+                    buttons=(
+                        PluginMenuButton(
+                            link='plugins:netbox_plant_graph:architectureworkspace_add',
+                            title='Add Architecture Workspace',
+                            icon_class='mdi mdi-plus-thick',
+                        ),
+                    ),
+                ),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:onboardingworkspace_list',
+                    link_text='Onboarding Workspaces',
+                    buttons=(
+                        PluginMenuButton(
+                            link='plugins:netbox_plant_graph:onboardingworkspace_add',
+                            title='Add Onboarding Workspace',
+                            icon_class='mdi mdi-plus-thick',
+                        ),
+                    ),
+                ),
+                PluginMenuItem(
                     link='plugins:netbox_plant_graph:fabric_onboard',
                     link_text='Onboard Fabric',
                 ),

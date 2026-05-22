@@ -15,10 +15,11 @@ It intentionally replaces V1-era terminology (`PlantNode`, `AttachmentUnit`,
 
 ## 1) V2 Architecture Summary
 
-V2 models multiplanar optical fabrics with plugin-native topology objects and
-NetBox object anchors:
+V2 models multiplanar optical fabrics with plugin-native topology objects,
+registry-backed architecture blueprints, and NetBox object anchors:
 
-1. **Architecture definitions** describe reusable topology semantics.
+1. **Architecture definitions and blueprints** describe reusable topology
+   semantics, stamp-time parameter contracts, and transfer geometry.
 2. **Fabric instances** materialize those semantics for a concrete deployment.
 3. **Endpoint graph primitives** model ports, MPO positions, strands, and maps.
 4. **Optical lanes** are transceiver-local signaling constructs.
@@ -26,8 +27,9 @@ NetBox object anchors:
    physical OSFP endpoints and map those channels onto MPO positions.
 6. **Path resolution** traverses connector-position connectivity to produce
    end-to-end lane paths across any number of hops.
-7. **Control-plane objects** track stamping, suppressions/exceptions, and audit
-   lifecycle events.
+7. **Control-plane objects** track stamping, architecture workspaces,
+   onboarding workspaces, suppressions/exceptions, audit lifecycle events,
+   import reports, and operational impact reports.
 
 V2 is plugin-native for modeled fabric connectivity and does not require
 NetBox-native cable/path objects as modeled-fabric source of truth.
@@ -43,11 +45,58 @@ NetBox-native cable/path objects as modeled-fabric source of truth.
 3. `TransferPattern`
 4. `AllocationRuleSet`
 5. `StampTemplate`
+6. `ArchitectureWorkspace`
+7. `ArchitectureSourceArtifact`
+8. `ArchitectureDesignComponent`
+9. `ArchitectureValidationRun`
+10. `ArchitecturePublishPlan`
 
 Purpose:
 
-- define reusable architecture semantics (roles, transfer behavior, allocation
-  rules, stamping templates) independently from a concrete fabric instance.
+- define reusable architecture semantics, fabric class, roles, transfer
+  behavior, allocation rules, and stamping templates independently from a
+  concrete fabric instance.
+- persist architecture blueprints keyed by `slug` + `version`, with
+  `FabricArchitecture.fabric_class` classifying the intended fabric family
+  (`roce_backend`, `ethernet_frontend`, `management`, or `storage`).
+- provide a registry-backed source for built-in blueprints and imported
+  blueprint bundles. The active built-ins are
+  `roce-4-plane-gb300-2x2-shuffle`, `roce-4-plane-h100-direct-attach`, and
+  `roce-8-plane-gb300-2x2-shuffle`.
+- provide a first-class architecture workspace for collecting blueprint/source
+  artifacts, normalizing architecture components, validating schema/import
+  compatibility, generating publish plans, approving changes, and publishing
+  into `FabricArchitecture` plus child architecture rows.
+
+Architecture workspace rows:
+
+1. `ArchitectureWorkspace`: durable design workspace for a new or revised
+   architecture blueprint, keyed by unique `slug`, target blueprint
+   `target_slug`/`target_version`, `fabric_class`, optional base architecture,
+   optional published architecture, current publish plan, source summary,
+   validation summary, and metadata.
+2. `ArchitectureSourceArtifact`: referenced or pasted source data for the
+   workspace. Current artifact types include blueprint bundles, architecture
+   schema JSON, stamp-template JSON, manual/API payloads, notes, diagrams,
+   spreadsheets, and other design artifacts.
+3. `ArchitectureDesignComponent`: normalized workspace component with
+   `kind`, `natural_key`, `desired_state`, provenance, validation status, and
+   messages. Important component kinds are
+   `fabric_architecture_blueprint`, `architecture_role`,
+   `transfer_pattern`, `allocation_rule_set`, `parameter_schema`,
+   `required_device_types`, and `stamp_template`.
+4. `ArchitectureValidationRun`: durable preflight result for schema
+   validation, blueprint parameter validation, device-type compatibility
+   warnings, and import/reconcile dry-run output.
+5. `ArchitecturePublishPlan`: stable-hash publish plan containing the exact
+   import payload to apply, validation summary, import plan, approval metadata,
+   result JSON, and lifecycle status.
+
+Architecture workspace publish uses the existing import/reconciliation engine
+for `fabric_architecture_blueprint` items, so successful publication creates or
+updates `FabricArchitecture`, `ArchitectureRole`, `TransferPattern`,
+`AllocationRuleSet`, and associated `StampTemplate` rows through the same path
+used by import preview/apply.
 
 ### 2.2 Fabric topology layer
 
@@ -77,11 +126,27 @@ Purpose:
 2. `SuppressionRule`
 3. `AuditEvent`
 4. `OperationRun`
+5. `ArchitectureWorkspace`
+6. `ArchitectureSourceArtifact`
+7. `ArchitectureDesignComponent`
+8. `ArchitectureValidationRun`
+9. `ArchitecturePublishPlan`
+10. `OnboardingWorkspace`
+11. `OnboardingSourceArtifact`
+12. `OnboardingDesignItem`
+13. `OnboardingPrerequisite`
+14. `OnboardingPlan`
+15. `OnboardingExecutionStage`
+16. `OnboardingObjectLink`
 
 Purpose:
 
 - provide execution provenance, policy suppression lifecycle, audit workflow
-  event history, and operation run tracking.
+  event history, operation run tracking, a persistent first-class architecture
+  workspace for blueprint publication, and a persistent first-class onboarding
+  workspace for source artifacts, staged design inventory, prerequisite
+  resolution, unified plans, staged execution, readiness, publish, and handoff
+  records.
 
 ---
 
@@ -98,6 +163,19 @@ V2 uses NetBox object references where appropriate:
 7. `CableAssembly.site` and `FiberStrand.cable_site` -> `dcim.Site`
 8. `AuditEvent.actor`, `SuppressionRule.created_by/approved_by`,
    `OperationRun.initiated_by` -> auth user model
+9. `ArchitectureWorkspace.created_by/owner`,
+   `ArchitectureValidationRun.executed_by`, and
+   `ArchitecturePublishPlan.generated_by/approved_by` -> auth user model
+10. `ArchitectureWorkspace.base_architecture/published_architecture` ->
+   `FabricArchitecture`
+11. `OnboardingWorkspace.site/location/tenant` -> NetBox `Site`, `Location`,
+   and `Tenant` scope
+12. `OnboardingWorkspace.created_by/owner`,
+   `OnboardingPlan.generated_by/approved_by` -> auth user model
+13. `OnboardingDesignItem.planned_object_type`,
+   `OnboardingPrerequisite.resolved_object_type`, and
+   `OnboardingObjectLink.object_type` -> content type anchors for staged,
+   resolved, and applied objects
 
 The plugin owns the topology graph itself (nodes/endpoints/strands/maps/lanes),
 while anchoring select objects back to NetBox inventory as needed.
@@ -289,6 +367,17 @@ Indexes optimized for lane lookup:
 1. `StampTemplate` stores executable template JSON.
 2. `StampRun` records execution status, parameters, result, errors, metadata.
 
+The operator-facing stamp path is V2.5:
+
+1. `preview_stamp_template_v25()` resolves the template, selects a registered or
+   persisted blueprint, validates stamp parameters/device-type compatibility,
+   and returns a dry-run change plan.
+2. `apply_stamp_template_v25()` reuses the preview gate, blocks on error
+   severity issues, applies through the registry-aware stamp executor, and
+   persists a `StampRun`.
+3. Saved `StampRun` pages expose retry classification and rollback
+   preview/apply actions through the V2.5 service layer.
+
 ### 7.2 Policy suppressions and disjointness exceptions
 
 `SuppressionRule` is the persistent suppression/exception substrate and can
@@ -316,6 +405,67 @@ Important implementation detail:
 `OperationRun` tracks execution profile, status, dedupe key, parameters, result,
 error detail, metadata, and timing fields.
 
+### 7.5 First-class architecture workspace lifecycle
+
+`ArchitectureWorkspace` is the durable container for designing a new
+architecture blueprint, revising a blueprint version, or preparing a blueprint
+bundle for publication. It is separate from fabric onboarding: architecture
+workspaces publish reusable architecture semantics; onboarding workspaces
+instantiate those semantics for a specific site/fabric.
+
+The architecture workspace flow is:
+
+1. attach source artifacts (`ArchitectureSourceArtifact`) from blueprint
+   bundles, schema JSON, stamp-template JSON, diagrams, spreadsheets, manual
+   entries, notes, or API payloads,
+2. normalize those artifacts into architecture components
+   (`ArchitectureDesignComponent`) with desired state and provenance,
+3. validate the workspace (`ArchitectureValidationRun`) against the executable
+   architecture schema, blueprint parameter schema, optional device-type
+   compatibility, and an import/reconcile dry-run,
+4. generate a stable-hash `ArchitecturePublishPlan` carrying the exact
+   `fabric_architecture_blueprint` import payload to apply,
+5. approve the plan after warnings are acknowledged,
+6. publish the plan through the import/reconciliation engine, creating or
+   updating `FabricArchitecture`, `ArchitectureRole`, `TransferPattern`,
+   `AllocationRuleSet`, and `StampTemplate` rows,
+7. fetch handoff JSON for review, automation, or audit records.
+
+This workspace is the intended UI/API path for turning site design documents or
+directly entered architecture semantics into persistent blueprint rows without
+bypassing validation or provenance.
+
+### 7.6 First-class onboarding lifecycle
+
+`OnboardingWorkspace` is the durable container for a net-new fabric onboarding
+effort or a major staged fabric change. It links the intended fabric identity,
+fabric class, selected architecture, optional NetBox site/location/tenant scope,
+source summary, current plan, readiness summary, and owner/creator.
+
+The workspace flow is:
+
+1. attach source artifacts (`OnboardingSourceArtifact`) from blueprints,
+   spreadsheets, diagram metadata, cable schedules, manual entries, or API
+   payloads,
+2. normalize those artifacts into staged design rows
+   (`OnboardingDesignItem`) with desired state and provenance,
+3. discover and resolve prerequisites (`OnboardingPrerequisite`) through
+   bind/create/defer/not-required decisions,
+4. generate a stable-hash `OnboardingPlan` that composes V2.5 stamp preview,
+   import dry-run, prerequisite plan, readiness projection, retry preview, and
+   rollback preview,
+5. approve and apply the plan through ordered `OnboardingExecutionStage` rows,
+   which call V2.5 stamping, import reconciliation, readiness evaluation, and
+   handoff generation,
+6. persist `OnboardingObjectLink` rows from the workspace/plan/stages/source
+   artifacts/design items to created objects, bound objects, reports, exports,
+   or external references,
+7. publish only after readiness is acceptable or explicitly acknowledged.
+
+The first implemented slice intentionally supports JSON/source-reference
+artifacts and staged manual/API rows. Rich spreadsheet and diagram parsers are
+expected follow-on additions, not separate topology source-of-truth paths.
+
 ---
 
 ## 8) V2 Choice Domains
@@ -332,13 +482,53 @@ Key constrained enums used by model fields:
 6. `SegmentKindChoices`: `jumper`, `trunk`, `internal`, `external_plant`
 7. `LaneDirectionChoices`: `send`, `receive`
 8. `TransferMapKindChoices`: `identity`, `polarity_swap`, `shuffle_2x2`,
-   `stagger`, `breakout`, `custom`
+   `shuffle_1x4`, `shuffle_2x2_mpo24`, `shuffle_4x4`, `direct_attach`,
+   `polarity_type_b`, `polarity_type_c`, `shuffle_nxm`, `stagger`, `breakout`,
+   `custom`
 9. `StampRunStatusChoices`: `pending`, `running`, `completed`, `failed`
 10. `SuppressionStatusChoices`: `pending`, `active`, `revoked`, `expired`
 11. `AuditEventTypeChoices`: `stamp`, `path_resolve`, `suppression_change`,
     `operation_run`, `policy_eval`
-12. `OperationProfileChoices`: `generic_roce`, `madison_default`
+12. `OperationProfileChoices`: `generic_roce`, `madison_default`,
+    `topology_integrity`, `operational_impact`, `import_reconciliation`
 13. `OperationRunStatusChoices`: `pending`, `running`, `completed`, `failed`
+14. `ArchitectureWorkspaceStatusChoices`: `draft`, `collecting_sources`,
+    `normalizing`, `validating`, `blocked`, `ready`, `awaiting_approval`,
+    `approved`, `publishing`, `published`, `archived`, `cancelled`
+15. `ArchitectureWorkspaceKindChoices`: `new_blueprint`, `new_version`,
+    `revision`, `comparison`
+16. `ArchitectureSourceArtifactTypeChoices`: `blueprint_bundle`,
+    `schema_json`, `stamp_template`, `diagram`, `spreadsheet`, `api_payload`,
+    `manual_entry`, `note`, `other`
+17. `ArchitectureSourceArtifactStatusChoices`: `received`, `normalized`,
+    `failed`, `superseded`, `ignored`
+18. `ArchitectureComponentStatusChoices`: `pending`, `valid`, `warning`,
+    `conflict`, `ignored`
+19. `ArchitectureValidationStatusChoices`: `pending`, `passed`, `warning`,
+    `failed`
+20. `ArchitecturePublishPlanStatusChoices`: `generated`, `blocked`,
+    `approved`, `publishing`, `published`, `failed`, `superseded`,
+    `cancelled`
+21. `OnboardingWorkspaceStatusChoices`: `draft`, `collecting_sources`,
+    `normalizing`, `planning`, `blocked`, `awaiting_approval`, `approved`,
+    `applying`, `applied`, `readiness_failed`, `published`, `archived`,
+    `cancelled`
+22. `OnboardingSourceArtifactTypeChoices`: `blueprint_bundle`, `spreadsheet`,
+    `diagram`, `cable_schedule`, `rack_plan`, `bom`, `manual_entry`,
+    `api_payload`, `note`, `other`
+23. `OnboardingSourceArtifactStatusChoices`: `received`, `normalized`,
+    `failed`, `superseded`, `ignored`
+24. `OnboardingDesignItemStatusChoices`: `pending`, `valid`, `warning`,
+    `conflict`, `ignored`
+25. `OnboardingPrerequisiteResolutionModeChoices`: `unresolved`, `bind`,
+    `create`, `defer`, `not_required`
+26. `OnboardingPrerequisiteStatusChoices`: `open`, `resolved`, `deferred`,
+    `blocked`
+27. `OnboardingPlanStatusChoices`: `draft`, `generated`, `blocked`,
+    `awaiting_approval`, `approved`, `applying`, `applied`, `failed`,
+    `superseded`, `cancelled`
+28. `OnboardingStageStatusChoices`: `pending`, `running`, `completed`,
+    `failed`, `skipped`, `rolled_back`
 
 ---
 
@@ -350,7 +540,8 @@ The current NetBox menu exposes four groups:
 
 1. `Operate`: Fabric Overview, Interface Fanout Trace, Path Query, Physical
    Cable Blast Radius
-2. `Build & Run`: Onboard Fabric, Operations Center
+2. `Build & Run`: Architecture Workspaces, Onboarding Workspaces, Onboard
+   Fabric, Operations Center, Import Preview, Impact Reports
 3. `Audit`: Audit Dashboard, Audit Triage, Exception Requests
 4. `Model Inventory`: Fabrics, Architectures, Cable Assemblies, Lane Inventory,
    Model Catalog
@@ -384,13 +575,52 @@ these failure scenarios:
 3. OSFP transceiver unseat.
 
 Results are grouped around impacted endpoints/devices and include follow-on
-links into path traces where possible.
+links into path traces where possible. Operators can save modeled results as
+immutable `OperationRun` snapshots; `Impact Reports` lists those snapshots,
+exports JSON, and compares two saved reports.
 
-### 9.4 REST and GraphQL boundary
+### 9.4 Import preview and saved reports
+
+`Import Preview` supports paste/upload JSON dry-runs for plugin-native imports,
+including cable assemblies, strand-to-cable assignment, endpoints, transport
+channels, channel-position maps, strand terminations, and architecture
+blueprints. Applied and dry-run imports can be saved as `OperationRun`
+snapshots, exported as JSON, replayed, or applied from the exact saved plan.
+
+### 9.5 Architecture workspaces
+
+`Architecture Workspaces` are the preferred entry point for new/revised
+architecture blueprints. The detail page exposes source attachment, source
+normalization, architecture component inventory, validation runs, publish plan
+generation, plan approval/publish, and handoff JSON actions in one persistent
+workspace.
+
+The same workflow is exposed through REST action endpoints so external systems
+can attach blueprint bundles or direct-entry schema JSON, normalize them into
+components, validate them, generate a stable publish plan, approve it, publish
+it, and fetch handoff artifacts without bypassing schema/import validation.
+
+### 9.6 Onboarding workspaces
+
+`Onboarding Workspaces` are the preferred entry point for net-new fabric
+onboarding. The detail page exposes source attachment, source normalization,
+prerequisite discovery/resolution, plan generation, plan approval/apply,
+readiness evaluation, publish, and handoff JSON actions in one persistent
+workspace.
+
+The same workflow is exposed through REST action endpoints so external systems
+can attach design-document payloads or direct-entry JSON, normalize them into
+staged design items, resolve prerequisites, generate a stable plan, approve it,
+apply it, and fetch handoff artifacts without bypassing the plugin’s provenance
+and readiness loop.
+
+### 9.7 REST and GraphQL boundary
 
 The REST API exposes generated CRUD endpoints for registry-backed objects plus
 workflow endpoints for path query, stamp preview/execute/rollback, audit
-lifecycle actions, operation runs, and disjointness exception lifecycle.
+lifecycle actions, operation runs, operational impact previews, onboarding
+workspace actions, architecture workspace actions, and disjointness exception
+lifecycle.
 
 GraphQL V2 is query-oriented and JSON-forward. See
 `docs/v2_graphql_contract_v2.md` for the versioned field contract.
@@ -429,9 +659,19 @@ This document is aligned to:
 3. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/migrations/0002_post_mvp_control_plane.py`
 4. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/migrations/0003_cable_assembly.py`
 5. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/migrations/0004_transport_channel_subinterfaces.py`
-6. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/resolver.py`
-7. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/v2_registry.py`
-8. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/architecture.py`
+6. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/migrations/0005_fabricarchitecture_fabric_class.py`
+7. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/migrations/0006_onboarding_workspace.py`
+8. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/resolver.py`
+9. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/v2_registry.py`
+10. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/architecture.py`
+11. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/architecture_schema.py`
+12. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/blueprint_registry.py`
+13. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/stamping.py`
+14. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/stamping_v25.py`
+15. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/imports/reconciliation.py`
+16. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/impact_modeling.py`
+17. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/topology_integrity.py`
+18. `/Users/mencken/github-repos/netbox_multiplanar_fabrics/netbox_plant_graph/services/onboarding/`
 
 If model code and this document diverge, treat code as authoritative and update
 this file in the same change set.

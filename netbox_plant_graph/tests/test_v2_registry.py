@@ -3,11 +3,17 @@ from django.urls import reverse
 
 from netbox_plant_graph import filtersets, forms, tables, views
 from netbox_plant_graph.api import serializers, views as api_views
+from netbox_plant_graph.choices import FabricClassChoices, TransferMapKindChoices
 from netbox_plant_graph.models import (
     AuditEvent,
     OperationRun,
     AllocationRuleSet,
+    ArchitectureDesignComponent,
+    ArchitecturePublishPlan,
     ArchitectureRole,
+    ArchitectureSourceArtifact,
+    ArchitectureValidationRun,
+    ArchitectureWorkspace,
     CableAssembly,
     ConnectorPosition,
     Endpoint,
@@ -17,6 +23,13 @@ from netbox_plant_graph.models import (
     FiberSegment,
     FiberStrand,
     OpticalLane,
+    OnboardingDesignItem,
+    OnboardingExecutionStage,
+    OnboardingObjectLink,
+    OnboardingPlan,
+    OnboardingPrerequisite,
+    OnboardingSourceArtifact,
+    OnboardingWorkspace,
     PathIntent,
     Plane,
     StampRun,
@@ -36,6 +49,11 @@ EXPECTED_V2_MODELS = {
     ArchitectureRole,
     TransferPattern,
     AllocationRuleSet,
+    ArchitectureWorkspace,
+    ArchitectureSourceArtifact,
+    ArchitectureDesignComponent,
+    ArchitectureValidationRun,
+    ArchitecturePublishPlan,
     Fabric,
     Plane,
     FabricNode,
@@ -55,6 +73,13 @@ EXPECTED_V2_MODELS = {
     SuppressionRule,
     AuditEvent,
     OperationRun,
+    OnboardingWorkspace,
+    OnboardingSourceArtifact,
+    OnboardingDesignItem,
+    OnboardingPrerequisite,
+    OnboardingPlan,
+    OnboardingExecutionStage,
+    OnboardingObjectLink,
 }
 
 
@@ -120,3 +145,45 @@ class V2RegistryContractTestCase(SimpleTestCase):
 
                 self.assertEqual(list_url, f'/api/plugins/plant-graph/{spec.api_basename}/')
                 self.assertEqual(detail_url, f'/api/plugins/plant-graph/{spec.api_basename}/1/')
+
+    def test_fabric_architecture_registry_exposes_fabric_class(self):
+        spec = get_v2_object_spec('fabricarchitecture')
+
+        self.assertIn('fabric_class', spec.fields)
+        self.assertIn('fabric_class', spec.brief_fields)
+        self.assertIn('fabric_class', spec.api_fields)
+        self.assertIn('fabric_class', spec.resolved_form_fields)
+        self.assertIn('fabric_class', spec.resolved_filter_fields)
+        self.assertIn('fabric_class', spec.resolved_table_fields)
+        self.assertIn('fabric_class', spec.resolved_default_columns)
+
+    def test_blueprint_expansion_choices_are_registered(self):
+        self.assertEqual(
+            dict(FabricClassChoices.CHOICES),
+            {
+                'roce_backend': 'RoCE Backend',
+                'ethernet_frontend': 'Ethernet Frontend',
+                'management': 'Management',
+                'storage': 'Storage',
+            },
+        )
+        transfer_kind_values = {value for value, label in TransferMapKindChoices.CHOICES}
+
+        self.assertGreaterEqual(
+            transfer_kind_values,
+            {
+                'identity',
+                'polarity_swap',
+                'shuffle_2x2',
+                'stagger',
+                'breakout',
+                'custom',
+                'shuffle_1x4',
+                'shuffle_2x2_mpo24',
+                'shuffle_4x4',
+                'direct_attach',
+                'polarity_type_b',
+                'polarity_type_c',
+                'shuffle_nxm',
+            },
+        )

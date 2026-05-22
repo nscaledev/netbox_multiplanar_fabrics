@@ -7,6 +7,7 @@ The implementation lives in `netbox_plant_graph.services.imports` and currently 
 - `cable_assembly`
 - `fiber_strand_cable`
 - `endpoint`
+- `fabric_architecture_blueprint`
 - `transport_channel`
 - `transport_channel_position_map`
 - `strand_termination`
@@ -50,6 +51,12 @@ row-level outcomes, field diffs, conflicts, and messages, then apply only after
 typing `APPLY` in the confirmation field. Apply uses the same transactional
 service path as the command; if conflicts remain, no changes are committed.
 
+Dry-run and applied plans can be persisted as `OperationRun` snapshots. Saved
+reports keep the exact submitted payload, normalized plan, row diffs, conflict
+details, architecture gate, summary counts, and transactional apply metadata.
+The UI can export saved reports as JSON, replay the saved dry-run, or apply from
+the exact saved plan after operator confirmation.
+
 ## JSON Shape
 
 The file is a JSON object with an `items` list. Each item has a `kind` plus natural-key fields and optional managed fields. Top-level `payload_version` and `source_label` are optional and are echoed in the result for audit/provenance.
@@ -80,11 +87,109 @@ Supported aliases include top-level `architecture_slug`,
 `architecture_version`, `schema_contract_version`, `channel_map_matrix`,
 `mpo_position_count`, and `dark_positions`. If an architecture ID or
 slug/version pair resolves to a persisted `FabricArchitecture`, the gate also
-compares that row against the built-in RoCE V2 schema contract.
+compares that row against the matching registered blueprint contract when one
+exists, falling back to the built-in RoCE V2 schema contract for legacy hints.
 
 Incompatible hints produce a single `architecture_gate` conflict at row `-1`
 and stop before row-level reconciliation or writes. Warning-only drift remains
 visible in `plan.architecture_gate` and does not block normal row diffing.
+
+Blueprint import items use the same dry-run/apply contract:
+
+```json
+{
+  "items": [
+    {
+      "kind": "fabric_architecture_blueprint",
+      "schema_contract_version": "v2",
+      "definition": {
+        "slug": "vendor-gb300-reference",
+        "version": "v1",
+        "plane_count": 4,
+        "roles": [],
+        "transfer_patterns": [],
+        "allocation_rule_sets": [],
+        "channel_map_matrix": [],
+        "active_position_groups": {},
+        "dark_positions": [],
+        "mpo_position_count": 12,
+        "shuffle_mpo_groups": [],
+        "channels_per_subinterface": 4,
+        "mpo_count_per_osfp": 2
+      },
+      "parameter_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "required_device_types": {
+        "gpu_tray": ["gb300-tray"],
+        "leaf_switch": ["leaf-switch"]
+      }
+    }
+  ]
+}
+```
+
+The schema arrays above are abbreviated for readability; real payloads must
+include valid role, transfer-pattern, allocation-rule, channel-map, and MPO
+position declarations.
+
+During dry-run, the engine validates the embedded
+`ArchitectureSchemaDefinition` with `validate_architecture_schema()` and checks
+that `parameter_schema` is a JSON Schema object. Schema failures are returned as
+`conflict` outcomes with `details.code` set to `architecture_schema_invalid` or
+`parameter_schema_invalid`. On apply, the item persists the architecture plus its
+`ArchitectureRole`, `TransferPattern`, and `AllocationRuleSet` rows. Optional
+`stamp_templates` payloads are stored as `StampTemplate` rows attached to the
+imported architecture.
+
+## Blueprint Bundles
+
+The same handler accepts a single-file `.mpf-blueprint.json` bundle. Bundle
+payloads omit `items`; the importer normalizes them into one
+`fabric_architecture_blueprint` item:
+
+```json
+{
+  "bundle_version": "2026.05",
+  "bundle_author": "network-architecture",
+  "schema_contract_version": "v2",
+  "architecture": {
+    "slug": "vendor-gb300-reference",
+    "version": "v1",
+    "plane_count": 4,
+    "roles": [],
+    "transfer_patterns": [],
+    "allocation_rule_sets": [],
+    "channel_map_matrix": [],
+    "active_position_groups": {},
+    "dark_positions": [],
+    "mpo_position_count": 12,
+    "shuffle_mpo_groups": []
+  },
+  "parameter_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object"
+  },
+  "required_device_types": {
+    "gpu_tray": ["gb300-tray"]
+  },
+  "stamp_templates": {
+    "vendor-gb300-mini-proof": {
+      "name": "Vendor GB300 mini proof",
+      "template": {}
+    }
+  }
+}
+```
+
+The architecture object in the bundle example is abbreviated in the same way as
+the item example above.
+
+`bundle_version` is echoed as `plan.payload_version`, and `bundle_author` is
+echoed as `plan.source_label`. A bundle with a mismatched
+`schema_contract_version` is rejected before writes with
+`details.code: "schema_contract_version_mismatch"`.
 
 Items can also carry row-level provenance:
 

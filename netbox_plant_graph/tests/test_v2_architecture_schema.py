@@ -7,9 +7,13 @@ from django.test import SimpleTestCase, TestCase
 
 from netbox_plant_graph.services.architecture import (
     ARCHITECTURE_VERSION,
+    build_roce_4plane_h100_direct_attach_architecture_schema,
     build_roce_4plane_shuffle_architecture_schema,
+    build_roce_8plane_gb300_shuffle_architecture_schema,
     ensure_roce_4plane_shuffle_architecture,
+    validate_roce_4plane_h100_direct_attach_architecture_fixture,
     validate_roce_4plane_shuffle_architecture_fixture,
+    validate_roce_8plane_gb300_shuffle_architecture_fixture,
 )
 from netbox_plant_graph.services.architecture_schema import (
     ARCHITECTURE_COMPATIBILITY_COMPATIBLE,
@@ -88,6 +92,19 @@ class V2ArchitectureSchemaTestCase(ArchitectureSchemaAssertionsMixin, SimpleTest
         self.assertTrue(result.is_valid, result.messages)
         self.assertEqual(result.errors, ())
 
+    def test_expanded_builtin_architecture_definitions_validate(self):
+        gb300_8plane_result = validate_roce_8plane_gb300_shuffle_architecture_fixture()
+        h100_direct_attach_result = validate_roce_4plane_h100_direct_attach_architecture_fixture()
+
+        self.assertTrue(gb300_8plane_result.is_valid, gb300_8plane_result.messages)
+        self.assertTrue(h100_direct_attach_result.is_valid, h100_direct_attach_result.messages)
+
+        gb300_8plane = build_roce_8plane_gb300_shuffle_architecture_schema()
+        h100_direct_attach = build_roce_4plane_h100_direct_attach_architecture_schema()
+        self.assertEqual(gb300_8plane.default_planes, 8)
+        self.assertEqual(h100_direct_attach.fabric_class, 'roce_backend')
+        self.assertEqual(h100_direct_attach.mpo_position_count, 8)
+
     def test_duplicate_channel_map_lane_fails_clearly(self):
         definition = build_roce_4plane_shuffle_architecture_schema()
         matrix = deepcopy(definition.channel_map_matrix)
@@ -150,6 +167,197 @@ class V2ArchitectureSchemaTestCase(ArchitectureSchemaAssertionsMixin, SimpleTest
             code='shuffle_2x2.helper_mismatch',
             path='transfer_patterns[shuffle_2x2].rule.groups[1].matrix.shuffle_mpo_groups[1].front_1.rear_1',
             message_contains='expected key-down-roll pairs',
+        )
+
+    def test_plane_range_default_outside_declared_range_fails_clearly(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+
+        result = validate_architecture_schema(
+            replace(definition, min_planes=2, max_planes=8, default_planes=16)
+        )
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='plane_range.default_out_of_range',
+            path='default_planes',
+            message_contains='must be within the declared range 2..8',
+        )
+
+    def test_active_port_channel_metadata_mismatch_fails_clearly(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        roles = deepcopy(definition.roles)
+        gpu_osfp = next(role for role in roles if role['slug'] == 'gpu_osfp')
+        gpu_osfp['metadata']['channels_per_osfp'] = 8
+
+        result = validate_architecture_schema(replace(definition, roles=tuple(roles)))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='roles.channels_per_osfp_mismatch',
+            path='roles[2].metadata.channels_per_osfp',
+            message_contains='must match channels_per_subinterface=4',
+        )
+
+    def test_direct_attach_provider_mismatch_fails_clearly(self):
+        definition = build_roce_4plane_h100_direct_attach_architecture_schema()
+        transfer_patterns = deepcopy(definition.transfer_patterns)
+        direct_attach = next(pattern for pattern in transfer_patterns if pattern['slug'] == 'direct_attach')
+        direct_attach['rule']['matrix'][0]['position_pairs'][0] = [1, 2]
+
+        result = validate_architecture_schema(replace(definition, transfer_patterns=tuple(transfer_patterns)))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='transfer_patterns.matrix_pair_mismatch',
+            path='transfer_patterns[direct_attach].rule.matrix[1].position_pairs',
+            message_contains='provider output',
+        )
+
+    def test_custom_transfer_pattern_requires_validator_entrypoint(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        transfer_patterns = tuple(definition.transfer_patterns) + (
+            {
+                'slug': 'vendor_custom',
+                'name': 'Vendor custom',
+                'pattern_kind': 'custom',
+                'rule': {},
+                'metadata': {},
+            },
+        )
+
+        result = validate_architecture_schema(replace(definition, transfer_patterns=transfer_patterns))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='custom.validator_entrypoint_required',
+            path='transfer_patterns[vendor_custom].rule.validator_entrypoint',
+        )
+
+    def test_custom_transfer_pattern_noop_validator_passes(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        transfer_patterns = tuple(definition.transfer_patterns) + (
+            {
+                'slug': 'vendor_custom',
+                'name': 'Vendor custom',
+                'pattern_kind': 'custom',
+                'rule': {
+                    'validator_entrypoint': (
+                        'netbox_plant_graph.services.architecture_schema.noop_custom_transfer_validator'
+                    ),
+                },
+                'metadata': {},
+            },
+        )
+
+        result = validate_architecture_schema(replace(definition, transfer_patterns=transfer_patterns))
+
+        self.assertTrue(result.is_valid, result.messages)
+
+    def test_custom_transfer_pattern_rejects_validator_outside_allowed_namespace(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        transfer_patterns = tuple(definition.transfer_patterns) + (
+            {
+                'slug': 'vendor_custom',
+                'name': 'Vendor custom',
+                'pattern_kind': 'custom',
+                'rule': {'validator_entrypoint': 'math.sqrt'},
+                'metadata': {},
+            },
+        )
+
+        result = validate_architecture_schema(replace(definition, transfer_patterns=transfer_patterns))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='custom.validator_entrypoint_not_allowed',
+            path='transfer_patterns[vendor_custom].rule.validator_entrypoint',
+        )
+
+    def test_architecture_validator_rejects_entrypoint_outside_allowed_namespace(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+
+        result = validate_architecture_schema(replace(definition, custom_validator_entrypoints=('math.sqrt',)))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='architecture_validators.entrypoint_not_allowed',
+            path='custom_validator_entrypoints[1]',
+        )
+
+    def test_mpo24_position_count_variant_validates_against_declared_count(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        roles = deepcopy(definition.roles)
+        for role in roles:
+            metadata = role.get('metadata', {})
+            if metadata.get('connector_kind') == 'mpo-12':
+                metadata['connector_kind'] = 'mpo-24'
+                metadata['position_count'] = 24
+        transfer_patterns = deepcopy(definition.transfer_patterns)
+        shuffle_pattern = next(pattern for pattern in transfer_patterns if pattern['slug'] == 'shuffle_2x2')
+        shuffle_pattern['rule']['groups'][0]['rear_position_transform']['position_count'] = 24
+        active_positions = set(definition.active_position_groups['A']) | set(definition.active_position_groups['B'])
+        dark_positions = tuple(position for position in range(1, 25) if position not in active_positions)
+
+        result = validate_architecture_schema(
+            replace(
+                definition,
+                roles=tuple(roles),
+                transfer_patterns=tuple(transfer_patterns),
+                dark_positions=dark_positions,
+                mpo_position_count=24,
+                shuffle_pair_provider=None,
+            )
+        )
+
+        self.assertTrue(result.is_valid, result.messages)
+
+    def test_required_device_types_unknown_role_fails_clearly(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+
+        result = validate_architecture_schema(
+            replace(definition, required_device_types={'missing_role': ('example-device-type',)})
+        )
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='required_device_types.unknown_role',
+            path='required_device_types.missing_role',
+        )
+
+    def test_tier2_port_requires_matching_tier_device(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        roles = tuple(deepcopy(definition.roles)) + (
+            {
+                'slug': 'spine_uplink_osfp',
+                'name': 'Spine uplink OSFP',
+                'role_kind': 'active_tier_2_port',
+                'description': 'Spine-facing uplink role without a matching spine device role.',
+                'metadata': {
+                    'fabric_tier': 'spine',
+                    'connector_kind': 'osfp',
+                    'channels': 4,
+                    'channels_per_osfp': 4,
+                    'channel_speed_gbps': 200,
+                    'speed_gbps': 800,
+                },
+            },
+        )
+
+        result = validate_architecture_schema(replace(definition, roles=roles))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='roles.fabric_tier_parent_missing',
+            path='roles[10].metadata.fabric_tier',
+            message_contains='without a matching tier device role',
         )
 
 

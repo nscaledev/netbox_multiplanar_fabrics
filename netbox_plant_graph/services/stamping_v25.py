@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -9,7 +10,8 @@ from typing import Any
 from django.db import DEFAULT_DB_ALIAS, transaction
 from django.db.models.deletion import Collector, ProtectedError
 from django.utils import timezone
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Location, Site
+from tenancy.models import Tenant
 
 from netbox_plant_graph.models import (
     AuditEvent,
@@ -29,20 +31,27 @@ from netbox_plant_graph.models import (
     TransportChannel,
     TransportChannelPositionMap,
 )
-from netbox_plant_graph.services.architecture import (
-    ARCHITECTURE_SLUG,
-    ARCHITECTURE_VERSION,
-    build_roce_4plane_shuffle_architecture_schema,
-    shuffle_2x2_transfer_position_pairs,
-    validate_roce_4plane_shuffle_architecture_fixture,
+from netbox_plant_graph.services.blueprint_registry import (
+    BLUEPRINT_LIFECYCLE_ACTIVE,
+    BlueprintRegistryEntry,
+    architecture_definition_from_payload,
+    check_blueprint_device_type_compatibility,
+    get_default_blueprint_registry,
+    validate_blueprint_parameters,
 )
+from netbox_plant_graph.services.architecture import shuffle_2x2_transfer_position_pairs
 from netbox_plant_graph.services.architecture_schema import (
     compare_persisted_architecture_compatibility,
     validate_architecture_schema,
     validate_persisted_architecture_schema,
 )
-from netbox_plant_graph.services.stamp_template_validation import validate_stamp_template_spec
-from netbox_plant_graph.services.stamping import HYBRID_STAMP_EXECUTORS, MiniFabricStampResult, execute_stamp_template
+from netbox_plant_graph.services.stamp_template_validation import resolve_stamp_template_spec
+from netbox_plant_graph.services.stamping import (
+    HYBRID_STAMP_EXECUTORS,
+    MiniFabricStampResult,
+    execute_stamp_template,
+    resolve_fabric_ownership,
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,11 @@ class StampArchitectureGate:
     fixture_error_count: int
     template_architecture_slug: str | None = None
     template_architecture_version: str | None = None
+    blueprint_source: str = 'none'
+    blueprint_slug: str | None = None
+    blueprint_version: str | None = None
+    blueprint_lifecycle: str | None = None
+    blueprint_issue_count: int = 0
     target_source: str = 'none'
     target_architecture_id: int | None = None
     target_architecture_slug: str | None = None
@@ -113,6 +127,9 @@ class StampRollbackPlan:
     applied: bool = False
     deleted_counts: Mapping[str, int] = field(default_factory=dict)
 
+    def issues_for_code(self, code: str) -> tuple[StampingValidationIssue, ...]:
+        return tuple(issue for issue in self.issues if issue.code == code)
+
 
 @dataclass(frozen=True)
 class StampRetryPlan:
@@ -121,6 +138,12 @@ class StampRetryPlan:
     operation_key: str
     classification: str = 'retryable'
     message: str = ''
+
+
+@dataclass(frozen=True)
+class _RollbackPhaseScope:
+    name: str
+    active_planes: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -137,6 +160,7 @@ class StampOperationPreview:
     retry: StampRetryPlan
     name_pattern_samples: tuple[StampNamePatternSample, ...] = ()
     architecture_gate: StampArchitectureGate | None = None
+    parameter_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def is_valid(self) -> bool:
@@ -161,6 +185,14 @@ class StampApplyResult:
 class _StampOperationValidation:
     issues: tuple[StampingValidationIssue, ...]
     architecture_gate: StampArchitectureGate | None = None
+    template_spec: Mapping[str, Any] = field(default_factory=dict)
+    parameter_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _SelectedBlueprint:
+    entry: BlueprintRegistryEntry | None = None
+    source: str = 'none'
 
 
 class StampValidationError(ValueError):
@@ -177,6 +209,7 @@ def preview_stamp_template_v25(
     fabric_slug: str,
     source_bindings: dict | None = None,
     creation_options: dict | None = None,
+    phase: str | None = None,
 ) -> StampOperationPreview:
     """
     Build a dry-run preview for the safe V2.5 stamping subset.
@@ -186,21 +219,26 @@ def preview_stamp_template_v25(
     """
     template_slug = getattr(template, 'slug', '')
     template_id = getattr(template, 'pk', None)
-    template_spec = deepcopy(getattr(template, 'template', None) or {})
+    raw_template_spec = deepcopy(getattr(template, 'template', None) or {})
     creation_options = creation_options or {}
     source_bindings = source_bindings or {}
-    executor = _executor_name(template_spec)
-    operation_key = f'{template_id or "unsaved"}:{template_slug}:{fabric_slug}:{executor or "unknown"}'
+    executor = _executor_name(raw_template_spec)
+    operation_key = (
+        f'{template_id or "unsaved"}:{template_slug}:{fabric_slug}:{executor or "unknown"}'
+        f'{f":phase-{phase}" if phase else ""}'
+    )
 
     validation = _validate_stamp_operation(
         template=template,
-        template_spec=template_spec,
+        template_spec=raw_template_spec,
         fabric_slug=fabric_slug,
         executor=executor,
         source_bindings=source_bindings,
         creation_options=creation_options,
+        phase=phase,
     )
     issues = list(validation.issues)
+    template_spec = dict(validation.template_spec or raw_template_spec)
     changes = ()
     name_pattern_samples = _build_name_pattern_samples(
         template_spec=template_spec,
@@ -242,6 +280,7 @@ def preview_stamp_template_v25(
         ),
         name_pattern_samples=tuple(name_pattern_samples),
         architecture_gate=validation.architecture_gate,
+        parameter_metadata=validation.parameter_metadata,
     )
 
 
@@ -253,6 +292,7 @@ def apply_stamp_template_v25(
     source_bindings: dict | None = None,
     creation_options: dict | None = None,
     actor=None,
+    phase: str | None = None,
 ) -> StampApplyResult:
     preview = preview_stamp_template_v25(
         template=template,
@@ -260,6 +300,7 @@ def apply_stamp_template_v25(
         fabric_slug=fabric_slug,
         source_bindings=source_bindings,
         creation_options=creation_options,
+        phase=phase,
     )
     if not preview.is_valid:
         raise StampValidationError(preview)
@@ -271,6 +312,7 @@ def apply_stamp_template_v25(
         source_bindings=source_bindings,
         creation_options=creation_options,
         actor=actor,
+        phase=phase,
     )
     return StampApplyResult(preview=preview, execution=execution)
 
@@ -290,11 +332,13 @@ def classify_stamp_retry_v25(
     creation_options: dict | None = None,
 ) -> StampRetryPlan:
     parameters = stamp_run.parameters or {}
+    phase_suffix = f':phase-{parameters.get("phase")}' if parameters.get('phase') else ''
     operation_key = (
         f'{getattr(stamp_run.template, "pk", None) or "unsaved"}:'
         f'{parameters.get("template_slug") or getattr(stamp_run.template, "slug", "")}:'
         f'{parameters.get("fabric_slug") or getattr(stamp_run.fabric, "slug", "")}:'
         f'{parameters.get("executor") or "unknown"}'
+        f'{phase_suffix}'
     )
     rollback = (stamp_run.result or {}).get('rollback') or (stamp_run.metadata or {}).get('rollback') or {}
     if isinstance(rollback, dict) and rollback.get('state') == 'completed':
@@ -331,6 +375,7 @@ def classify_stamp_retry_v25(
         fabric_slug=fabric_slug,
         source_bindings=source_bindings,
         creation_options=creation_options,
+        phase=parameters.get('phase'),
     )
     if not preview.is_valid:
         return StampRetryPlan(
@@ -397,13 +442,17 @@ def _build_rollback_plan(*, stamp_run: StampRun) -> StampRollbackPlan:
                 context={'status': stamp_run.status},
             )
         )
-    if stamp_run.fabric_id and StampRun.objects.filter(fabric_id=stamp_run.fabric_id).exclude(pk=stamp_run.pk).exists():
+    shared_fabric_context = _rollback_shared_fabric_block_context(stamp_run=stamp_run, manifest=manifest)
+    if shared_fabric_context is not None:
         issues.append(
             StampingValidationIssue(
                 code='rollback_shared_fabric_stamp_runs',
                 path='stamp_run.fabric',
-                message='Rollback is blocked because this fabric has other stamp runs; ownership is ambiguous.',
-                context={'fabric_id': stamp_run.fabric_id},
+                message=(
+                    'Rollback is blocked because this fabric has other stamp runs and this run does not have an '
+                    'isolated phase-scoped manifest.'
+                ),
+                context=shared_fabric_context,
             )
         )
     issues.extend(_rollback_dependency_issues(manifest))
@@ -463,6 +512,197 @@ def _rollback_manifest_from_stamp_run(
                 )
             )
     return manifest, tuple(issues)
+
+
+def _rollback_shared_fabric_block_context(
+    *,
+    stamp_run: StampRun,
+    manifest: Sequence[StampRollbackManifestItem],
+) -> dict[str, Any] | None:
+    if not stamp_run.fabric_id:
+        return None
+    other_runs = tuple(
+        StampRun.objects.filter(fabric_id=stamp_run.fabric_id)
+        .exclude(pk=stamp_run.pk)
+        .order_by('created', 'pk')
+    )
+    if not other_runs:
+        return None
+
+    context: dict[str, Any] = {
+        'fabric_id': stamp_run.fabric_id,
+        'other_stamp_run_count': len(other_runs),
+    }
+    phase_scope = _rollback_phase_scope(stamp_run)
+    if phase_scope is None:
+        return {**context, 'reason': 'missing_phase_scope'}
+
+    shared_item = _first_non_phase_local_manifest_item(manifest, phase_scope)
+    if shared_item is not None:
+        return {
+            **context,
+            'reason': 'manifest_not_phase_scoped',
+            'phase': phase_scope.name,
+            'active_planes': tuple(sorted(phase_scope.active_planes)),
+            'model_label': shared_item.model_label,
+            'primary_key': shared_item.primary_key,
+            'natural_key': shared_item.natural_key,
+        }
+
+    for other_run in other_runs:
+        if _stamp_run_rollback_completed(other_run):
+            continue
+        other_scope = _rollback_phase_scope(other_run)
+        if other_scope is None:
+            return {
+                **context,
+                'reason': 'other_run_missing_phase_scope',
+                'phase': phase_scope.name,
+                'other_stamp_run_id': other_run.pk,
+            }
+        if other_scope.name == phase_scope.name:
+            return {
+                **context,
+                'reason': 'same_phase_stamp_run',
+                'phase': phase_scope.name,
+                'other_stamp_run_id': other_run.pk,
+            }
+
+    overlap = _rollback_manifest_overlap(stamp_run=stamp_run, manifest=manifest, other_runs=other_runs)
+    if overlap is not None:
+        return {
+            **context,
+            'reason': 'manifest_overlaps_other_stamp_run',
+            'phase': phase_scope.name,
+            **overlap,
+        }
+    return None
+
+
+def _stamp_run_rollback_completed(stamp_run: StampRun) -> bool:
+    rollback = (stamp_run.result or {}).get('rollback') or (stamp_run.metadata or {}).get('rollback') or {}
+    return isinstance(rollback, dict) and rollback.get('state') == 'completed'
+
+
+def _rollback_phase_scope(stamp_run: StampRun) -> _RollbackPhaseScope | None:
+    parameters = stamp_run.parameters if isinstance(stamp_run.parameters, Mapping) else {}
+    result = stamp_run.result if isinstance(stamp_run.result, Mapping) else {}
+    stamp_manifest = result.get('stamp_manifest') if isinstance(result.get('stamp_manifest'), Mapping) else {}
+    phase_payload = stamp_manifest.get('phase') if isinstance(stamp_manifest.get('phase'), Mapping) else {}
+    phase_name = parameters.get('phase') or phase_payload.get('name')
+    active_planes = (
+        parameters.get('active_planes')
+        or phase_payload.get('planes')
+        or stamp_manifest.get('active_planes')
+        or ()
+    )
+    plane_numbers = frozenset(_integer_ids(active_planes if isinstance(active_planes, (list, tuple)) else ()))
+    if not phase_name or not plane_numbers:
+        return None
+    return _RollbackPhaseScope(name=str(phase_name), active_planes=plane_numbers)
+
+
+def _first_non_phase_local_manifest_item(
+    manifest: Sequence[StampRollbackManifestItem],
+    phase_scope: _RollbackPhaseScope,
+) -> StampRollbackManifestItem | None:
+    objects_by_model = _objects_for_manifest_by_model(manifest)
+    objects_by_identity = {
+        (model._meta.label_lower, obj.pk): obj
+        for model, objects in objects_by_model.items()
+        for obj in objects
+    }
+    for item in manifest:
+        obj = objects_by_identity.get((item.model_label, item.primary_key))
+        if obj is None:
+            continue
+        object_planes = _rollback_object_phase_numbers(obj)
+        if not object_planes or not object_planes.issubset(phase_scope.active_planes):
+            return item
+    return None
+
+
+def _rollback_manifest_overlap(
+    *,
+    stamp_run: StampRun,
+    manifest: Sequence[StampRollbackManifestItem],
+    other_runs: Sequence[StampRun],
+) -> dict[str, Any] | None:
+    selected = {(item.model_label, item.primary_key): item for item in manifest}
+    if not selected:
+        return None
+    model_labels_by_key = {key: model._meta.label_lower for key, model in _ROLLBACK_MODEL_KEYS}
+    for other_run in other_runs:
+        if other_run.pk == stamp_run.pk or _stamp_run_rollback_completed(other_run):
+            continue
+        other_managed = (other_run.result or {}).get('managed_objects')
+        if not isinstance(other_managed, Mapping):
+            continue
+        for key, model_label in model_labels_by_key.items():
+            for primary_key in _integer_ids(other_managed.get(key) or ()):
+                item = selected.get((model_label, primary_key))
+                if item is not None:
+                    return {
+                        'other_stamp_run_id': other_run.pk,
+                        'model_label': item.model_label,
+                        'primary_key': item.primary_key,
+                        'natural_key': item.natural_key,
+                    }
+    return None
+
+
+_PHASE_TOKEN_PATTERN = re.compile(r'(?:^|[:\-])(?:P|plane-)(\d+)(?=$|[:\-])', re.IGNORECASE)
+
+
+def _rollback_object_phase_numbers(obj) -> frozenset[int]:
+    if isinstance(obj, Fabric):
+        return frozenset()
+    if isinstance(obj, Plane):
+        return frozenset({obj.plane_number})
+    if isinstance(obj, FabricNode):
+        return _phase_numbers_from_metadata(getattr(obj, 'metadata', None))
+    if isinstance(obj, Endpoint):
+        return _rollback_object_phase_numbers(obj.node)
+    if isinstance(obj, ConnectorPosition):
+        return _rollback_object_phase_numbers(obj.endpoint)
+    if isinstance(obj, TransportChannel):
+        if obj.plane_id and obj.plane:
+            return frozenset({obj.plane.plane_number})
+        return frozenset()
+    if isinstance(obj, TransportChannelPositionMap):
+        return _rollback_object_phase_numbers(obj.channel)
+    if isinstance(obj, FiberSegment):
+        return _phase_numbers_from_text(obj.name) or _phase_numbers_from_metadata(getattr(obj, 'metadata', None))
+    if isinstance(obj, CableAssembly):
+        return _phase_numbers_from_text(obj.cable_id) or _phase_numbers_from_metadata(getattr(obj, 'metadata', None))
+    if isinstance(obj, FiberStrand):
+        return _rollback_object_phase_numbers(obj.segment)
+    if isinstance(obj, StrandTermination):
+        return _rollback_object_phase_numbers(obj.strand)
+    if isinstance(obj, TransferMap):
+        metadata_planes = _phase_numbers_from_metadata(getattr(obj, 'metadata', None))
+        return metadata_planes or _phase_numbers_from_text(obj.group_key)
+    if isinstance(obj, OpticalLane):
+        if obj.plane_id and obj.plane:
+            return frozenset({obj.plane.plane_number})
+        return _phase_numbers_from_metadata(getattr(obj, 'metadata', None))
+    return frozenset()
+
+
+def _phase_numbers_from_metadata(metadata: Any) -> frozenset[int]:
+    if not isinstance(metadata, Mapping):
+        return frozenset()
+    raw_plane = metadata.get('plane_number') or metadata.get('plane')
+    try:
+        return frozenset({int(raw_plane)}) if raw_plane is not None else frozenset()
+    except (TypeError, ValueError):
+        return frozenset()
+
+
+def _phase_numbers_from_text(value: Any) -> frozenset[int]:
+    if not isinstance(value, str):
+        return frozenset()
+    return frozenset(int(match.group(1)) for match in _PHASE_TOKEN_PATTERN.finditer(value))
 
 
 def _integer_ids(raw_ids: Sequence[Any]) -> list[int]:
@@ -651,11 +891,12 @@ def _validate_stamp_operation(
     executor: str | None,
     source_bindings: dict,
     creation_options: dict,
+    phase: str | None = None,
 ) -> _StampOperationValidation:
     issues: list[StampingValidationIssue] = []
 
     try:
-        validate_stamp_template_spec(template_spec)
+        resolved_template_spec = resolve_stamp_template_spec(template_spec, phase=phase)
     except ValueError as exc:
         issues.append(
             StampingValidationIssue(
@@ -683,16 +924,31 @@ def _validate_stamp_operation(
             )
         )
 
-    architecture_gate = _validate_architecture_contract(template=template, template_spec=template_spec, issues=issues)
-    _validate_fabric_collision(template=template, template_spec=template_spec, fabric_slug=fabric_slug, issues=issues)
+    architecture_gate = _validate_architecture_contract(
+        template=template,
+        template_spec=resolved_template_spec,
+        issues=issues,
+    )
+    _validate_fabric_collision(
+        template=template,
+        template_spec=resolved_template_spec,
+        fabric_slug=fabric_slug,
+        issues=issues,
+    )
+    _validate_fabric_ownership_preview(template_spec=resolved_template_spec, issues=issues)
     _validate_netbox_creation_options(
-        template_spec=template_spec,
+        template_spec=resolved_template_spec,
         fabric_slug=fabric_slug,
         source_bindings=source_bindings,
         creation_options=creation_options,
         issues=issues,
     )
-    return _StampOperationValidation(issues=tuple(issues), architecture_gate=architecture_gate)
+    return _StampOperationValidation(
+        issues=tuple(issues),
+        architecture_gate=architecture_gate,
+        template_spec=resolved_template_spec,
+        parameter_metadata=_parameter_metadata(resolved_template_spec),
+    )
 
 
 def _validate_architecture_contract(
@@ -701,51 +957,68 @@ def _validate_architecture_contract(
     template_spec: dict,
     issues: list[StampingValidationIssue],
 ) -> StampArchitectureGate:
-    schema = build_roce_4plane_shuffle_architecture_schema()
-    schema_result = validate_roce_4plane_shuffle_architecture_fixture()
-    for error in schema_result.errors:
-        issues.append(
-            StampingValidationIssue(
-                code=f'architecture_schema.{error.code}',
-                path=error.path,
-                message=error.message,
-                context=error.context,
-            )
-        )
-
     template_architecture_slug = template_spec.get('architecture_slug')
     if not isinstance(template_architecture_slug, str):
+        template_architecture_slug = None
+    elif template_architecture_slug.strip():
+        template_architecture_slug = template_architecture_slug.strip()
+    else:
         template_architecture_slug = None
     template_architecture_version = template_spec.get('architecture_version')
     if not isinstance(template_architecture_version, str):
         template_architecture_version = None
-
-    if template_spec.get('architecture_slug') != ARCHITECTURE_SLUG:
-        issues.append(
-            StampingValidationIssue(
-                code='unsupported_architecture',
-                path='template.template.architecture_slug',
-                message=f'Only {ARCHITECTURE_SLUG!r} is supported by the V2.5 stamp runner.',
-            )
-        )
-    if template_spec.get('architecture_version') != ARCHITECTURE_VERSION:
-        issues.append(
-            StampingValidationIssue(
-                code='unsupported_architecture_version',
-                path='template.template.architecture_version',
-                message=f'Only architecture version {ARCHITECTURE_VERSION!r} is supported by the V2.5 stamp runner.',
-            )
-        )
+    elif template_architecture_version.strip():
+        template_architecture_version = template_architecture_version.strip()
+    else:
+        template_architecture_version = None
 
     architecture, target_source = _infer_persisted_architecture_target(template=template, template_spec=template_spec)
+    selected_blueprint = _select_blueprint_for_template(
+        architecture=architecture,
+        template_architecture_slug=template_architecture_slug,
+        template_architecture_version=template_architecture_version,
+        issues=issues,
+    )
+    blueprint_entry = selected_blueprint.entry
+    schema = blueprint_entry.definition if blueprint_entry is not None else None
+    schema_errors = ()
+    if schema is not None:
+        schema_result = validate_architecture_schema(schema)
+        schema_errors = schema_result.errors
+        for error in schema_errors:
+            issues.append(
+                StampingValidationIssue(
+                    code=f'architecture_schema.{error.code}',
+                    path=error.path,
+                    message=error.message,
+                    context=error.context,
+                )
+            )
+
+    blueprint_issue_count = 0
+    if blueprint_entry is not None:
+        blueprint_issue_count += _append_blueprint_parameter_issues(
+            blueprint_entry=blueprint_entry,
+            template_spec=template_spec,
+            issues=issues,
+        )
+        blueprint_issue_count += _append_blueprint_compatibility_issues(
+            blueprint_entry=blueprint_entry,
+            issues=issues,
+        )
+
     persisted_schema_valid = None
     persisted_schema_error_count = 0
     compatibility_status = 'not_checked'
     compatibility_issue_count = 0
-    if architecture is not None:
+    if architecture is not None and schema is not None:
+        persisted_shuffle_pair_provider = _persisted_architecture_shuffle_pair_provider(
+            architecture=architecture,
+            fallback=schema.shuffle_pair_provider,
+        )
         persisted_result = validate_persisted_architecture_schema(
             architecture,
-            shuffle_pair_provider=shuffle_2x2_transfer_position_pairs,
+            shuffle_pair_provider=persisted_shuffle_pair_provider,
         )
         persisted_schema_valid = persisted_result.is_valid
         persisted_schema_error_count = len(persisted_result.errors)
@@ -762,7 +1035,7 @@ def _validate_architecture_contract(
             compatibility_result = compare_persisted_architecture_compatibility(
                 architecture,
                 schema,
-                shuffle_pair_provider=shuffle_2x2_transfer_position_pairs,
+                shuffle_pair_provider=persisted_shuffle_pair_provider,
             )
             compatibility_status = compatibility_result.status
             compatibility_issue_count = len(compatibility_result.issues)
@@ -788,38 +1061,80 @@ def _validate_architecture_contract(
                     )
                 )
 
-    template_matrix = _channel_map_matrix(template_spec)
-    if _normalize_matrix(template_matrix) != _normalize_matrix(schema.channel_map_matrix):
-        issues.append(
-            StampingValidationIssue(
-                code='channel_map_mismatch',
-                path='template.template.channel_subinterfaces.channel_map_matrix',
-                message='Template channel map matrix must match the built-in architecture channel map matrix.',
-            )
+    if schema is not None:
+        template_matrix = _channel_map_matrix(template_spec)
+        allocation_override = _allocation_rule_override_metadata(
+            template_spec=template_spec,
+            architecture=architecture,
+            default_matrix=schema.channel_map_matrix,
         )
-
-    matrix_schema = replace(
-        schema,
-        channel_map_matrix=tuple(template_matrix),
-        allocation_rule_sets=_allocation_rules_with_channel_map(schema.allocation_rule_sets, template_matrix),
-    )
-    matrix_result = validate_architecture_schema(matrix_schema)
-    for error in matrix_result.errors:
-        if error.code.startswith('channel_map.') or error.code.startswith('mpo_positions.'):
+        if allocation_override.get('exists') and allocation_override.get('channel_map_matrix'):
+            template_matrix = allocation_override['channel_map_matrix']
+            channel_subinterfaces = template_spec.setdefault('channel_subinterfaces', {})
+            channel_subinterfaces['channel_map_matrix'] = [dict(entry) for entry in template_matrix]
+        elif allocation_override.get('slug') and not allocation_override.get('exists'):
             issues.append(
                 StampingValidationIssue(
-                    code=f'architecture_schema.{error.code}',
-                    path=f'template.template.channel_subinterfaces.{error.path}',
-                    message=error.message,
-                    context=error.context,
+                    code='allocation_rule_override_missing',
+                    path='template.template.allocation_rule_override',
+                    message=(
+                        f'Allocation rule override {allocation_override["slug"]!r} was not found on '
+                        'the target architecture.'
+                    ),
+                    context={'slug': allocation_override['slug']},
                 )
             )
 
+        if allocation_override.get('exists') and allocation_override.get('delta_from_default'):
+            issues.append(
+                StampingValidationIssue(
+                    code='allocation_rule_override_delta',
+                    path='template.template.allocation_rule_override',
+                    message='Allocation rule override changes the architecture default channel map.',
+                    severity='warning',
+                    context=allocation_override,
+                )
+            )
+
+        if (
+            not allocation_override.get('exists')
+            and _normalize_matrix(template_matrix) != _normalize_matrix(schema.channel_map_matrix)
+        ):
+            issues.append(
+                StampingValidationIssue(
+                    code='channel_map_mismatch',
+                    path='template.template.channel_subinterfaces.channel_map_matrix',
+                    message='Template channel map matrix must match the selected blueprint channel map matrix.',
+                )
+            )
+
+        matrix_schema = replace(
+            schema,
+            channel_map_matrix=tuple(template_matrix),
+            allocation_rule_sets=_allocation_rules_with_channel_map(schema.allocation_rule_sets, template_matrix),
+        )
+        matrix_result = validate_architecture_schema(matrix_schema)
+        for error in matrix_result.errors:
+            if error.code.startswith('channel_map.') or error.code.startswith('mpo_positions.'):
+                issues.append(
+                    StampingValidationIssue(
+                        code=f'architecture_schema.{error.code}',
+                        path=f'template.template.channel_subinterfaces.{error.path}',
+                        message=error.message,
+                        context=error.context,
+                    )
+                )
+
     return StampArchitectureGate(
-        fixture_valid=schema_result.is_valid,
-        fixture_error_count=len(schema_result.errors),
+        fixture_valid=schema is not None and not schema_errors,
+        fixture_error_count=len(schema_errors),
         template_architecture_slug=template_architecture_slug,
         template_architecture_version=template_architecture_version,
+        blueprint_source=selected_blueprint.source,
+        blueprint_slug=blueprint_entry.slug if blueprint_entry is not None else None,
+        blueprint_version=blueprint_entry.version if blueprint_entry is not None else None,
+        blueprint_lifecycle=blueprint_entry.lifecycle if blueprint_entry is not None else None,
+        blueprint_issue_count=blueprint_issue_count,
         target_source=target_source,
         target_architecture_id=getattr(architecture, 'pk', None),
         target_architecture_slug=getattr(architecture, 'slug', None) if architecture is not None else None,
@@ -829,6 +1144,275 @@ def _validate_architecture_contract(
         compatibility_status=compatibility_status,
         compatibility_issue_count=compatibility_issue_count,
     )
+
+
+_BLUEPRINT_TOPOLOGY_PARAMETER_KEYS = frozenset(
+    {
+        'plane_count',
+        'gpu_tray_count',
+        'leaf_count_per_plane',
+        'racks_per_pod',
+        'pods_per_fabric',
+    }
+)
+
+
+def _select_blueprint_for_template(
+    *,
+    architecture: FabricArchitecture | None,
+    template_architecture_slug: str | None,
+    template_architecture_version: str | None,
+    issues: list[StampingValidationIssue],
+) -> _SelectedBlueprint:
+    if not template_architecture_slug or not template_architecture_version:
+        issues.append(
+            StampingValidationIssue(
+                code='architecture_gate.blueprint_identity_missing',
+                path='template.template.architecture_slug',
+                message='Template architecture_slug and architecture_version are required to select a blueprint.',
+            )
+        )
+        return _SelectedBlueprint()
+
+    registry = get_default_blueprint_registry()
+    try:
+        return _SelectedBlueprint(
+            entry=registry.get_blueprint(template_architecture_slug, template_architecture_version),
+            source='registry',
+        )
+    except KeyError as exc:
+        lookup_error = exc
+
+    if (
+        architecture is not None
+        and getattr(architecture, 'slug', None) == template_architecture_slug
+        and getattr(architecture, 'version', None) == template_architecture_version
+    ):
+        persisted_entry = _blueprint_entry_from_persisted_architecture(architecture=architecture, issues=issues)
+        if persisted_entry is not None:
+            return _SelectedBlueprint(entry=persisted_entry, source='persisted_architecture')
+
+    lookup_path = _blueprint_lookup_issue_path(
+        registry=registry,
+        slug=template_architecture_slug,
+        version=template_architecture_version,
+    )
+    issues.append(
+        StampingValidationIssue(
+            code='architecture_gate.blueprint_not_registered',
+            path=lookup_path,
+            message=str(lookup_error).strip("'"),
+            context={
+                'architecture_slug': template_architecture_slug,
+                'architecture_version': template_architecture_version,
+            },
+        )
+    )
+
+    return _SelectedBlueprint()
+
+
+def _blueprint_lookup_issue_path(*, registry, slug: str, version: str) -> str:
+    known_slugs = {entry.slug for entry in registry.list_blueprints(include_retired=True)}
+    if slug in known_slugs and version:
+        return 'template.template.architecture_version'
+    return 'template.template.architecture_slug'
+
+
+def _blueprint_entry_from_persisted_architecture(
+    *,
+    architecture: FabricArchitecture,
+    issues: list[StampingValidationIssue],
+) -> BlueprintRegistryEntry | None:
+    metadata = getattr(architecture, 'metadata', None)
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    blueprint_metadata = metadata.get('blueprint')
+    if not isinstance(blueprint_metadata, Mapping):
+        blueprint_metadata = {}
+    definition_payload = blueprint_metadata.get('definition')
+    if not isinstance(definition_payload, Mapping):
+        issues.append(
+            StampingValidationIssue(
+                code='architecture_gate.blueprint_definition_missing',
+                path='architecture.metadata.blueprint.definition',
+                message=(
+                    'Persisted architecture matches the requested template blueprint, but it does not '
+                    'store an importable blueprint definition.'
+                ),
+                context={'architecture_id': getattr(architecture, 'pk', None)},
+            )
+        )
+        return None
+
+    try:
+        definition = architecture_definition_from_payload(
+            definition_payload,
+            shuffle_pair_provider=_shuffle_pair_provider_for_definition_payload(definition_payload),
+        )
+    except ValueError as exc:
+        issues.append(
+            StampingValidationIssue(
+                code='architecture_gate.blueprint_definition_invalid',
+                path='architecture.metadata.blueprint.definition',
+                message=str(exc),
+                context={'architecture_id': getattr(architecture, 'pk', None)},
+            )
+        )
+        return None
+
+    parameter_schema = blueprint_metadata.get('parameter_schema')
+    if not isinstance(parameter_schema, Mapping):
+        parameter_schema = metadata.get('parameter_schema') if isinstance(metadata.get('parameter_schema'), Mapping) else {}
+    required_device_types = blueprint_metadata.get('required_device_types')
+    if not isinstance(required_device_types, Mapping):
+        required_device_types = (
+            metadata.get('required_device_types') if isinstance(metadata.get('required_device_types'), Mapping) else {}
+        )
+    lifecycle = blueprint_metadata.get('lifecycle')
+    if not isinstance(lifecycle, str) or not lifecycle.strip():
+        lifecycle = BLUEPRINT_LIFECYCLE_ACTIVE
+    successor_version = blueprint_metadata.get('successor_version')
+    if not isinstance(successor_version, str):
+        successor_version = ''
+
+    return BlueprintRegistryEntry(
+        definition=definition,
+        parameter_schema=parameter_schema,
+        required_device_types=required_device_types,
+        lifecycle=lifecycle,
+        successor_version=successor_version,
+        metadata={
+            'source': 'persisted_architecture',
+            'architecture_id': getattr(architecture, 'pk', None),
+        },
+    )
+
+
+def _append_blueprint_parameter_issues(
+    *,
+    blueprint_entry: BlueprintRegistryEntry,
+    template_spec: dict,
+    issues: list[StampingValidationIssue],
+) -> int:
+    count = 0
+    parameter_payload = _blueprint_parameter_payload(template_spec)
+    for issue in validate_blueprint_parameters(
+        blueprint_entry.parameter_schema,
+        parameter_payload,
+        path='template.template.blueprint_parameters',
+    ):
+        issues.append(
+            StampingValidationIssue(
+                code=issue.code,
+                path=issue.path,
+                message=issue.message,
+                severity=issue.severity,
+                context=issue.context,
+            )
+        )
+        count += 1
+    return count
+
+
+def _append_blueprint_compatibility_issues(
+    *,
+    blueprint_entry: BlueprintRegistryEntry,
+    issues: list[StampingValidationIssue],
+) -> int:
+    result = check_blueprint_device_type_compatibility(blueprint_entry)
+    for issue in result.issues:
+        severity = issue.severity
+        context = dict(issue.context)
+        if issue.code == 'architecture_gate.missing_device_type':
+            context['registry_severity'] = severity
+            severity = 'warning'
+        issues.append(
+            StampingValidationIssue(
+                code=issue.code,
+                path=issue.path,
+                message=issue.message,
+                severity=severity,
+                context=context,
+            )
+        )
+    return len(result.issues)
+
+
+def _blueprint_parameter_payload(template_spec: dict) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    resolved = template_spec.get('_resolved') if isinstance(template_spec.get('_resolved'), Mapping) else {}
+
+    raw_topology_parameters = template_spec.get('topology_parameters')
+    if isinstance(raw_topology_parameters, Mapping) and raw_topology_parameters:
+        resolved_topology = resolved.get('topology_parameters') if isinstance(resolved.get('topology_parameters'), Mapping) else {}
+        payload['topology_parameters'] = {
+            key: resolved_topology[key]
+            for key in sorted(_BLUEPRINT_TOPOLOGY_PARAMETER_KEYS.intersection(raw_topology_parameters))
+            if key in resolved_topology
+        }
+
+    if isinstance(template_spec.get('wavelength_plan'), Mapping):
+        payload['wavelength_plan'] = dict(template_spec['wavelength_plan'])
+
+    raw_name_patterns = template_spec.get('name_patterns')
+    if isinstance(raw_name_patterns, Mapping) and raw_name_patterns:
+        payload['name_patterns'] = _blueprint_name_pattern_parameters(raw_name_patterns)
+
+    if isinstance(template_spec.get('dark_position_overrides'), Mapping) and template_spec['dark_position_overrides']:
+        resolved_overrides = resolved.get('dark_position_overrides')
+        payload['dark_position_overrides'] = (
+            dict(resolved_overrides)
+            if isinstance(resolved_overrides, Mapping)
+            else dict(template_spec['dark_position_overrides'])
+        )
+
+    if template_spec.get('allocation_rule_override') is not None:
+        payload['allocation_rule_override'] = (
+            resolved.get('allocation_rule_override') or _allocation_rule_override_slug(template_spec)
+        )
+
+    return payload
+
+
+def _blueprint_name_pattern_parameters(raw_name_patterns: Mapping[str, Any]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in raw_name_patterns.items():
+        if isinstance(value, Mapping) and value.get('pattern') is not None:
+            normalized[str(key)] = str(value['pattern'])
+        elif value is not None:
+            normalized[str(key)] = str(value)
+    return normalized
+
+
+def _persisted_architecture_shuffle_pair_provider(*, architecture: FabricArchitecture, fallback):
+    try:
+        entry = get_default_blueprint_registry().get_blueprint(
+            getattr(architecture, 'slug', ''),
+            getattr(architecture, 'version', ''),
+        )
+    except KeyError:
+        return fallback or _shuffle_pair_provider_for_persisted_architecture(architecture)
+    return entry.definition.shuffle_pair_provider or fallback
+
+
+def _shuffle_pair_provider_for_persisted_architecture(architecture: FabricArchitecture):
+    for pattern in architecture.transfer_patterns.all():
+        if pattern.slug == 'shuffle_2x2' or pattern.pattern_kind == 'shuffle_2x2':
+            return shuffle_2x2_transfer_position_pairs
+    return None
+
+
+def _shuffle_pair_provider_for_definition_payload(definition_payload: Mapping[str, Any]):
+    transfer_patterns = definition_payload.get('transfer_patterns')
+    if not isinstance(transfer_patterns, Sequence) or isinstance(transfer_patterns, (str, bytes, bytearray)):
+        return None
+    for pattern in transfer_patterns:
+        if not isinstance(pattern, Mapping):
+            continue
+        if pattern.get('slug') == 'shuffle_2x2' or pattern.get('pattern_kind') == 'shuffle_2x2':
+            return shuffle_2x2_transfer_position_pairs
+    return None
 
 
 def _infer_persisted_architecture_target(*, template, template_spec: dict) -> tuple[FabricArchitecture | None, str]:
@@ -860,6 +1444,54 @@ def _infer_persisted_architecture_target(*, template, template_spec: dict) -> tu
         return None, 'template_spec_not_found'
 
     return None, 'none'
+
+
+def _allocation_rule_override_slug(template_spec: dict) -> str | None:
+    resolved = template_spec.get('_resolved') if isinstance(template_spec.get('_resolved'), Mapping) else {}
+    override = resolved.get('allocation_rule_override')
+    if override:
+        return str(override)
+    raw_override = template_spec.get('allocation_rule_override')
+    if isinstance(raw_override, Mapping):
+        raw_override = raw_override.get('slug')
+    if isinstance(raw_override, str) and raw_override.strip():
+        return raw_override.strip()
+    return None
+
+
+def _allocation_rule_override_metadata(
+    *,
+    template_spec: dict,
+    architecture: FabricArchitecture | None,
+    default_matrix: Sequence[Mapping[str, Any]],
+) -> dict:
+    slug = _allocation_rule_override_slug(template_spec)
+    if not slug:
+        return {}
+    if architecture is None:
+        return {
+            'slug': slug,
+            'exists': False,
+            'target_architecture_id': None,
+        }
+    rule_set = architecture.allocation_rule_sets.filter(slug=slug).first()
+    if rule_set is None:
+        return {
+            'slug': slug,
+            'exists': False,
+            'target_architecture_id': architecture.pk,
+        }
+    rule = rule_set.rule if isinstance(rule_set.rule, Mapping) else {}
+    matrix = [dict(entry) for entry in rule.get('channel_map_matrix') or [] if isinstance(entry, Mapping)]
+    return {
+        'slug': slug,
+        'exists': True,
+        'rule_set_id': rule_set.pk,
+        'rule_set_name': rule_set.name,
+        'target_architecture_id': architecture.pk,
+        'channel_map_matrix': matrix,
+        'delta_from_default': bool(matrix and _normalize_matrix(matrix) != _normalize_matrix(default_matrix)),
+    }
 
 
 def _persisted_architecture_issue_path(path: str) -> str:
@@ -905,7 +1537,8 @@ def _validate_netbox_creation_options(
     if not creation_options.get('enabled'):
         return
 
-    site = creation_options.get('site')
+    ownership = resolve_fabric_ownership(template_spec)
+    site = ownership.get('site') or creation_options.get('site')
     gpu_device_type = creation_options.get('gpu_device_type')
     gpu_role = creation_options.get('gpu_role')
     leaf_device_type = creation_options.get('leaf_device_type') or gpu_device_type
@@ -945,6 +1578,7 @@ def _validate_netbox_creation_options(
 
     for spec in _expected_created_device_specs(
         template_spec=template_spec,
+        fabric_slug=fabric_slug,
         name_prefix=name_prefix,
         site=site,
         gpu_device_type=gpu_device_type,
@@ -992,6 +1626,45 @@ def _validate_source_binding_types(source_bindings: dict, issues: list[StampingV
             )
 
 
+def _validate_fabric_ownership_preview(*, template_spec: dict, issues: list[StampingValidationIssue]) -> None:
+    ownership = resolve_fabric_ownership(template_spec)
+    for key, slug in sorted((ownership.get('missing') or {}).items()):
+        issues.append(
+            StampingValidationIssue(
+                code='fabric_ownership_missing',
+                path=f'template.template.fabric_ownership.{key}',
+                message=f'Fabric ownership reference {key}={slug!r} does not exist in NetBox yet.',
+                severity='warning',
+                context={'field': key, 'slug': slug},
+            )
+        )
+
+
+def _parameter_metadata(template_spec: dict) -> dict:
+    resolved = template_spec.get('_resolved') if isinstance(template_spec.get('_resolved'), Mapping) else {}
+    ownership = resolve_fabric_ownership(template_spec)
+    return {
+        'topology_parameters': resolved.get('topology_parameters') or {},
+        'topology_parameter_metadata': resolved.get('topology_parameter_metadata') or {},
+        'phase': resolved.get('phase'),
+        'active_planes': resolved.get('active_planes') or template_spec.get('planes') or [],
+        'all_planes': resolved.get('all_planes') or template_spec.get('planes') or [],
+        'stamp_phases': resolved.get('stamp_phases') or [],
+        'wavelength_plan': resolved.get('wavelength_plan'),
+        'allocation_rule_override': resolved.get('allocation_rule_override'),
+        'dark_position_overrides': resolved.get('dark_position_overrides') or {},
+        'fabric_ownership': {
+            'requested': ownership.get('requested') or {},
+            'resolved': {
+                key: value
+                for key, value in (ownership.get('resolved') or {}).items()
+                if value not in (None, '')
+            },
+            'missing': ownership.get('missing') or {},
+        },
+    }
+
+
 def _build_preview_changes(
     template_spec: dict,
     template,
@@ -1004,17 +1677,28 @@ def _build_preview_changes(
     creation_options = creation_options or {}
     architecture_id = getattr(template, 'architecture_id', None)
     fabric = Fabric.objects.filter(slug=fabric_slug).first()
+    ownership = resolve_fabric_ownership(template_spec)
+    ownership_after = {
+        key: value
+        for key, value in {
+            'tenant_id': getattr(ownership.get('tenant'), 'pk', None),
+            'scope_site_id': getattr(ownership.get('site'), 'pk', None),
+            'scope_location_id': getattr(ownership.get('location'), 'pk', None),
+        }.items()
+        if value is not None
+    }
     changes.append(
         StampPreviewChange(
             action=_action(fabric),
             object_type='Fabric',
             identity=fabric_slug,
             summary=f'Fabric {fabric_slug}',
-            before=_object_before(fabric, 'name', 'status', 'architecture_id'),
+            before=_object_before(fabric, 'name', 'status', 'architecture_id', 'tenant_id', 'scope_site_id', 'scope_location_id'),
             after={
                 'name': fabric_name,
                 'status': 'planned',
                 'architecture_id': architecture_id,
+                **ownership_after,
             },
         )
     )
@@ -1133,6 +1817,8 @@ def _build_preview_changes(
                 after={
                     'status': 'completed',
                     'operation_key': f'{getattr(template, "pk", None) or "unsaved"}:{fabric_slug}',
+                    'phase': (template_spec.get('_resolved') or {}).get('phase'),
+                    'active_planes': (template_spec.get('_resolved') or {}).get('active_planes') or template_spec.get('planes'),
                 },
             ),
             StampPreviewChange(
@@ -1156,7 +1842,8 @@ def _expected_netbox_source_changes(
     if not _creation_options_are_previewable(creation_options):
         return []
 
-    site = creation_options['site']
+    ownership = resolve_fabric_ownership(template_spec)
+    site = ownership.get('site') or creation_options['site']
     gpu_device_type = creation_options['gpu_device_type']
     gpu_role = creation_options['gpu_role']
     leaf_device_type = creation_options.get('leaf_device_type') or gpu_device_type
@@ -1166,6 +1853,7 @@ def _expected_netbox_source_changes(
     changes: list[StampPreviewChange] = []
     device_specs = _expected_created_device_specs(
         template_spec=template_spec,
+        fabric_slug=fabric_slug,
         name_prefix=name_prefix,
         site=site,
         gpu_device_type=gpu_device_type,
@@ -1203,7 +1891,11 @@ def _expected_netbox_source_changes(
             )
         )
 
-    for spec in _expected_channel_subinterface_specs(template_spec=template_spec, device_specs=device_specs):
+    for spec in _expected_channel_subinterface_specs(
+        template_spec=template_spec,
+        device_specs=device_specs,
+        fabric_slug=fabric_slug,
+    ):
         existing = Interface.objects.filter(device__name=spec['device_name'], name=spec['name']).first()
         changes.append(
             StampPreviewChange(
@@ -1234,6 +1926,7 @@ def _aggregate_existing_child_changes(
     expected_channels = len(_expected_transport_channels(template_spec, fabric_slug=fabric_slug))
     channel_width = max((len(entry.get('positions') or ()) for entry in _channel_map_matrix(template_spec)), default=0)
     expected_paths = len(template_spec.get('proof_paths') or ())
+    transfer_label = 'direct-attach' if _connection_geometry(template_spec) == 'direct_attach' else 'shuffle'
     return [
         StampPreviewChange(
             action='update' if fabric else 'create',
@@ -1262,8 +1955,8 @@ def _aggregate_existing_child_changes(
         StampPreviewChange(
             action='update' if fabric else 'create',
             object_type='TransferMap',
-            identity=f'{fabric_slug}:shuffle-transfer-maps',
-            summary='2x2 shuffle transfer maps are reconciled.',
+            identity=f'{fabric_slug}:{transfer_label}-transfer-maps',
+            summary=f'{transfer_label} transfer maps are reconciled.',
             before={'count': _count_for_fabric(TransferMap, fabric, 'fabric')},
             after={'count': expected_paths},
         ),
@@ -1278,70 +1971,196 @@ def _aggregate_existing_child_changes(
     ]
 
 
+def _resolved_spec(template_spec: dict) -> Mapping[str, Any]:
+    resolved = template_spec.get('_resolved')
+    return resolved if isinstance(resolved, Mapping) else {}
+
+
+def _active_planes(template_spec: dict) -> tuple[int, ...]:
+    return tuple(int(plane) for plane in (_resolved_spec(template_spec).get('active_planes') or template_spec.get('planes') or ()))
+
+
+def _leaf_plane_assignment(template_spec: dict) -> dict[int, int]:
+    assignment = (template_spec.get('leaf_ports') or {}).get('plane_assignment') or {}
+    normalized = {}
+    for raw_leaf, raw_plane in assignment.items():
+        try:
+            normalized[int(raw_leaf)] = int(raw_plane)
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def _leaf_indexes_for_template(template_spec: dict) -> tuple[int, ...]:
+    leaf_count = int((template_spec.get('leaf_ports') or {}).get('count') or 0)
+    assignment = _leaf_plane_assignment(template_spec)
+    active_planes = set(_active_planes(template_spec))
+    if not active_planes:
+        return tuple(range(1, leaf_count + 1))
+    return tuple(
+        leaf_index
+        for leaf_index in range(1, leaf_count + 1)
+        if assignment.get(leaf_index, leaf_index) in active_planes
+    )
+
+
+def _connection_geometry(template_spec: dict) -> str:
+    resolved_geometry = _resolved_spec(template_spec).get('connection_geometry')
+    if isinstance(resolved_geometry, str) and resolved_geometry:
+        return resolved_geometry
+    raw_geometry = template_spec.get('connection_geometry') or template_spec.get('transfer_geometry')
+    if isinstance(raw_geometry, str) and raw_geometry:
+        return raw_geometry
+    return 'shuffle_2x2'
+
+
+def _node_address_prefix(template_spec: dict, group_name: str, fallback: str) -> str:
+    group_spec = template_spec.get(group_name) or {}
+    if isinstance(group_spec, Mapping):
+        raw_prefix = group_spec.get('address_prefix')
+        if isinstance(raw_prefix, str) and raw_prefix.strip():
+            return raw_prefix.strip()
+    return fallback
+
+
+def _gpu_node_address(template_spec: dict, index: int) -> str:
+    return f'{_node_address_prefix(template_spec, "gpu_tray", "GB300-TRAY")}-{index}'
+
+
+def _leaf_node_address(template_spec: dict, index: int) -> str:
+    return f'{_node_address_prefix(template_spec, "leaf_ports", "LEAF")}-{index}'
+
+
+def _mpo_connector_kind(template_spec: dict) -> str:
+    position_count = int((template_spec.get('gpu_tray') or {}).get('positions_per_mpo') or 12)
+    if position_count in {8, 12, 16, 24}:
+        return f'mpo-{position_count}'
+    return 'other'
+
+
+def _name_pattern(template_spec: dict, role_kind: str, fallback: str) -> str:
+    patterns = _resolved_spec(template_spec).get('name_patterns') or {}
+    raw_pattern = patterns.get(role_kind) or patterns.get('device' if role_kind in {'gpu_tray', 'leaf_switch'} else '')
+    if isinstance(raw_pattern, Mapping) and raw_pattern.get('pattern'):
+        return str(raw_pattern['pattern'])
+    return fallback
+
+
+def _name_pattern_context(
+    *,
+    fabric_slug: str,
+    node_address: str,
+    tray_index: int = 1,
+    plane_index: int = 1,
+    port_index: int = 1,
+    channel_index: int = 1,
+    rack_id: int = 1,
+    parent_name: str = '',
+) -> dict:
+    return {
+        'rack_id': rack_id,
+        'tray_index': tray_index,
+        'plane_index': plane_index,
+        'port_index': port_index,
+        'channel_index': channel_index,
+        'node_address': node_address,
+        'fabric_slug': fabric_slug,
+        'parent_name': parent_name,
+    }
+
+
+def _render_name_pattern(pattern: str, context: Mapping[str, Any]) -> str:
+    return pattern.format(**context)
+
+
+def _local_index_from_address(address: str) -> int:
+    try:
+        return int(str(address).rsplit('-', 1)[1])
+    except (IndexError, TypeError, ValueError):
+        return 1
+
+
+def _osfp_index_from_endpoint(address: str) -> int:
+    marker = '.OSFP-'
+    if marker not in str(address):
+        return 1
+    raw_value = str(address).split(marker, 1)[1].split('.', 1)[0]
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+
+
 def _expected_node_specs(template_spec: dict) -> list[dict]:
-    nodes = [
-        {'address': 'GB300-TRAY-1', 'name': 'GB300-TRAY-1', 'node_kind': 'active_device', 'local_index': 1},
-    ]
-    for cassette in range(1, template_spec['shuffle_cassettes']['count'] + 1):
-        nodes.append(
-            {
-                'address': f'SHUFFLE-CASSETTE-{cassette}',
-                'name': f'SHUFFLE-CASSETTE-{cassette}',
-                'node_kind': 'passive_assembly',
-                'local_index': cassette,
-            }
-        )
-    for leaf in range(1, template_spec['leaf_ports']['count'] + 1):
-        nodes.append(
-            {'address': f'LEAF-{leaf}', 'name': f'LEAF-{leaf}', 'node_kind': 'active_device', 'local_index': leaf}
-        )
+    nodes = []
+    gpu_count = int((template_spec.get('gpu_tray') or {}).get('count') or 0)
+    for tray in range(1, gpu_count + 1):
+        address = _gpu_node_address(template_spec, tray)
+        nodes.append({'address': address, 'name': address, 'node_kind': 'active_device', 'local_index': tray})
+    if _connection_geometry(template_spec) != 'direct_attach':
+        for cassette in range(1, template_spec['shuffle_cassettes']['count'] + 1):
+            nodes.append(
+                {
+                    'address': f'SHUFFLE-CASSETTE-{cassette}',
+                    'name': f'SHUFFLE-CASSETTE-{cassette}',
+                    'node_kind': 'passive_assembly',
+                    'local_index': cassette,
+                }
+            )
+    for leaf in _leaf_indexes_for_template(template_spec):
+        address = _leaf_node_address(template_spec, leaf)
+        nodes.append({'address': address, 'name': address, 'node_kind': 'active_device', 'local_index': leaf})
     return nodes
 
 
 def _expected_endpoint_specs(template_spec: dict) -> list[dict]:
     endpoints: list[dict] = []
     gpu_spec = template_spec['gpu_tray']
-    shuffle_spec = template_spec['shuffle_cassettes']
+    shuffle_spec = template_spec.get('shuffle_cassettes') or {}
+    connector_kind = _mpo_connector_kind(template_spec)
 
-    for osfp in range(1, gpu_spec['osfp_count'] + 1):
-        osfp_address = f'GB300-TRAY-1.OSFP-{osfp}'
-        endpoints.append(_endpoint_spec(osfp_address, f'OSFP-{osfp}', 'plugin_port', 'osfp'))
-        for mpo in range(1, gpu_spec['mpo_per_osfp'] + 1):
-            endpoints.append(
-                _endpoint_spec(
-                    f'{osfp_address}.MPO-{mpo}',
-                    f'OSFP-{osfp}.MPO-{mpo}',
-                    'subconnector',
-                    'mpo-12',
-                    gpu_spec['positions_per_mpo'],
+    for tray in range(1, gpu_spec['count'] + 1):
+        tray_address = _gpu_node_address(template_spec, tray)
+        for osfp in range(1, gpu_spec['osfp_count'] + 1):
+            osfp_address = f'{tray_address}.OSFP-{osfp}'
+            endpoints.append(_endpoint_spec(osfp_address, f'OSFP-{osfp}', 'plugin_port', 'osfp'))
+            for mpo in range(1, gpu_spec['mpo_per_osfp'] + 1):
+                endpoints.append(
+                    _endpoint_spec(
+                        f'{osfp_address}.MPO-{mpo}',
+                        f'OSFP-{osfp}.MPO-{mpo}',
+                        'subconnector',
+                        connector_kind,
+                        gpu_spec['positions_per_mpo'],
+                    )
                 )
-            )
 
-    for cassette in range(1, shuffle_spec['count'] + 1):
-        base = f'SHUFFLE-CASSETTE-{cassette}'
-        for mpo in range(1, shuffle_spec['front_mpo_count'] + 1):
-            endpoints.append(
-                _endpoint_spec(
-                    f'{base}.FRONT.MPO-{mpo}',
-                    f'FRONT.MPO-{mpo}',
-                    'connector',
-                    'mpo-12',
-                    shuffle_spec['positions_per_mpo'],
+    if _connection_geometry(template_spec) != 'direct_attach':
+        for cassette in range(1, shuffle_spec['count'] + 1):
+            base = f'SHUFFLE-CASSETTE-{cassette}'
+            for mpo in range(1, shuffle_spec['front_mpo_count'] + 1):
+                endpoints.append(
+                    _endpoint_spec(
+                        f'{base}.FRONT.MPO-{mpo}',
+                        f'FRONT.MPO-{mpo}',
+                        'connector',
+                        'mpo-12',
+                        shuffle_spec['positions_per_mpo'],
+                    )
                 )
-            )
-        for mpo in range(1, shuffle_spec['rear_mpo_count'] + 1):
-            endpoints.append(
-                _endpoint_spec(
-                    f'{base}.REAR.MPO-{mpo}',
-                    f'REAR.MPO-{mpo}',
-                    'connector',
-                    'mpo-12',
-                    shuffle_spec['positions_per_mpo'],
+            for mpo in range(1, shuffle_spec['rear_mpo_count'] + 1):
+                endpoints.append(
+                    _endpoint_spec(
+                        f'{base}.REAR.MPO-{mpo}',
+                        f'REAR.MPO-{mpo}',
+                        'connector',
+                        'mpo-12',
+                        shuffle_spec['positions_per_mpo'],
+                    )
                 )
-            )
 
-    for leaf in range(1, template_spec['leaf_ports']['count'] + 1):
-        osfp_address = f'LEAF-{leaf}.OSFP-1'
+    for leaf in _leaf_indexes_for_template(template_spec):
+        osfp_address = f'{_leaf_node_address(template_spec, leaf)}.OSFP-1'
         endpoints.append(_endpoint_spec(osfp_address, 'OSFP-1', 'plugin_port', 'osfp'))
         for mpo in range(1, gpu_spec['mpo_per_osfp'] + 1):
             endpoints.append(
@@ -1349,7 +2168,7 @@ def _expected_endpoint_specs(template_spec: dict) -> list[dict]:
                     f'{osfp_address}.MPO-{mpo}',
                     f'OSFP-1.MPO-{mpo}',
                     'subconnector',
-                    'mpo-12',
+                    connector_kind,
                     gpu_spec['positions_per_mpo'],
                 )
             )
@@ -1376,8 +2195,9 @@ def _expected_transport_channels(template_spec: dict, *, fabric_slug: str) -> li
     channels = []
     seen = set()
     for proof_path in template_spec['proof_paths']:
-        gpu_endpoint = f'GB300-TRAY-1.OSFP-{proof_path["gpu_osfp"]}'
-        leaf_endpoint = f'LEAF-{proof_path["leaf"]}.OSFP-1'
+        gpu_tray = int(proof_path.get('gpu_tray') or 1)
+        gpu_endpoint = f'{_gpu_node_address(template_spec, gpu_tray)}.OSFP-{proof_path["gpu_osfp"]}'
+        leaf_endpoint = f'{_leaf_node_address(template_spec, proof_path["leaf"])}.OSFP-1'
         for endpoint_address, position, label in (
             (gpu_endpoint, proof_path['front_position'], 'GPU'),
             (leaf_endpoint, proof_path['rear_position'], 'Leaf'),
@@ -1402,14 +2222,18 @@ def _expected_segment_names(template_spec: dict) -> list[str]:
     names = []
     for proof_path in template_spec['proof_paths']:
         plane = proof_path['plane']
-        names.append(f'P{plane}-GPU-to-SHUFFLE')
-        names.append(f'P{plane}-SHUFFLE-to-LEAF')
+        if _connection_geometry(template_spec) == 'direct_attach':
+            names.append(f'P{plane}-GPU-to-LEAF')
+        else:
+            names.append(f'P{plane}-GPU-to-SHUFFLE')
+            names.append(f'P{plane}-SHUFFLE-to-LEAF')
     return names
 
 
 def _expected_created_device_specs(
     *,
     template_spec: dict,
+    fabric_slug: str,
     name_prefix: str,
     site: Site,
     gpu_device_type: DeviceType,
@@ -1417,23 +2241,46 @@ def _expected_created_device_specs(
     leaf_device_type: DeviceType,
     leaf_role: DeviceRole,
 ) -> list[dict]:
-    specs = [
-        {
-            'address': 'GB300-TRAY-1',
-            'device_kind': 'gpu',
-            'name': _netbox_name(name_prefix, 'GB300-TRAY-1'),
-            'site': site,
-            'device_type': gpu_device_type,
-            'role': gpu_role,
-        }
-    ]
-    for leaf in range(1, template_spec['leaf_ports']['count'] + 1):
-        address = f'LEAF-{leaf}'
+    specs = []
+    gpu_count = int((template_spec.get('gpu_tray') or {}).get('count') or 0)
+    for tray in range(1, gpu_count + 1):
+        address = _gpu_node_address(template_spec, tray)
+        specs.append(
+            {
+                'address': address,
+                'device_kind': 'gpu',
+                'name': _render_name_pattern(
+                    _name_pattern(template_spec, 'gpu_tray', _netbox_name(name_prefix, address)),
+                    _name_pattern_context(
+                        fabric_slug=fabric_slug,
+                        node_address=address,
+                        tray_index=tray,
+                        rack_id=tray,
+                    ),
+                ),
+                'site': site,
+                'device_type': gpu_device_type,
+                'role': gpu_role,
+            }
+        )
+    assignment = _leaf_plane_assignment(template_spec)
+    for leaf in _leaf_indexes_for_template(template_spec):
+        address = _leaf_node_address(template_spec, leaf)
         specs.append(
             {
                 'address': address,
                 'device_kind': 'leaf',
-                'name': _netbox_name(name_prefix, address),
+                'name': _render_name_pattern(
+                    _name_pattern(template_spec, 'leaf_switch', _netbox_name(name_prefix, address)),
+                    _name_pattern_context(
+                        fabric_slug=fabric_slug,
+                        node_address=address,
+                        tray_index=1,
+                        plane_index=assignment.get(leaf, leaf),
+                        port_index=leaf,
+                        rack_id=leaf,
+                    ),
+                ),
                 'site': site,
                 'device_type': leaf_device_type,
                 'role': leaf_role,
@@ -1479,6 +2326,7 @@ def _expected_channel_subinterface_specs(
     *,
     template_spec: dict,
     device_specs: Sequence[Mapping[str, Any]],
+    fabric_slug: str,
 ) -> list[dict]:
     channel_spec = template_spec.get('channel_subinterfaces') or {}
     if not channel_spec.get('enabled'):
@@ -1492,7 +2340,7 @@ def _expected_channel_subinterface_specs(
     if not indexes:
         return []
 
-    name_pattern = channel_spec.get('name_pattern') or '{parent_name}/{channel_index}'
+    name_pattern = _name_pattern(template_spec, 'channel_subinterface', channel_spec.get('name_pattern') or '{parent_name}/{channel_index}')
     interface_type = channel_spec.get('type') or 'virtual'
     speed_gbps = int(channel_spec.get('speed_gbps') or 200)
     specs: list[dict] = []
@@ -1505,9 +2353,17 @@ def _expected_channel_subinterface_specs(
                     'parent_endpoint_address': interface_spec['endpoint_address'],
                     'parent_name': interface_spec['name'],
                     'channel_index': channel_index,
-                    'name': name_pattern.format(
-                        parent_name=interface_spec['name'],
-                        channel_index=channel_index,
+                    'name': _render_name_pattern(
+                        name_pattern,
+                        _name_pattern_context(
+                            fabric_slug=fabric_slug,
+                            node_address=interface_spec['device_address'],
+                            tray_index=_local_index_from_address(interface_spec['device_address']),
+                            plane_index=channel_index,
+                            port_index=_osfp_index_from_endpoint(interface_spec['endpoint_address']),
+                            channel_index=channel_index,
+                            parent_name=interface_spec['name'],
+                        ),
                     ),
                     'type': interface_type,
                     'speed_gbps': speed_gbps,
@@ -1522,13 +2378,15 @@ def _build_name_pattern_samples(
     fabric_slug: str,
     creation_options: dict,
 ) -> list[StampNamePatternSample]:
+    samples = _generic_name_pattern_samples(template_spec=template_spec, fabric_slug=fabric_slug)
     if not _creation_options_are_previewable(creation_options):
-        return []
+        return samples
     required_sections = ('gpu_tray', 'leaf_ports', 'channel_subinterfaces')
     if any(not isinstance(template_spec.get(section), Mapping) for section in required_sections):
-        return []
+        return samples
 
-    site = creation_options['site']
+    ownership = resolve_fabric_ownership(template_spec)
+    site = ownership.get('site') or creation_options['site']
     gpu_device_type = creation_options['gpu_device_type']
     gpu_role = creation_options['gpu_role']
     leaf_device_type = creation_options.get('leaf_device_type') or gpu_device_type
@@ -1536,6 +2394,7 @@ def _build_name_pattern_samples(
     name_prefix = creation_options.get('name_prefix') or fabric_slug
     device_specs = _expected_created_device_specs(
         template_spec=template_spec,
+        fabric_slug=fabric_slug,
         name_prefix=name_prefix,
         site=site,
         gpu_device_type=gpu_device_type,
@@ -1544,7 +2403,6 @@ def _build_name_pattern_samples(
         leaf_role=leaf_role,
     )
 
-    samples: list[StampNamePatternSample] = []
     for spec in device_specs:
         existing = Device.objects.filter(name=spec['name']).first()
         collision = bool(
@@ -1579,7 +2437,11 @@ def _build_name_pattern_samples(
             )
         )
 
-    for spec in _expected_channel_subinterface_specs(template_spec=template_spec, device_specs=device_specs):
+    for spec in _expected_channel_subinterface_specs(
+        template_spec=template_spec,
+        device_specs=device_specs,
+        fabric_slug=fabric_slug,
+    ):
         existing = Interface.objects.filter(device__name=spec['device_name'], name=spec['name']).first()
         samples.append(
             StampNamePatternSample(
@@ -1591,6 +2453,41 @@ def _build_name_pattern_samples(
                 existing_object_id=existing.pk if existing else None,
             )
         )
+    return samples
+
+
+def _generic_name_pattern_samples(*, template_spec: dict, fabric_slug: str) -> list[StampNamePatternSample]:
+    patterns = _resolved_spec(template_spec).get('name_patterns') or {}
+    samples: list[StampNamePatternSample] = []
+    for role_kind, pattern_spec in patterns.items():
+        if not isinstance(pattern_spec, Mapping):
+            continue
+        pattern = pattern_spec.get('pattern')
+        if not pattern:
+            continue
+        sample_count = int(pattern_spec.get('sample_count') or 3)
+        for index in range(1, sample_count + 1):
+            node_address = (
+                _gpu_node_address(template_spec, 1)
+                if role_kind in {'gpu_tray', 'device'}
+                else _leaf_node_address(template_spec, index)
+            )
+            context = _name_pattern_context(
+                fabric_slug=fabric_slug,
+                node_address=node_address,
+                rack_id=index,
+                tray_index=index,
+                plane_index=index,
+                port_index=index,
+                channel_index=index,
+            )
+            samples.append(
+                StampNamePatternSample(
+                    object_type=f'NamePattern:{role_kind}',
+                    address=f'{role_kind}:sample-{index}',
+                    name=_render_name_pattern(str(pattern), context),
+                )
+            )
     return samples
 
 

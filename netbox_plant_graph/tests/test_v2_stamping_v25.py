@@ -4,7 +4,9 @@ from django.test import TestCase
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
 from netbox_plant_graph.models import (
+    AllocationRuleSet,
     ArchitectureRole,
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -14,12 +16,15 @@ from netbox_plant_graph.models import (
     OpticalLane,
     Plane,
     StampRun,
+    StampTemplate,
     StrandTermination,
     SuppressionRule,
     TransferMap,
+    TransportChannel,
     TransportChannelPositionMap,
 )
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
+from netbox_plant_graph.services.blueprint_registry import get_default_blueprint_registry
 from netbox_plant_graph.services.architecture_schema import (
     ARCHITECTURE_COMPATIBILITY_COMPATIBLE,
     ARCHITECTURE_COMPATIBILITY_INCOMPATIBLE,
@@ -90,6 +95,71 @@ class V2StampingV25TestCase(TestCase):
         self.assertEqual(preview.architecture_gate.compatibility_status, ARCHITECTURE_COMPATIBILITY_COMPATIBLE)
         self.assertEqual(preview.architecture_gate.compatibility_issue_count, 0)
 
+    def test_preview_selects_non_gb300_registry_blueprint_without_legacy_rejection(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        entry = get_default_blueprint_registry().get_blueprint('roce-4-plane-h100-direct-attach', 'v2')
+        template_spec = deepcopy(fixture.stamp_template.template)
+        template_spec['architecture_slug'] = entry.slug
+        template_spec['architecture_version'] = entry.version
+        template_spec['channel_subinterfaces'] = {
+            **template_spec['channel_subinterfaces'],
+            'channel_map_matrix': [dict(item) for item in entry.definition.channel_map_matrix],
+        }
+        template = StampTemplate.objects.create(
+            name='H100 registry preview template',
+            slug='h100-registry-preview-template',
+            template=template_spec,
+        )
+
+        preview = preview_stamp_template_v25(
+            template=template,
+            fabric_name='H100 registry proof',
+            fabric_slug='h100-registry-proof',
+        )
+
+        self.assertTrue(preview.is_valid, [str(issue) for issue in preview.issues if issue.severity == 'error'])
+        self.assertEqual(preview.architecture_gate.blueprint_source, 'registry')
+        self.assertEqual(preview.architecture_gate.blueprint_slug, 'roce-4-plane-h100-direct-attach')
+        self.assertFalse(preview.issues_for_code('unsupported_architecture'))
+        self.assertFalse(preview.issues_for_code('unsupported_architecture_version'))
+
+    def test_preview_surfaces_blueprint_parameter_schema_violations(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template_spec = deepcopy(fixture.stamp_template.template)
+        template_spec['planes'] = [1, 2, 3, 4, 5]
+        template_spec['topology_parameters'] = {'plane_count': 5}
+        fixture.stamp_template.template = template_spec
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Blueprint parameter proof',
+            fabric_slug='blueprint-parameter-proof',
+        )
+
+        self.assertFalse(preview.is_valid)
+        self.assertValidationIssue(
+            preview,
+            'blueprint_parameter.maximum',
+            'template.template.blueprint_parameters.topology_parameters.plane_count',
+        )
+
+    def test_preview_surfaces_missing_required_blueprint_device_types(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Blueprint device type proof',
+            fabric_slug='blueprint-device-type-proof',
+        )
+
+        self.assertTrue(preview.is_valid, [str(issue) for issue in preview.issues if issue.severity == 'error'])
+        self.assertValidationIssue(
+            preview,
+            'architecture_gate.missing_device_type',
+            'required_device_types.gpu_tray',
+            severity='warning',
+        )
+
     def test_preview_blocks_persisted_architecture_schema_errors_before_apply(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
         fixture.allocation_rule_sets['channel_subinterface_mapping'].delete()
@@ -155,10 +225,10 @@ class V2StampingV25TestCase(TestCase):
         )
 
         self.assertFalse(preview.is_valid)
-        self.assertEqual(preview.architecture_gate.compatibility_status, ARCHITECTURE_COMPATIBILITY_COMPATIBLE)
+        self.assertEqual(preview.architecture_gate.compatibility_status, 'not_checked')
         self.assertValidationIssue(
             preview,
-            'unsupported_architecture_version',
+            'architecture_gate.blueprint_not_registered',
             'template.template.architecture_version',
         )
         with self.assertRaises(StampValidationError):
@@ -303,6 +373,119 @@ class V2StampingV25TestCase(TestCase):
             'template.template.channel_subinterfaces.channel_map_matrix.mpo[1]',
         )
 
+    def test_preview_exposes_tier2_parameter_metadata_and_name_pattern_samples(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = deepcopy(fixture.stamp_template.template)
+        template['planes'] = [1, 2]
+        template['topology_parameters'] = {
+            'plane_count': {'value': 2, 'min': 1, 'max': 4},
+            'gpu_tray_count': 1,
+            'leaf_count_per_plane': 1,
+        }
+        template['proof_paths'] = [dict(item) for item in template['proof_paths'] if item['plane'] in {1, 2}]
+        template['stamp_phases'] = [
+            {'name': 'phase-a', 'planes': [1]},
+            {'name': 'phase-b', 'planes': [2]},
+        ]
+        template['name_patterns'] = {
+            'channel_subinterface': 'e{rack_id}-{tray_index}.{port_index}.{channel_index}',
+        }
+        fixture.stamp_template.template = template
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Tier2 preview proof',
+            fabric_slug='tier2-preview-proof',
+            phase='phase-a',
+        )
+
+        self.assertTrue(preview.is_valid, [str(issue) for issue in preview.issues])
+        self.assertEqual(preview.parameter_metadata['topology_parameters']['plane_count'], 2)
+        self.assertEqual(preview.parameter_metadata['phase'], {'name': 'phase-a', 'planes': [1]})
+        self.assertEqual(preview.parameter_metadata['active_planes'], [1])
+        self.assertIn(
+            ('NamePattern:channel_subinterface', 'channel_subinterface:sample-1', 'e1-1.1.1'),
+            {
+                (sample.object_type, sample.address, sample.name)
+                for sample in preview.name_pattern_samples
+            },
+        )
+
+    def test_preview_warns_for_missing_fabric_ownership_reference(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = deepcopy(fixture.stamp_template.template)
+        template['fabric_ownership'] = {
+            'tenant_slug': 'missing-tenant',
+        }
+        fixture.stamp_template.template = template
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Missing ownership proof',
+            fabric_slug='missing-ownership-proof',
+        )
+
+        self.assertTrue(preview.is_valid, [str(issue) for issue in preview.issues if issue.severity == 'error'])
+        self.assertValidationIssue(
+            preview,
+            'fabric_ownership_missing',
+            'template.template.fabric_ownership.tenant_slug',
+            severity='warning',
+        )
+        self.assertEqual(preview.parameter_metadata['fabric_ownership']['missing']['tenant_slug'], 'missing-tenant')
+
+    def test_preview_blocks_missing_allocation_rule_override(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = deepcopy(fixture.stamp_template.template)
+        template['allocation_rule_override'] = 'missing-rule-set'
+        fixture.stamp_template.template = template
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Missing allocation override proof',
+            fabric_slug='missing-allocation-override-proof',
+        )
+
+        self.assertFalse(preview.is_valid)
+        self.assertValidationIssue(
+            preview,
+            'allocation_rule_override_missing',
+            'template.template.allocation_rule_override',
+        )
+        self.assertEqual(preview.parameter_metadata['allocation_rule_override'], 'missing-rule-set')
+
+    def test_preview_warns_when_allocation_rule_override_changes_channel_map(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        channel_spec = deepcopy(fixture.stamp_template.template['channel_subinterfaces'])
+        shifted_matrix = deepcopy(channel_spec['channel_map_matrix'])
+        shifted_matrix[0]['subinterface_index'] = 2
+        shifted_matrix[1]['subinterface_index'] = 1
+        AllocationRuleSet.objects.create(
+            architecture=fixture.architecture,
+            name='Shifted channel map',
+            slug='shifted-channel-map',
+            rule={
+                'channel_map_matrix': shifted_matrix,
+            },
+        )
+        template = deepcopy(fixture.stamp_template.template)
+        template['allocation_rule_override'] = 'shifted-channel-map'
+        fixture.stamp_template.template = template
+
+        preview = preview_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Shifted allocation proof',
+            fabric_slug='shifted-allocation-proof',
+        )
+
+        self.assertTrue(preview.is_valid, [str(issue) for issue in preview.issues if issue.severity == 'error'])
+        self.assertValidationIssue(
+            preview,
+            'allocation_rule_override_delta',
+            'template.template.allocation_rule_override',
+            severity='warning',
+        )
+
     def test_preview_catches_netbox_device_name_collision_risk(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
         manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia')
@@ -375,6 +558,64 @@ class V2StampingV25TestCase(TestCase):
         self.assertEqual(rollback.strategy, 'managed_object_compensation')
         self.assertEqual(rollback.stamp_run_id, second.execution.stamp_run.pk)
         self.assertValidationIssue(rollback, 'rollback_shared_fabric_stamp_runs', 'stamp_run.fabric')
+
+    def test_phase_scoped_rollback_allows_phase_two_while_phase_one_run_remains(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = deepcopy(fixture.stamp_template.template)
+        template['planes'] = [1, 2]
+        template['topology_parameters'] = {
+            'plane_count': {'value': 2, 'min': 1, 'max': 4},
+            'gpu_tray_count': 1,
+            'leaf_count_per_plane': 1,
+        }
+        template['proof_paths'] = [dict(item) for item in template['proof_paths'] if item['plane'] in {1, 2}]
+        template['stamp_phases'] = [
+            {'name': 'phase-a', 'planes': [1]},
+            {'name': 'phase-b', 'planes': [2]},
+        ]
+        fixture.stamp_template.template = template
+
+        phase_a = apply_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Phase rollback proof',
+            fabric_slug='phase-rollback-proof',
+            phase='phase-a',
+        )
+        fabric = phase_a.execution.fabric
+        after_phase_a_ids = self._managed_ids()
+        phase_b = apply_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='Phase rollback proof',
+            fabric_slug='phase-rollback-proof',
+            phase='phase-b',
+        )
+
+        broad_preview = rollback_stamp_run_v25(stamp_run=phase_b.execution.stamp_run)
+        self.assertFalse(broad_preview.supported)
+        self.assertValidationIssue(broad_preview, 'rollback_shared_fabric_stamp_runs', 'stamp_run.fabric')
+        shared_issue = next(issue for issue in broad_preview.issues if issue.code == 'rollback_shared_fabric_stamp_runs')
+        self.assertEqual(shared_issue.context['reason'], 'manifest_not_phase_scoped')
+
+        self._scope_stamp_run_to_new_managed_objects(phase_b.execution.stamp_run, after_phase_a_ids)
+        scoped_preview = rollback_stamp_run_v25(stamp_run=phase_b.execution.stamp_run)
+
+        self.assertTrue(scoped_preview.supported, [str(issue) for issue in scoped_preview.issues])
+        self.assertFalse(scoped_preview.issues_for_code('rollback_shared_fabric_stamp_runs'))
+        self.assertFalse(
+            any(item.model_label == 'netbox_plant_graph.fabric' for item in scoped_preview.manifest),
+            [item.natural_key for item in scoped_preview.manifest],
+        )
+
+        applied = rollback_stamp_run_v25(stamp_run=phase_b.execution.stamp_run, apply=True)
+
+        self.assertTrue(applied.applied)
+        self.assertTrue(Fabric.objects.filter(pk=fabric.pk).exists())
+        self.assertTrue(StampRun.objects.filter(pk=phase_a.execution.stamp_run.pk, fabric=fabric).exists())
+        self.assertTrue(StampRun.objects.filter(pk=phase_b.execution.stamp_run.pk, fabric=fabric).exists())
+        self.assertTrue(Plane.objects.filter(fabric=fabric, plane_number=1).exists())
+        self.assertFalse(Plane.objects.filter(fabric=fabric, plane_number=2).exists())
+        self.assertTrue(OpticalLane.objects.filter(fabric=fabric, plane__plane_number=1).exists())
+        self.assertFalse(OpticalLane.objects.filter(fabric=fabric, plane__plane_number=2).exists())
 
     def test_rollback_preview_manifest_and_apply_delete_plugin_owned_stamp(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -519,3 +760,36 @@ class V2StampingV25TestCase(TestCase):
             'channel_position_maps': TransportChannelPositionMap.objects.filter(channel__fabric=fabric).count(),
             'lanes': OpticalLane.objects.filter(fabric=fabric).count(),
         }
+
+    def _managed_ids(self):
+        return {
+            'fabrics': set(Fabric.objects.values_list('pk', flat=True)),
+            'planes': set(Plane.objects.values_list('pk', flat=True)),
+            'nodes': set(FabricNode.objects.values_list('pk', flat=True)),
+            'endpoints': set(Endpoint.objects.values_list('pk', flat=True)),
+            'connector_positions': set(ConnectorPosition.objects.values_list('pk', flat=True)),
+            'transport_channels': set(TransportChannel.objects.values_list('pk', flat=True)),
+            'transport_channel_position_maps': set(TransportChannelPositionMap.objects.values_list('pk', flat=True)),
+            'fiber_segments': set(FiberSegment.objects.values_list('pk', flat=True)),
+            'cable_assemblies': set(CableAssembly.objects.values_list('pk', flat=True)),
+            'fiber_strands': set(FiberStrand.objects.values_list('pk', flat=True)),
+            'strand_terminations': set(StrandTermination.objects.values_list('pk', flat=True)),
+            'transfer_maps': set(TransferMap.objects.values_list('pk', flat=True)),
+            'optical_lanes': set(OpticalLane.objects.values_list('pk', flat=True)),
+        }
+
+    def _scope_stamp_run_to_new_managed_objects(self, stamp_run, before_ids):
+        result = deepcopy(stamp_run.result)
+        scoped_managed = {}
+        for key, raw_ids in (result.get('managed_objects') or {}).items():
+            previous_ids = before_ids.get(key, set())
+            scoped_managed[key] = [
+                int(primary_key)
+                for primary_key in raw_ids
+                if int(primary_key) not in previous_ids
+            ]
+        result['managed_objects'] = scoped_managed
+        result['object_counts'] = {key: len(value) for key, value in scoped_managed.items()}
+        stamp_run.result = result
+        stamp_run.save(update_fields=['result'])
+        stamp_run.refresh_from_db()

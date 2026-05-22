@@ -145,6 +145,81 @@ class OperationalImpactReportResponseSerializer(serializers.Serializer):
     hierarchy = serializers.ListField(child=serializers.JSONField())
 
 
+class ArchitectureSourceArtifactAttachRequestSerializer(serializers.Serializer):
+    artifact_type = serializers.CharField(required=False, allow_blank=True, default='api_payload')
+    name = serializers.CharField()
+    source_uri = serializers.CharField(required=False, allow_blank=True, default='')
+    raw_payload = serializers.JSONField(required=False, default=dict)
+    payload_version = serializers.CharField(required=False, allow_blank=True, default='')
+    source_label = serializers.CharField(required=False, allow_blank=True, default='')
+    parser_key = serializers.CharField(required=False, allow_blank=True, default='')
+    metadata = serializers.JSONField(required=False, default=dict)
+
+    def validate_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('metadata must be an object.')
+        return value
+
+
+class ArchitecturePublishPlanApproveRequestSerializer(serializers.Serializer):
+    warning_acknowledgements = serializers.ListField(
+        child=serializers.JSONField(),
+        required=False,
+        default=list,
+    )
+
+
+class OnboardingSourceArtifactAttachRequestSerializer(serializers.Serializer):
+    artifact_type = serializers.CharField(required=False, allow_blank=True, default='api_payload')
+    name = serializers.CharField()
+    source_uri = serializers.CharField(required=False, allow_blank=True, default='')
+    raw_payload = serializers.JSONField(required=False, default=dict)
+    payload_version = serializers.CharField(required=False, allow_blank=True, default='')
+    source_label = serializers.CharField(required=False, allow_blank=True, default='')
+    parser_key = serializers.CharField(required=False, allow_blank=True, default='')
+    metadata = serializers.JSONField(required=False, default=dict)
+
+    def validate_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('metadata must be an object.')
+        return value
+
+
+class OnboardingPrerequisiteResolveRequestSerializer(serializers.Serializer):
+    resolution_mode = serializers.CharField()
+    object_model = serializers.CharField(required=False, allow_blank=True, default='')
+    object_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    planned_create = serializers.JSONField(required=False, default=dict)
+    defer_reason = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class OnboardingPlanApproveRequestSerializer(serializers.Serializer):
+    warning_acknowledgements = serializers.ListField(
+        child=serializers.JSONField(),
+        required=False,
+        default=list,
+    )
+
+
+class OnboardingPlanApplyRequestSerializer(serializers.Serializer):
+    stages = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+    )
+
+
+class OnboardingWorkflowResponseSerializer(serializers.Serializer):
+    workspace = serializers.JSONField(required=False)
+    plan = serializers.JSONField(required=False)
+    artifact = serializers.JSONField(required=False)
+    prerequisite = serializers.JSONField(required=False)
+    result = serializers.JSONField(required=False)
+    summary = serializers.JSONField(required=False)
+    issues = serializers.ListField(child=serializers.JSONField(), required=False)
+    next_actions = serializers.ListField(child=serializers.JSONField(), required=False)
+
+
 class SuppressionSummaryItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     fabric_id = serializers.IntegerField()

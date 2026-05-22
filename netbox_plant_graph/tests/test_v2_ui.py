@@ -8,6 +8,7 @@ from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufa
 from netbox_plant_graph.models import (
     AuditEvent,
     CableAssembly,
+    ConnectorPosition,
     Endpoint,
     Fabric,
     FabricArchitecture,
@@ -89,6 +90,8 @@ class V2UITestCase(TestCase):
             'Interface Fanout Trace',
             'Path Query',
             'Physical Cable Blast Radius',
+            'Architecture Workspaces',
+            'Onboarding Workspaces',
             'Onboard Fabric',
             'Operations Center',
             'Import Preview',
@@ -379,6 +382,23 @@ class V2UITestCase(TestCase):
 
     def test_audit_dashboard_can_persist_topology_integrity_run(self):
         stamped = stamp_roce_4plane_mini_fabric()
+        source_lane = stamped.source_lanes[0]
+        dark_position = ConnectorPosition.objects.get(
+            endpoint=source_lane.local_mpo_endpoint,
+            position_number=5,
+        )
+        OpticalLane.objects.create(
+            fabric=stamped.fabric,
+            endpoint=source_lane.endpoint,
+            plane=source_lane.plane,
+            local_mpo_endpoint=source_lane.local_mpo_endpoint,
+            local_mpo_position=dark_position,
+            lane_index=99,
+            local_mpo_index=source_lane.local_mpo_index,
+            direction='send',
+            wavelength_nm=source_lane.wavelength_nm,
+            pair_key='audit-dark-position',
+        )
 
         response = self.client.post(
             reverse('plugins:netbox_plant_graph:audit_dashboard'),
@@ -390,6 +410,14 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Topology Integrity Status By Fabric')
         self.assertContains(response, 'Latest Topology Integrity Drilldown')
         self.assertTrue(OperationRun.objects.filter(fabric=stamped.fabric, profile='topology_integrity').exists())
+        self.assertTrue(
+            any(
+                (event.metadata or {}).get('topology_integrity')
+                for event in AuditEvent.objects.filter(fabric=stamped.fabric, event_type='policy_eval')
+            )
+        )
+        self.assertContains(response, 'dark_mpo_position_usage')
+        self.assertContains(response, 'Triage Queue')
 
     def test_import_preview_dry_run_renders_row_level_conflict(self):
         response = self.client.post(
@@ -473,6 +501,65 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Dependency / Apply-Order Detail')
         self.assertContains(response, 'planned')
 
+    def test_import_preview_can_save_export_and_apply_replayable_reports(self):
+        site = Site.objects.create(name='Saved Import Site', slug='saved-import-site')
+        payload = {
+            'payload_version': 'v2-report-test',
+            'source_label': 'saved-report-test',
+            'items': [
+                {
+                    'kind': 'cable_assembly',
+                    'site': site.slug,
+                    'cable_id': 'SAVE-001',
+                    'manufacturer': 'Acme',
+                },
+            ],
+        }
+
+        save_response = self.client.post(
+            reverse('plugins:netbox_plant_graph:import_preview'),
+            {
+                'payload_json': json.dumps(payload),
+                'action': 'save_preview',
+            },
+        )
+
+        self.assertEqual(save_response.status_code, 200)
+        self.assertContains(save_response, 'Saved dry-run import report')
+        self.assertContains(save_response, 'Saved Import Reconciliation Reports')
+        report_run = OperationRun.objects.get(profile='import_reconciliation')
+        self.assertEqual(report_run.result['summary']['create'], 1)
+        self.assertEqual(report_run.parameters['payload']['items'][0]['cable_id'], 'SAVE-001')
+
+        export_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:import_report_export', kwargs={'pk': report_run.pk})
+        )
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(export_response.json()['summary']['create'], 1)
+        self.assertIn('attachment; filename="import-report-', export_response['Content-Disposition'])
+
+        detail_response = self.client.get(report_run.get_absolute_url())
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, 'Import Reconciliation Report')
+        self.assertContains(detail_response, 'Download JSON')
+        self.assertContains(detail_response, 'Replay Dry Run')
+        self.assertContains(detail_response, 'Apply Exact Payload')
+
+        apply_response = self.client.post(
+            reverse('plugins:netbox_plant_graph:import_report_apply', kwargs={'pk': report_run.pk}),
+            {'confirm_apply': 'APPLY'},
+            follow=True,
+        )
+        self.assertEqual(apply_response.status_code, 200)
+        self.assertTrue(CableAssembly.objects.filter(site=site, cable_id='SAVE-001').exists())
+        self.assertTrue(
+            OperationRun.objects.filter(
+                profile='import_reconciliation',
+                result__action='apply_replay',
+                result__committed=True,
+            ).exists()
+        )
+
     def test_stamp_template_execute_workflow_previews_and_stamps_fabric(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
         url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
@@ -513,6 +600,40 @@ class V2UITestCase(TestCase):
         self.assertContains(post_response, f'>#{stamp_run.pk}<')
         self.assertContains(post_response, stamp_run.get_absolute_url())
         self.assertContains(post_response, fabric.get_absolute_url())
+        stamp_run.refresh_from_db()
+        self.assertEqual(stamp_run.metadata.get('stamp_runner'), 'v2.5')
+        self.assertTrue(stamp_run.result.get('v25', {}).get('applied'))
+
+    def test_stamp_run_detail_exposes_v25_retry_and_rollback_actions(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        response = self.client.post(
+            reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk}),
+            {
+                'fabric_name': 'Stamp Run Control Proof',
+                'fabric_slug': 'stamp-run-control-proof',
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        stamp_run = StampRun.objects.get(fabric__slug='stamp-run-control-proof')
+
+        detail_response = self.client.get(stamp_run.get_absolute_url())
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, 'V2.5 Stamp Run Controls')
+        self.assertContains(detail_response, 'Retry Classification')
+        self.assertContains(detail_response, 'already-converged')
+        self.assertContains(detail_response, 'Rollback Preview')
+        self.assertContains(detail_response, reverse('plugins:netbox_plant_graph:stamprun_retry_v25', kwargs={'pk': stamp_run.pk}))
+        self.assertContains(detail_response, reverse('plugins:netbox_plant_graph:stamprun_rollback_v25', kwargs={'pk': stamp_run.pk}))
+
+        rollback_guard_response = self.client.post(
+            reverse('plugins:netbox_plant_graph:stamprun_rollback_v25', kwargs={'pk': stamp_run.pk}),
+            {'confirm_rollback': 'nope'},
+            follow=True,
+        )
+        self.assertEqual(rollback_guard_response.status_code, 200)
+        self.assertContains(rollback_guard_response, 'Type ROLLBACK to apply compensation rollback.')
 
     def test_stamp_template_execute_blocks_invalid_v25_preview(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -668,6 +789,10 @@ class V2UITestCase(TestCase):
         self.assertContains(operations_response, 'Not run')
         self.assertContains(operations_response, 'compatible')
         self.assertContains(operations_response, reverse('plugins:netbox_plant_graph:audit_dashboard'))
+        self.assertContains(operations_response, 'Workflow Surface Support Matrix')
+        self.assertContains(operations_response, 'legacy_hidden')
+        self.assertContains(operations_response, 'Run Audit')
+        self.assertContains(operations_response, 'Triage')
 
         fabric_response = self.client.get(
             reverse('plugins:netbox_plant_graph:fabric', kwargs={'pk': result.fabric.pk})
@@ -686,6 +811,15 @@ class V2UITestCase(TestCase):
         self.assertEqual(fabric_operations_response.status_code, 200)
         self.assertContains(fabric_operations_response, 'data-fabric-readiness-summary')
         self.assertContains(fabric_operations_response, 'Architecture Contract')
+
+        run_audit_response = self.client.post(
+            reverse('plugins:netbox_plant_graph:operations_center'),
+            {'action': 'run_integrity', 'fabric_id': result.fabric.pk},
+            follow=True,
+        )
+        self.assertEqual(run_audit_response.status_code, 200)
+        self.assertContains(run_audit_response, 'Persisted topology integrity run')
+        self.assertTrue(OperationRun.objects.filter(fabric=result.fabric, profile='topology_integrity').exists())
 
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()
@@ -1093,6 +1227,8 @@ class V2UITestCase(TestCase):
 
         self.assertEqual(blast_response.status_code, 200)
         self.assertContains(blast_response, 'Impacted Device Hierarchy')
+        self.assertContains(blast_response, 'Compute / endpoint devices')
+        self.assertContains(blast_response, 'Leaf tier')
         self.assertContains(blast_response, device.name)
         self.assertContains(blast_response, 'FAILED')
         self.assertContains(blast_response, cable_assembly.cable_id)

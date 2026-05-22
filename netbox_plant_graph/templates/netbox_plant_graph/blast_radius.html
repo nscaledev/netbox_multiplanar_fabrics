@@ -430,10 +430,14 @@
                     {% endif %}
                   </span>
                 </div>
-                {% for device in rack_group.devices %}
+                {% for tier_group in rack_group.tier_groups %}
                   <div class="border-top pt-2 mt-2">
+                    <div class="small text-uppercase text-muted fw-semibold mb-2">{{ tier_group.fabric_tier_label }}</div>
+                    {% for device in tier_group.devices %}
+                      <div class="{% if not forloop.first %}border-top pt-2 mt-2{% endif %}">
                     <div class="d-flex flex-wrap align-items-center gap-2">
                       <span class="badge text-bg-{{ device.impact_class }}">{{ device.impact_label }}</span>
+                      <span class="badge text-bg-light">{{ device.fabric_tier_label }}</span>
                       <span class="fw-semibold">
                         {% if device.device.url %}
                           <a href="{{ device.device.url }}">{{ device.device.display }}</a>
@@ -480,6 +484,8 @@
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                    {% endfor %}
                   </div>
                 {% endfor %}
               </div>

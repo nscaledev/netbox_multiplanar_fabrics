@@ -217,13 +217,26 @@ The service does not mutate topology state and does not replace integrity
 audits. Run topology integrity checks first when imported or bulk-edited data may
 be inconsistent.
 
-## Remaining API/UI Work
+## Current UI Surfaces
 
-The current nucleus supports saved snapshots, comparison payloads, and
-scenario-specific REST preview. Remaining Item 5 work is intentionally outside
-this service slice:
+The `Physical Cable Blast Radius` page is the primary operator workflow. It
+lets operators filter by site, device type, role, rack label, rack row, rack
+elevation, and partial device name; select a modeled device; choose the failure
+scenario; select one or more cable assemblies, connector endpoints, or OSFP
+interfaces; calculate impact; and save the result as an impact report.
 
-- Add operator UI actions to save a blast-radius result as an impact report.
-- Expand saved report detail pages with hierarchy and impacted object lists,
-  JSON export, and path drilldown links.
-- Add blast-radius UI affordances for comparing multiple modeled scenarios.
+The `Impact Reports` page lists saved operational-impact `OperationRun`
+snapshots, exports each report as JSON, links back to the run detail, and
+compares two saved reports without mutating topology state.
+
+## Remaining Polish
+
+The impact model is operational. The remaining high-value polish is mostly
+presentation depth:
+
+- richer saved-report detail pages with expandable hierarchy and path drilldown
+  links,
+- side-by-side scenario comparison affordances directly from Blast Radius after
+  multiple calculations,
+- clearer grouping by fabric tier as additional blueprint families introduce
+  spine/super-spine roles.

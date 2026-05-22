@@ -1,5 +1,6 @@
 import json
 import tempfile
+from dataclasses import replace
 from io import StringIO
 
 from django.core.management import call_command
@@ -19,6 +20,10 @@ from netbox_plant_graph.models import (
     StrandTermination,
     TransportChannel,
     TransportChannelPositionMap,
+    ArchitectureRole,
+    TransferPattern,
+    AllocationRuleSet,
+    StampTemplate,
 )
 from netbox_plant_graph.services.imports import build_import_plan, reconcile_import_payload
 from netbox_plant_graph.services.imports.reconciliation import PROVENANCE_METADATA_NAMESPACE
@@ -33,6 +38,10 @@ from netbox_plant_graph.services.architecture_schema import (
     ARCHITECTURE_COMPATIBILITY_COMPATIBLE,
     ARCHITECTURE_COMPATIBILITY_INCOMPATIBLE,
     ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+)
+from netbox_plant_graph.services.blueprint_registry import (
+    architecture_definition_to_payload,
+    get_default_blueprint_registry,
 )
 
 
@@ -445,7 +454,7 @@ class V2ImportReconciliationTestCase(TestCase):
         self.assertEqual(plan.payload_version, 'v2.1')
         self.assertEqual(plan.source_label, 'unit-test-bundle')
         self.assertEqual(plan.apply_order, (1, 0))
-        self.assertTrue(plan.committed)
+        self.assertTrue(plan.committed, plan.to_dict())
         self.assertEqual([diff.index for diff in plan.diffs], [0, 1])
         self.assertEqual([diff.outcome for diff in plan.diffs], ['create', 'create'])
         edge = plan.dependency_edges[0]
@@ -621,3 +630,110 @@ class V2ImportReconciliationTestCase(TestCase):
         )
         self.assertIn('create cable_assembly site=import-site cable_id=COMMAND-DRY-RUN', output.getvalue())
         self.assertFalse(CableAssembly.objects.filter(site=self.site, cable_id='COMMAND-DRY-RUN').exists())
+
+    def test_blueprint_bundle_dry_run_normalizes_to_blueprint_item(self):
+        entry = get_default_blueprint_registry().get_blueprint('roce-4-plane-gb300-2x2-shuffle', 'v2')
+        definition = replace(entry.definition, slug='imported-blueprint-dry-run', version='v1')
+        payload = {
+            'bundle_version': '2026.05',
+            'bundle_author': 'Unit Test',
+            'schema_contract_version': ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+            'architecture': architecture_definition_to_payload(definition),
+            'parameter_schema': entry.parameter_schema,
+            'required_device_types': entry.required_device_types,
+        }
+
+        plan = build_import_plan(payload)
+
+        self.assertEqual(plan.payload_version, '2026.05')
+        self.assertEqual(plan.source_label, 'Unit Test')
+        self.assertFalse(plan.architecture_gate.hint_present)
+        self.assertEqual(plan.summary.to_dict(), {'total': 1, 'create': 1, 'update': 0, 'skip': 0, 'conflict': 0})
+        self.assertEqual(plan.diffs[0].kind, 'fabric_architecture_blueprint')
+        self.assertIn('slug=imported-blueprint-dry-run version=v1', plan.diffs[0].message)
+        self.assertFalse(FabricArchitecture.objects.filter(slug='imported-blueprint-dry-run').exists())
+
+    def test_blueprint_import_apply_persists_architecture_contract_rows(self):
+        entry = get_default_blueprint_registry().get_blueprint('roce-4-plane-gb300-2x2-shuffle', 'v2')
+        definition = replace(entry.definition, slug='imported-blueprint-apply', version='v1')
+        payload = {
+            'items': [
+                {
+                    'kind': 'fabric_architecture_blueprint',
+                    'definition': architecture_definition_to_payload(definition),
+                    'parameter_schema': entry.parameter_schema,
+                    'required_device_types': entry.required_device_types,
+                    'stamp_templates': {
+                        'imported-blueprint-mini-proof': {
+                            'slug': 'imported-blueprint-mini-proof',
+                            'name': 'Imported blueprint mini proof',
+                            'template': {
+                                **entry.stamp_templates['roce-4-plane-mini-proof']['template'],
+                                'architecture_slug': 'imported-blueprint-apply',
+                                'architecture_version': 'v1',
+                            },
+                        },
+                    },
+                },
+            ],
+        }
+
+        plan = reconcile_import_payload(payload, apply=True)
+
+        self.assertTrue(plan.committed, plan.to_dict())
+        self.assertEqual(plan.summary.create, 1)
+        architecture = FabricArchitecture.objects.get(slug='imported-blueprint-apply', version='v1')
+        self.assertEqual(ArchitectureRole.objects.filter(architecture=architecture).count(), len(definition.roles))
+        self.assertEqual(TransferPattern.objects.filter(architecture=architecture).count(), len(definition.transfer_patterns))
+        self.assertEqual(AllocationRuleSet.objects.filter(architecture=architecture).count(), len(definition.allocation_rule_sets))
+        self.assertEqual(StampTemplate.objects.filter(architecture=architecture).count(), 1)
+        self.assertEqual(
+            architecture.metadata['blueprint']['required_device_types']['gpu_tray'][0],
+            'gb300-tray',
+        )
+        self.assertEqual(
+            architecture.metadata['blueprint']['parameter_schema']['type'],
+            'object',
+        )
+
+    def test_blueprint_import_reports_schema_validation_conflict(self):
+        entry = get_default_blueprint_registry().get_blueprint('roce-4-plane-gb300-2x2-shuffle', 'v2')
+        definition_payload = architecture_definition_to_payload(
+            replace(entry.definition, slug='imported-blueprint-invalid', version='v1')
+        )
+        definition_payload['dark_positions'] = []
+        payload = {
+            'items': [
+                {
+                    'kind': 'fabric_architecture_blueprint',
+                    'definition': definition_payload,
+                    'parameter_schema': entry.parameter_schema,
+                    'required_device_types': entry.required_device_types,
+                },
+            ],
+        }
+
+        plan = reconcile_import_payload(payload, apply=True)
+
+        self.assertFalse(plan.committed)
+        self.assertEqual(plan.summary.conflict, 1)
+        self.assertEqual(plan.diffs[0].details['code'], 'architecture_schema_invalid')
+        self.assertEqual(plan.diffs[0].details['issues'][0]['code'], 'mpo_positions.coverage')
+        self.assertFalse(FabricArchitecture.objects.filter(slug='imported-blueprint-invalid').exists())
+
+    def test_blueprint_bundle_rejects_contract_version_mismatch(self):
+        entry = get_default_blueprint_registry().get_blueprint('roce-4-plane-gb300-2x2-shuffle', 'v2')
+        definition = replace(entry.definition, slug='imported-blueprint-contract-mismatch', version='v1')
+        payload = {
+            'bundle_version': '2026.05',
+            'bundle_author': 'Unit Test',
+            'schema_contract_version': 'v99',
+            'architecture': architecture_definition_to_payload(definition),
+            'parameter_schema': entry.parameter_schema,
+            'required_device_types': entry.required_device_types,
+        }
+
+        plan = build_import_plan(payload)
+
+        self.assertEqual(plan.summary.conflict, 1)
+        self.assertEqual(plan.diffs[0].details['code'], 'schema_contract_version_mismatch')

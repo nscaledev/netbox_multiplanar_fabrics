@@ -1,6 +1,6 @@
 # V2 High-Value Deepening Plan
 
-Status: follow-on polish UI exposure pass complete; focused checks only in this pass
+Status: highest-value operator hardening pass complete; focused checks only in this pass
 Last updated: 2026-05-22
 
 ## Purpose
@@ -104,6 +104,31 @@ UI exposure coordination pass completed:
   diagnostics drawer. The renderer fills in render signature, payload counts,
   rendered structure counts, cable-span counts, and golden-harness readiness.
 
+Highest-value operator hardening pass completed:
+
+- Stamp Template Execute now applies through `apply_stamp_template_v25(...)`
+  instead of the older direct execution path. Successful UI stamps persist the
+  V2.5 operation key, replayable source-binding references, creation-option
+  references, and a V2.5 preview summary on the resulting `StampRun`.
+- `StampRun` detail pages expose V2.5 retry classification plus compensation
+  rollback preview/apply controls. Retry replays stored source/creation
+  references when the run is classified retryable; rollback still requires an
+  explicit `ROLLBACK` confirmation.
+- Import Preview can save dry-run reports and applied/replayed reports as
+  `OperationRun` artifacts. Saved reports preserve the exact payload used for
+  replay/apply, expose downloadable JSON, and add conflict-remediation rows for
+  architecture gates, missing dependencies, and row conflicts.
+- Topology integrity audits now promote findings into triageable `AuditEvent`
+  records, refresh still-present findings, and auto-resolve topology findings
+  that disappear on later runs. Operations Center can run integrity audits
+  directly from the readiness table.
+- Operations Center now lists recent import reports and publishes a workflow
+  surface support matrix that labels routes as V2-supported, experimental, or
+  legacy-hidden.
+- Visual trace regression protection now includes a larger synthetic fanout
+  fixture that asserts render structure, object-link coverage, SVG export
+  health, cable overlay count, and a loose performance ceiling.
+
 Verification from this pass:
 
 - `node --check netbox_plant_graph/static/netbox_plant_graph/fanout_trace.js`
@@ -114,6 +139,12 @@ Verification from this pass:
 - Focused UI exposure tests for readiness, Path Query diagnostics, Interface
   Fanout diagnostics, Import Preview preflight/provenance, and Stamp Execute
   V2.5 blocking behavior
+- Focused UI/URL module checks after the operator hardening pass:
+  `./devrun/test.sh netbox_plant_graph.tests.test_v2_ui netbox_plant_graph.tests.test_v2_urls`
+- Focused visual trace component contract checks after the operator hardening
+  pass: `./devrun/test.sh netbox_plant_graph.tests.test_v2_visual_trace_component`
+- `node --check netbox_plant_graph/static/netbox_plant_graph/fanout_trace.js`
+- `python3 -m py_compile` on touched Python view, URL, and test modules
 - `git diff --check`
 
 ## Execution Model

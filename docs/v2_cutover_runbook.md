@@ -1,6 +1,6 @@
 # V2 Cutover Runbook
 
-Last updated: 2026-05-21
+Last updated: 2026-05-22
 
 ## Preconditions
 
@@ -10,20 +10,27 @@ Last updated: 2026-05-21
 4. NetBox has `netbox_plant_graph` enabled.
 5. No `netbox_floorplan` plugin is required.
 
-## Seed Architecture
+## Seed Architecture And Confirm Built-ins
 
-Seed the built-in architecture fixture:
+Seed the persisted GB300 four-plane architecture fixture and its default stamp
+template:
 
 ```bash
 python manage.py mpf_seed_v2 --architecture-only
 ```
 
-Expected architecture:
+Expected persisted architecture:
 
 - slug: `roce-4-plane-gb300-2x2-shuffle`
 - version: `v2`
 - planes: 4
 - stamp template: `roce-4-plane-mini-proof`
+
+The in-process blueprint registry also exposes the H100 direct-attach and GB300
+eight-plane built-ins for V2.5 preview/apply and import preflight:
+
+- `roce-4-plane-h100-direct-attach` `v2`
+- `roce-8-plane-gb300-2x2-shuffle` `v2`
 
 Validate in the UI:
 
@@ -52,6 +59,8 @@ The expected primary operator pages are:
 - Physical Cable Blast Radius
 - Onboard Fabric
 - Operations Center
+- Import Preview
+- Impact Reports
 - Audit Dashboard
 - Audit Triage
 - Exception Requests
@@ -102,8 +111,22 @@ The expected primary operator pages are:
    - Run OSFP transceiver unseat for the same device/interface.
    - Confirm impacted endpoints/devices are grouped and drill-down links are
      present where paths can be resolved.
+   - Save one modeled result as an impact report and confirm it appears under
+     `Build & Run -> Impact Reports`.
 
-7. Validate audit workflow.
+7. Validate import preview and reports.
+   - Navigate to `Multi-planar v2 -> Build & Run -> Import Preview`.
+   - Dry-run a small import payload and confirm row outcomes, conflicts, and
+     architecture gate details render.
+   - Save the dry-run report, export JSON, and confirm replay/apply actions are
+     confirmation-gated.
+
+8. Validate stamp recovery workflow.
+   - Open a saved `StampRun`.
+   - Confirm V2.5 retry classification and rollback preview/apply controls are
+     visible when the run status and manifest allow them.
+
+9. Validate audit workflow.
    - Open Audit Dashboard and Audit Triage.
    - Confirm persisted `AuditEvent` records and suppression/exception lifecycle
      actions are visible.
@@ -122,6 +145,9 @@ The expected primary operator pages are:
    - workflow finding lifecycle actions
    - disjointness exception lifecycle actions
    - `operation-runs/`
+   - `impact/cable-assembly-cut/`
+   - `impact/mpo-connector-unplug/`
+   - `impact/osfp-transceiver-unseat/`
 3. Confirm GraphQL returns `graphql_contract_version == "2.0.0"`.
 
 ## Rollback

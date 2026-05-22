@@ -5,6 +5,7 @@ from dcim.models import Device, DeviceRole, DeviceType, Interface, Location, Sit
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
 from tenancy.models import Tenant
 
+from .choices import ArchitectureSourceArtifactTypeChoices, OnboardingSourceArtifactTypeChoices
 from .models import FabricArchitecture
 from .models import Fabric
 from .models import Endpoint
@@ -638,6 +639,116 @@ class CoordinateLayoutUpdateForm(forms.Form):
         return endpoint
 
 
+class OnboardingSourceArtifactAttachForm(forms.Form):
+    artifact_type = forms.ChoiceField(
+        choices=OnboardingSourceArtifactTypeChoices.CHOICES,
+        initial='api_payload',
+        label='Artifact Type',
+    )
+    name = forms.CharField(max_length=200, label='Name')
+    source_uri = forms.CharField(max_length=1000, required=False, label='Source URI')
+    payload_version = forms.CharField(max_length=64, required=False, label='Payload Version')
+    source_label = forms.CharField(max_length=200, required=False, label='Source Label')
+    parser_key = forms.CharField(
+        max_length=100,
+        required=False,
+        label='Parser Key',
+        help_text='Leave blank to infer from artifact type and payload shape.',
+    )
+    raw_payload = forms.JSONField(
+        required=False,
+        label='JSON Payload',
+        widget=forms.Textarea(attrs={'rows': 8}),
+    )
+
+    def clean_raw_payload(self):
+        return self.cleaned_data.get('raw_payload') or {}
+
+
+class OnboardingPrerequisiteResolveForm(forms.Form):
+    resolution_mode = forms.ChoiceField(
+        choices=(
+            ('bind', 'Bind Existing'),
+            ('create', 'Create From Planned Payload'),
+            ('defer', 'Defer'),
+            ('not_required', 'Not Required'),
+            ('unresolved', 'Mark Unresolved'),
+        ),
+        label='Resolution',
+    )
+    object_model = forms.CharField(max_length=100, required=False, label='Object Model')
+    object_id = forms.IntegerField(min_value=1, required=False, label='Object ID')
+    planned_create = forms.JSONField(
+        required=False,
+        label='Planned Create Payload',
+        widget=forms.Textarea(attrs={'rows': 3}),
+    )
+    defer_reason = forms.CharField(
+        required=False,
+        label='Defer Reason',
+        widget=forms.Textarea(attrs={'rows': 2}),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        mode = cleaned_data.get('resolution_mode')
+        if mode == 'bind' and not cleaned_data.get('object_id'):
+            self.add_error('object_id', 'Object ID is required when binding a prerequisite.')
+        if mode == 'defer' and not cleaned_data.get('defer_reason'):
+            self.add_error('defer_reason', 'A defer reason is required.')
+        return cleaned_data
+
+
+class OnboardingPlanApprovalForm(forms.Form):
+    acknowledge_warnings = forms.BooleanField(
+        required=False,
+        label='Acknowledge Warnings',
+    )
+    note = forms.CharField(
+        required=False,
+        label='Approval Note',
+        widget=forms.Textarea(attrs={'rows': 2}),
+    )
+
+
+class ArchitectureSourceArtifactAttachForm(forms.Form):
+    artifact_type = forms.ChoiceField(
+        choices=ArchitectureSourceArtifactTypeChoices.CHOICES,
+        initial='blueprint_bundle',
+        label='Artifact Type',
+    )
+    name = forms.CharField(max_length=200, label='Name')
+    source_uri = forms.CharField(max_length=1000, required=False, label='Source URI')
+    payload_version = forms.CharField(max_length=64, required=False, label='Payload Version')
+    source_label = forms.CharField(max_length=200, required=False, label='Source Label')
+    parser_key = forms.CharField(
+        max_length=100,
+        required=False,
+        label='Parser Key',
+        help_text='Leave blank to infer from artifact type and payload shape.',
+    )
+    raw_payload = forms.JSONField(
+        required=False,
+        label='JSON Payload',
+        widget=forms.Textarea(attrs={'rows': 8}),
+    )
+
+    def clean_raw_payload(self):
+        return self.cleaned_data.get('raw_payload') or {}
+
+
+class ArchitecturePublishPlanApprovalForm(forms.Form):
+    acknowledge_warnings = forms.BooleanField(
+        required=False,
+        label='Acknowledge Warnings',
+    )
+    note = forms.CharField(
+        required=False,
+        label='Approval Note',
+        widget=forms.Textarea(attrs={'rows': 2}),
+    )
+
+
 __all__ = (
     'StampTemplateExecuteForm',
     'FabricOnboardForm',
@@ -662,6 +773,11 @@ __all__ = (
     'DisjointnessExceptionExpireForm',
     'DisjointnessExceptionReactivateForm',
     'CoordinateLayoutUpdateForm',
+    'OnboardingSourceArtifactAttachForm',
+    'OnboardingPrerequisiteResolveForm',
+    'OnboardingPlanApprovalForm',
+    'ArchitectureSourceArtifactAttachForm',
+    'ArchitecturePublishPlanApprovalForm',
 ) + tuple(
     name
     for spec in V2_OBJECT_SPECS

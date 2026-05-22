@@ -8,13 +8,29 @@ from netbox.models import NetBoxModel
 from django.utils import timezone
 
 from .choices import (
+    ArchitectureComponentStatusChoices,
+    ArchitecturePublishPlanStatusChoices,
+    ArchitectureSourceArtifactStatusChoices,
+    ArchitectureSourceArtifactTypeChoices,
     AuditEventTypeChoices,
     ArchitectureStatusChoices,
+    ArchitectureValidationStatusChoices,
+    ArchitectureWorkspaceKindChoices,
+    ArchitectureWorkspaceStatusChoices,
     ConnectorKindChoices,
     EndpointKindChoices,
+    FabricClassChoices,
     FabricStatusChoices,
     LaneDirectionChoices,
     NodeKindChoices,
+    OnboardingDesignItemStatusChoices,
+    OnboardingPlanStatusChoices,
+    OnboardingPrerequisiteResolutionModeChoices,
+    OnboardingPrerequisiteStatusChoices,
+    OnboardingSourceArtifactStatusChoices,
+    OnboardingSourceArtifactTypeChoices,
+    OnboardingStageStatusChoices,
+    OnboardingWorkspaceStatusChoices,
     OperationProfileChoices,
     OperationRunStatusChoices,
     SegmentKindChoices,
@@ -37,6 +53,7 @@ class FabricArchitecture(V2Model):
     slug = models.SlugField(max_length=200)
     version = models.CharField(max_length=64, default='v1')
     status = models.CharField(max_length=32, choices=ArchitectureStatusChoices, default='draft')
+    fabric_class = models.CharField(max_length=64, choices=FabricClassChoices, default='roce_backend')
     plane_count = models.PositiveIntegerField(default=4)
     description = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
@@ -718,3 +735,399 @@ class OperationRun(V2Model):
 
     def __str__(self):
         return f'{self.profile} run #{self.pk}'
+
+
+class ArchitectureWorkspace(V2Model):
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=200, unique=True)
+    workspace_kind = models.CharField(max_length=32, choices=ArchitectureWorkspaceKindChoices, default='new_blueprint')
+    status = models.CharField(max_length=32, choices=ArchitectureWorkspaceStatusChoices, default='draft')
+    target_slug = models.SlugField(max_length=200, blank=True)
+    target_version = models.CharField(max_length=64, blank=True)
+    fabric_class = models.CharField(max_length=64, choices=FabricClassChoices, default='roce_backend')
+    base_architecture = models.ForeignKey(
+        FabricArchitecture,
+        null=True,
+        blank=True,
+        related_name='derived_architecture_workspaces',
+        on_delete=models.SET_NULL,
+    )
+    published_architecture = models.ForeignKey(
+        FabricArchitecture,
+        null=True,
+        blank=True,
+        related_name='publishing_architecture_workspaces',
+        on_delete=models.SET_NULL,
+    )
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    current_plan = models.ForeignKey(
+        'ArchitecturePublishPlan',
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.SET_NULL,
+    )
+    source_summary = models.JSONField(default=dict, blank=True)
+    validation_summary = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('-last_updated', '-pk')
+        indexes = (
+            models.Index(fields=('status', 'fabric_class'), name='mpf_archws_status_class_idx'),
+            models.Index(fields=('target_slug', 'target_version'), name='mpf_archws_target_idx'),
+        )
+
+    def __str__(self):
+        return self.name
+
+
+class ArchitectureSourceArtifact(V2Model):
+    workspace = models.ForeignKey(ArchitectureWorkspace, related_name='source_artifacts', on_delete=models.CASCADE)
+    artifact_type = models.CharField(
+        max_length=64,
+        choices=ArchitectureSourceArtifactTypeChoices,
+        default='api_payload',
+    )
+    name = models.CharField(max_length=200)
+    source_uri = models.CharField(max_length=1000, blank=True)
+    content_sha256 = models.CharField(max_length=128, blank=True)
+    payload_version = models.CharField(max_length=64, blank=True)
+    source_label = models.CharField(max_length=200, blank=True)
+    parser_key = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=32, choices=ArchitectureSourceArtifactStatusChoices, default='received')
+    raw_payload = models.JSONField(default=dict, blank=True)
+    parse_result = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', '-created', '-pk')
+
+    def __str__(self):
+        return f'{self.workspace.slug}:{self.name}'
+
+
+class ArchitectureDesignComponent(V2Model):
+    workspace = models.ForeignKey(ArchitectureWorkspace, related_name='design_components', on_delete=models.CASCADE)
+    source_artifact = models.ForeignKey(
+        ArchitectureSourceArtifact,
+        null=True,
+        blank=True,
+        related_name='design_components',
+        on_delete=models.SET_NULL,
+    )
+    kind = models.CharField(max_length=100)
+    natural_key = models.CharField(max_length=500)
+    desired_state = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    validation_status = models.CharField(max_length=32, choices=ArchitectureComponentStatusChoices, default='pending')
+    validation_messages = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', 'kind', 'natural_key', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('workspace', 'kind', 'natural_key'),
+                name='netbox_plant_graph_arch_component_key_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.workspace.slug}:{self.kind}:{self.natural_key}'
+
+
+class ArchitectureValidationRun(V2Model):
+    workspace = models.ForeignKey(ArchitectureWorkspace, related_name='validation_runs', on_delete=models.CASCADE)
+    source_artifact = models.ForeignKey(
+        ArchitectureSourceArtifact,
+        null=True,
+        blank=True,
+        related_name='validation_runs',
+        on_delete=models.SET_NULL,
+    )
+    status = models.CharField(max_length=32, choices=ArchitectureValidationStatusChoices, default='pending')
+    validation_kind = models.CharField(max_length=64, default='publish_preflight')
+    workspace_revision = models.CharField(max_length=128, blank=True)
+    executed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    summary = models.JSONField(default=dict, blank=True)
+    issues = models.JSONField(default=list, blank=True)
+    import_plan = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', '-created', '-pk')
+
+    def __str__(self):
+        return f'{self.workspace.slug}:validation:{self.status}'
+
+
+class ArchitecturePublishPlan(V2Model):
+    workspace = models.ForeignKey(ArchitectureWorkspace, related_name='publish_plans', on_delete=models.CASCADE)
+    status = models.CharField(max_length=32, choices=ArchitecturePublishPlanStatusChoices, default='generated')
+    plan_hash = models.CharField(max_length=128)
+    workspace_revision = models.CharField(max_length=128, blank=True)
+    generated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    warning_acknowledgements = models.JSONField(default=list, blank=True)
+    publish_payload = models.JSONField(default=dict, blank=True)
+    validation_summary = models.JSONField(default=dict, blank=True)
+    import_plan = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', '-created', '-pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('workspace', 'plan_hash'),
+                name='netbox_plant_graph_arch_publish_plan_hash_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.workspace.slug}:architecture-plan:{self.plan_hash[:12]}'
+
+
+class OnboardingWorkspace(V2Model):
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=200, unique=True)
+    status = models.CharField(max_length=32, choices=OnboardingWorkspaceStatusChoices, default='draft')
+    fabric_class = models.CharField(max_length=64, choices=FabricClassChoices, default='roce_backend')
+    target_fabric_name = models.CharField(max_length=200, blank=True)
+    target_fabric_slug = models.SlugField(max_length=200, blank=True)
+    fabric = models.ForeignKey(Fabric, null=True, blank=True, related_name='onboarding_workspaces', on_delete=models.SET_NULL)
+    architecture = models.ForeignKey(
+        FabricArchitecture, null=True, blank=True, related_name='onboarding_workspaces', on_delete=models.SET_NULL
+    )
+    site = models.ForeignKey('dcim.Site', null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    location = models.ForeignKey('dcim.Location', null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    tenant = models.ForeignKey('tenancy.Tenant', null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    current_plan = models.ForeignKey(
+        'OnboardingPlan',
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.SET_NULL,
+    )
+    source_summary = models.JSONField(default=dict, blank=True)
+    readiness_summary = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('-last_updated', '-pk')
+        indexes = (
+            models.Index(fields=('status', 'fabric_class'), name='mpf_obws_status_class_idx'),
+            models.Index(fields=('target_fabric_slug',), name='mpf_obws_target_slug_idx'),
+        )
+
+    def __str__(self):
+        return self.name
+
+
+class OnboardingSourceArtifact(V2Model):
+    workspace = models.ForeignKey(OnboardingWorkspace, related_name='source_artifacts', on_delete=models.CASCADE)
+    artifact_type = models.CharField(
+        max_length=64,
+        choices=OnboardingSourceArtifactTypeChoices,
+        default='api_payload',
+    )
+    name = models.CharField(max_length=200)
+    source_uri = models.CharField(max_length=1000, blank=True)
+    content_sha256 = models.CharField(max_length=128, blank=True)
+    payload_version = models.CharField(max_length=64, blank=True)
+    source_label = models.CharField(max_length=200, blank=True)
+    parser_key = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=32, choices=OnboardingSourceArtifactStatusChoices, default='received')
+    raw_payload = models.JSONField(default=dict, blank=True)
+    parse_result = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', '-created', '-pk')
+
+    def __str__(self):
+        return f'{self.workspace.slug}:{self.name}'
+
+
+class OnboardingDesignItem(V2Model):
+    workspace = models.ForeignKey(OnboardingWorkspace, related_name='design_items', on_delete=models.CASCADE)
+    source_artifact = models.ForeignKey(
+        OnboardingSourceArtifact,
+        null=True,
+        blank=True,
+        related_name='design_items',
+        on_delete=models.SET_NULL,
+    )
+    kind = models.CharField(max_length=100)
+    natural_key = models.CharField(max_length=500)
+    desired_state = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    validation_status = models.CharField(max_length=32, choices=OnboardingDesignItemStatusChoices, default='pending')
+    validation_messages = models.JSONField(default=list, blank=True)
+    planned_object_type = models.ForeignKey(
+        ContentType,
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.SET_NULL,
+    )
+    planned_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', 'kind', 'natural_key', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('workspace', 'kind', 'natural_key'),
+                name='netbox_plant_graph_onboarding_item_natural_key_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.workspace.slug}:{self.kind}:{self.natural_key}'
+
+
+class OnboardingPrerequisite(V2Model):
+    workspace = models.ForeignKey(OnboardingWorkspace, related_name='prerequisites', on_delete=models.CASCADE)
+    design_item = models.ForeignKey(
+        OnboardingDesignItem,
+        null=True,
+        blank=True,
+        related_name='prerequisites',
+        on_delete=models.SET_NULL,
+    )
+    requirement_key = models.CharField(max_length=500)
+    object_model = models.CharField(max_length=100)
+    role = models.CharField(max_length=100, blank=True)
+    desired_identity = models.JSONField(default=dict, blank=True)
+    resolution_mode = models.CharField(
+        max_length=32,
+        choices=OnboardingPrerequisiteResolutionModeChoices,
+        default='unresolved',
+    )
+    resolved_object_type = models.ForeignKey(
+        ContentType,
+        null=True,
+        blank=True,
+        related_name='+',
+        on_delete=models.SET_NULL,
+    )
+    resolved_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    planned_create = models.JSONField(default=dict, blank=True)
+    defer_reason = models.TextField(blank=True)
+    status = models.CharField(max_length=32, choices=OnboardingPrerequisiteStatusChoices, default='open')
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', 'status', 'requirement_key', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('workspace', 'requirement_key'),
+                name='netbox_plant_graph_onboarding_prereq_key_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.workspace.slug}:{self.requirement_key}'
+
+
+class OnboardingPlan(V2Model):
+    workspace = models.ForeignKey(OnboardingWorkspace, related_name='plans', on_delete=models.CASCADE)
+    status = models.CharField(max_length=32, choices=OnboardingPlanStatusChoices, default='draft')
+    plan_hash = models.CharField(max_length=128)
+    workspace_revision = models.CharField(max_length=128, blank=True)
+    generated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    warning_acknowledgements = models.JSONField(default=list, blank=True)
+    prerequisite_plan = models.JSONField(default=dict, blank=True)
+    stamp_preview = models.JSONField(default=dict, blank=True)
+    import_plan = models.JSONField(default=dict, blank=True)
+    audit_projection = models.JSONField(default=dict, blank=True)
+    impact_projection = models.JSONField(default=dict, blank=True)
+    readiness_projection = models.JSONField(default=dict, blank=True)
+    rollback_preview = models.JSONField(default=dict, blank=True)
+    retry_preview = models.JSONField(default=dict, blank=True)
+    plan_payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', '-created', '-pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('workspace', 'plan_hash'),
+                name='netbox_plant_graph_onboarding_plan_hash_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.workspace.slug}:plan:{self.plan_hash[:12]}'
+
+
+class OnboardingExecutionStage(V2Model):
+    plan = models.ForeignKey(OnboardingPlan, related_name='stages', on_delete=models.CASCADE)
+    stage_key = models.CharField(max_length=100)
+    stage_kind = models.CharField(max_length=100)
+    status = models.CharField(max_length=32, choices=OnboardingStageStatusChoices, default='pending')
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    operation_run = models.ForeignKey(OperationRun, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    stamp_run = models.ForeignKey(StampRun, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    result = models.JSONField(default=dict, blank=True)
+    error_detail = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('plan', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('plan', 'stage_key'),
+                name='netbox_plant_graph_onboarding_stage_key_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.plan}:{self.stage_key}'
+
+
+class OnboardingObjectLink(V2Model):
+    workspace = models.ForeignKey(OnboardingWorkspace, related_name='object_links', on_delete=models.CASCADE)
+    plan = models.ForeignKey(OnboardingPlan, null=True, blank=True, related_name='object_links', on_delete=models.SET_NULL)
+    stage = models.ForeignKey(
+        OnboardingExecutionStage,
+        null=True,
+        blank=True,
+        related_name='object_links',
+        on_delete=models.SET_NULL,
+    )
+    design_item = models.ForeignKey(
+        OnboardingDesignItem,
+        null=True,
+        blank=True,
+        related_name='object_links',
+        on_delete=models.SET_NULL,
+    )
+    source_artifact = models.ForeignKey(
+        OnboardingSourceArtifact,
+        null=True,
+        blank=True,
+        related_name='object_links',
+        on_delete=models.SET_NULL,
+    )
+    link_kind = models.CharField(max_length=64)
+    object_type = models.ForeignKey(ContentType, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    label = models.CharField(max_length=300, blank=True)
+    external_url = models.CharField(max_length=1000, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('workspace', 'link_kind', 'label', 'pk')
+
+    def __str__(self):
+        return self.label or f'{self.workspace.slug}:{self.link_kind}:{self.pk}'

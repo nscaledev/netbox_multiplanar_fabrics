@@ -22,9 +22,11 @@ Use these labels when writing automation:
 | REST registry object endpoints | Stable for reads, cautious for direct writes | `/api/plugins/plant-graph/<resource>/`, standard NetBox list/detail pagination, and fields from the V2 registry. Prefer stamp or import/reconcile for graph-building writes. |
 | REST workflow endpoints | Stable | Path query, stamp preview/execute/rollback, workflow finding lifecycle, disjointness exception lifecycle, operation summaries. |
 | REST operational impact endpoints | Stable envelope, experimental nested details | `/api/plugins/plant-graph/impact/<scenario>/` returns `OperationalImpactReport.as_dict()` top-level keys for cable cut, MPO unplug, and OSFP unseat previews. Nested detail objects may gain fields. |
+| REST architecture workspace endpoints | Experimental workflow, stable first-slice envelope | Architecture workspace CRUD plus source attach, normalize, validate, plan generate/approve/publish, publish, and handoff endpoints. Top-level response keys are stable for first-slice automation; nested publish/import payloads may expand. |
+| REST onboarding workspace endpoints | Experimental workflow, stable first-slice envelope | Onboarding workspace CRUD plus source attach, normalize, prerequisite discovery/resolution, plan generate/approve/apply, readiness, publish, and handoff endpoints. Top-level response keys are stable for first-slice automation; nested plan payloads may expand. |
 | GraphQL minimal query set | Stable | `graphql_contract_version`, `v2_status`, `fabrics`, `optical_lanes`, `optical_lane_path`, `stamp_runs`, `suppression_rules`, `audit_events`, `operation_runs`. |
 | GraphQL expanded operational JSON | Experimental | `lane_drilldown`, `lane_compare`, `blast_radius`, audit/policy dashboards, contamination domains, deployment summary, stamp template preview. |
-| Import/reconcile engine | Stable nucleus, experimental extended kinds | Stable for `cable_assembly` and `fiber_strand_cable` plan/apply shape. Endpoint/channel/map/termination kinds are available but should be smoke-tested before production use. |
+| Import/reconcile engine | Stable nucleus, experimental extended kinds | Stable for plan/apply envelope and the documented import kinds in `v2_import_reconciliation.md`. New object kinds and nested diff details should be smoke-tested before production use. |
 | Topology integrity audit | Stable envelope, experimental finding codes | `mpf_audit_integrity` command, `--format json`, and top-level report keys are stable. Individual finding codes/details may expand. |
 | Visual path/fanout/blast pages | Operator-stable, machine-experimental | URL entry points are intended for operators. Do not scrape DOM, SVG, embedded JSON, CSS classes, or static asset versions. |
 | Private services and local scripts | Non-contract | Python helpers under `services/`, `views.py` private functions, and `local-netbox-dev/scripts/*` can change without external notice. |
@@ -134,6 +136,11 @@ Resource catalog:
 | `architecture-roles` | `ArchitectureRole` |
 | `transfer-patterns` | `TransferPattern` |
 | `allocation-rule-sets` | `AllocationRuleSet` |
+| `architecture-workspaces` | `ArchitectureWorkspace` |
+| `architecture-source-artifacts` | `ArchitectureSourceArtifact` |
+| `architecture-design-components` | `ArchitectureDesignComponent` |
+| `architecture-validation-runs` | `ArchitectureValidationRun` |
+| `architecture-publish-plans` | `ArchitecturePublishPlan` |
 | `fabrics` | `Fabric` |
 | `planes` | `Plane` |
 | `nodes` | `FabricNode` |
@@ -153,6 +160,13 @@ Resource catalog:
 | `suppression-rules` | `SuppressionRule` |
 | `audit-events` | `AuditEvent` |
 | `operation-runs` | `OperationRun` |
+| `onboarding-workspaces` | `OnboardingWorkspace` |
+| `onboarding-source-artifacts` | `OnboardingSourceArtifact` |
+| `onboarding-design-items` | `OnboardingDesignItem` |
+| `onboarding-prerequisites` | `OnboardingPrerequisite` |
+| `onboarding-plans` | `OnboardingPlan` |
+| `onboarding-execution-stages` | `OnboardingExecutionStage` |
+| `onboarding-object-links` | `OnboardingObjectLink` |
 
 Example read:
 
@@ -164,6 +178,32 @@ curl -H "Authorization: Token $NETBOX_TOKEN" \
 Direct registry writes are supported by NetBox permissions, but they are not the
 preferred contract for building topology graphs. Use stamp execution for whole
 fabric scaffolds and import/reconcile for repeatable script-fed updates.
+
+### REST Architecture Workspace Endpoints
+
+These workflow endpoints mutate or report on `ArchitectureWorkspace` state.
+They are the preferred automation path for turning architecture source
+documents or direct-entry JSON into persistent blueprint rows.
+
+| Method | Path | Stable top-level response keys |
+| --- | --- | --- |
+| `POST` | `/architecture-workspaces/<id>/sources/` | `workspace`, `artifact`, `next_actions` |
+| `POST` | `/architecture-source-artifacts/<id>/normalize/` | `workspace`, `artifact`, `result`, `issues`, `next_actions` |
+| `POST` | `/architecture-workspaces/<id>/validate/` | `workspace`, `validation_run`, `summary`, `issues` |
+| `POST` | `/architecture-workspaces/<id>/plans/generate/` | `workspace`, `plan`, `issues`, `next_actions` |
+| `POST` | `/architecture-publish-plans/<id>/approve/` | `workspace`, `plan` |
+| `POST` | `/architecture-publish-plans/<id>/publish/` | `workspace`, `plan` |
+| `POST` | `/architecture-workspaces/<id>/publish/` | `workspace`, `plan` |
+| `GET` | `/architecture-workspaces/<id>/handoff.json` | `workspace`, `sources`, `components`, `validation_runs`, `publish_plans`, `current_plan` |
+
+Source attach accepts the same first-slice fields as the UI form:
+`artifact_type`, `name`, `source_uri`, `raw_payload`, `payload_version`,
+`source_label`, `parser_key`, and `metadata`.
+
+Publish plan approval accepts `warning_acknowledgements`, an array of JSON
+objects. Publication applies the exact `publish_payload` persisted on the plan
+through import/reconcile. A stale plan returns HTTP `400`; regenerate before
+approval or publish.
 
 ### REST Query Endpoints
 
@@ -255,7 +295,7 @@ curl -sS -X POST \
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/stamps/preview/` | Preview a V2 stamp template. Also registered under the `stamp-preview` and `stamps-preview` route names. |
-| `POST` | `/stamp-templates/<id>/execute/` | Execute a stamp template and create a `StampRun`. |
+| `POST` | `/stamp-templates/<id>/execute/` | Execute a stamp template through the stable API execution path and create a `StampRun`. The operator UI path uses V2.5 preview/apply before execution. |
 | `POST` | `/stamp-runs/<id>/rollback/` | Roll back a stamp run. |
 | `POST` | `/workflow/findings/<id>/acknowledge/` | Mark a finding acknowledged. |
 | `POST` | `/workflow/findings/<id>/start-remediation/` | Mark a finding in progress. |
@@ -267,6 +307,37 @@ curl -sS -X POST \
 | `POST` | `/disjointness-exceptions/<id>/approve/` | Approve an exception. |
 | `POST` | `/disjointness-exceptions/<id>/expire/` | Expire an exception. |
 | `POST` | `/disjointness-exceptions/<id>/reactivate/` | Reactivate an exception. |
+
+The NetBox operator UI also exposes V2.5 recovery actions that are not part of
+the REST automation contract: `/plugins/plant-graph/stamp-runs/<id>/retry-v25/`
+and `/plugins/plant-graph/stamp-runs/<id>/rollback-v25/`. Treat those as
+operator surfaces, not machine-stable API routes.
+
+### REST Onboarding Workspace Endpoints
+
+These endpoints are the first-slice automation path for guided fabric
+onboarding. They keep source artifacts, staged design rows, prerequisite
+decisions, plan hashes, stage records, readiness, and handoff artifacts tied to
+one persistent workspace. Direct registry writes remain possible, but these
+workflow endpoints preserve the provenance/readiness loop.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/onboarding-workspaces/<id>/sources/` | Attach a source artifact or direct-entry JSON payload. |
+| `POST` | `/onboarding-source-artifacts/<id>/normalize/` | Normalize a source artifact into staged design items. |
+| `POST` | `/onboarding-workspaces/<id>/prerequisites/discover/` | Discover NetBox/plugin prerequisites for the current workspace state. |
+| `POST` | `/onboarding-prerequisites/<id>/resolve/` | Resolve one prerequisite by bind/create/defer/not-required decision. |
+| `POST` | `/onboarding-workspaces/<id>/plans/generate/` | Generate or refresh the unified onboarding plan. |
+| `POST` | `/onboarding-plans/<id>/approve/` | Approve a non-blocked plan with optional warning acknowledgements. |
+| `POST` | `/onboarding-plans/<id>/apply/` | Apply all or selected ordered plan stages. |
+| `POST` | `/onboarding-workspaces/<id>/readiness/` | Recompute workspace readiness against the applied topology. |
+| `POST` | `/onboarding-workspaces/<id>/publish/` | Mark the workspace published when readiness passes. |
+| `GET` | `/onboarding-workspaces/<id>/handoff.json` | Return the current handoff dossier JSON. |
+
+Stable first-slice response keys are `workspace`, `artifact`, `prerequisite`,
+`plan`, `result`, `summary`, `issues`, and `next_actions` when applicable.
+Nested `plan_payload`, `stamp_preview`, `import_plan`, `readiness_summary`, and
+handoff details may gain fields as parsers and planned-graph simulation mature.
 
 Stamp preview example:
 
@@ -436,6 +507,17 @@ Rollback is explicit:
 POST /api/plugins/plant-graph/stamp-runs/<id>/rollback/
 ```
 
+The NetBox UI also exposes saved `StampRun` recovery actions under plugin
+routes:
+
+- `/plugins/plant-graph/stamp-runs/<id>/retry-v25/`
+- `/plugins/plant-graph/stamp-runs/<id>/rollback-v25/`
+
+Those UI actions are operator workflows, not external automation contracts.
+Automation should continue to use documented API routes where available and
+should treat V2.5 retry/rollback UI route details as experimental until a REST
+contract is published for them.
+
 ### Import And Re-Audit
 
 1. Generate import JSON from the external source of truth.
@@ -446,6 +528,18 @@ POST /api/plugins/plant-graph/stamp-runs/<id>/rollback/
    `python manage.py mpf_import_reconcile import.json --apply --json`
 5. Run topology audit with `--fail-on error`.
 6. Spot-check one path with REST `path-query/`.
+
+The operator Import Preview page can also save dry-run, replay, and apply
+reports as `OperationRun` artifacts. Saved reports retain the exact submitted
+payload for replay/apply and expose downloadable JSON from:
+
+```text
+/plugins/plant-graph/imports/reports/<id>/export.json
+```
+
+The UI replay/apply actions are intentionally confirmation-gated operator
+workflows. Their report JSON shape is a stable inspection artifact for operators
+inside this plugin, but it should not be treated as an external mutation API.
 
 ### Path Query And Visual Review
 
@@ -468,6 +562,26 @@ POST /api/plugins/plant-graph/stamp-runs/<id>/rollback/
    snapshot tests.
 5. Do not use private Python helpers or UI embedded JSON for production
    automation.
+
+## Workflow Surface Support
+
+The main navigation now promotes only V2-supported operator workflows. Some
+older workflow routes remain route-addressable for compatibility and tests, but
+are no longer advertised as primary operator surfaces.
+
+Current route classification:
+
+- Supported V2 operator workflows: Operations Center, Import Preview, Impact
+  Reports, Audit Dashboard, Audit Triage, Path Query, Interface Fanout Trace,
+  Physical Cable Blast Radius, Onboard Fabric.
+- Experimental or compatibility workflows: Graph Overview, Lane Workspace,
+  Policy Dashboard, Coordinate Layout.
+- Legacy-hidden workflows: Path Resolver, Lane Drilldown, Lane Compare, Policy
+  Review, Plane Audit, Template Library.
+
+Use Operations Center's workflow support matrix as the UI source of truth when
+deciding whether a route is operator-supported or only retained as a
+compatibility surface.
 
 ## Non-Contract Internals
 

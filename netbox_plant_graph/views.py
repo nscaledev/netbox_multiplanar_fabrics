@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django import forms as django_forms
+from django.apps import apps
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
@@ -14,7 +15,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.text import slugify
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils.html import format_html
 from django.views import View
 from django.views.generic import TemplateView
@@ -24,6 +25,9 @@ from netbox.views import generic
 from . import filtersets, forms, tables
 from .models import (
     AuditEvent,
+    ArchitecturePublishPlan,
+    ArchitectureSourceArtifact,
+    ArchitectureWorkspace,
     CableAssembly,
     ConnectorPosition,
     Endpoint,
@@ -33,6 +37,10 @@ from .models import (
     FiberSegment,
     FiberStrand,
     OpticalLane,
+    OnboardingPlan,
+    OnboardingPrerequisite,
+    OnboardingSourceArtifact,
+    OnboardingWorkspace,
     OperationRun,
     Plane,
     StampRun,
@@ -48,6 +56,16 @@ from .services.architecture_schema import (
     compare_persisted_architecture_compatibility,
     validate_persisted_architecture_schema,
 )
+from .services.architecture_workspace import (
+    approve_architecture_publish_plan,
+    architecture_workspace_summary,
+    attach_architecture_source_artifact,
+    build_architecture_handoff_dossier,
+    generate_architecture_publish_plan,
+    normalize_architecture_source_artifact,
+    publish_architecture_plan,
+    validate_architecture_workspace,
+)
 from .services.impact_modeling import (
     OPERATIONAL_IMPACT_OPERATION_KIND,
     OPERATIONAL_IMPACT_OPERATION_PROFILE,
@@ -59,20 +77,87 @@ from .services.impact_modeling import (
     persist_operational_impact_report,
 )
 from .services.imports import reconcile_import_payload
+from .services.onboarding import (
+    apply_onboarding_plan,
+    approve_onboarding_plan,
+    attach_source_artifact,
+    build_handoff_dossier,
+    discover_prerequisites,
+    evaluate_onboarding_readiness,
+    generate_onboarding_plan,
+    normalize_source_artifact,
+    publish_workspace,
+    resolve_prerequisite,
+)
 from .services.operations import execute_operation_profile
 from .services import resolver as resolver_service
 from .services.resolver import resolve_optical_lane_path
 from .services.stamp_preview import build_v2_stamp_template_preview
 from .services.stamping import execute_stamp_template, stamp_roce_4plane_mini_fabric
-from .services.stamping_v25 import preview_stamp_template_v25
+from .services.stamping_v25 import (
+    StampValidationError,
+    apply_stamp_template_v25,
+    classify_stamp_retry_v25,
+    preview_stamp_template_v25,
+    rollback_stamp_run_v25,
+)
 from .services.topology_integrity import (
-    TOPOLOGY_INTEGRITY_OPERATION_KIND,
     TOPOLOGY_INTEGRITY_OPERATION_PROFILE,
     audit_topology_integrity,
     integrity_gate_for_fabric,
     persist_topology_integrity_report,
 )
 from .v2_registry import V2_OBJECT_SPECS, get_v2_object_spec_for_model
+
+
+IMPORT_RECONCILIATION_OPERATION_KIND = 'import_reconciliation'
+IMPORT_RECONCILIATION_OPERATION_PROFILE = 'import_reconciliation'
+IMPORT_RECONCILIATION_REPORT_SCHEMA = 'v2.import_reconciliation.report.v1'
+
+
+WORKFLOW_SURFACE_CLASSIFICATIONS = (
+    {
+        'status': 'supported',
+        'label': 'Supported V2 operator workflows',
+        'description': 'Primary workflows expected to be operator-facing in V2.',
+        'routes': (
+            ('operations_center', 'Operations Center'),
+            ('onboardingworkspace_list', 'Onboarding Workspaces'),
+            ('import_preview', 'Import Preview'),
+            ('impact_reports', 'Impact Reports'),
+            ('audit_dashboard', 'Audit Dashboard'),
+            ('audit_triage', 'Audit Triage'),
+            ('path_query', 'Path Query'),
+            ('interface_fanout_trace', 'Interface Fanout Trace'),
+            ('blast_radius', 'Physical Cable Blast Radius'),
+            ('fabric_onboard', 'Onboard Fabric'),
+        ),
+    },
+    {
+        'status': 'experimental',
+        'label': 'Experimental / compatibility workflows',
+        'description': 'Route-addressable surfaces kept for specialized workflows; not promoted in the main menu.',
+        'routes': (
+            ('graph_overview', 'Graph Overview'),
+            ('lane_workspace', 'Lane Workspace'),
+            ('policy_dashboard', 'Policy Dashboard'),
+            ('coordinate_layout', 'Coordinate Layout'),
+        ),
+    },
+    {
+        'status': 'legacy_hidden',
+        'label': 'Legacy hidden workflow routes',
+        'description': 'Compatibility routes retained to avoid breaking links while V2 replacements mature.',
+        'routes': (
+            ('path_resolver', 'Path Resolver'),
+            ('lane_drilldown', 'Lane Drilldown'),
+            ('lane_compare', 'Lane Compare'),
+            ('policy_review', 'Policy Review'),
+            ('plane_audit', 'Plane Audit'),
+            ('template_library', 'Template Library'),
+        ),
+    },
+)
 
 
 def _build_architecture_semantics_context(architecture: FabricArchitecture):
@@ -191,7 +276,351 @@ class V2RegisteredObjectView(generic.ObjectView):
             extra_context['architecture_semantics'] = _build_architecture_semantics_context(instance)
         if isinstance(instance, Fabric):
             extra_context['fabric_readiness'] = _fabric_readiness_summary(instance)
+        if isinstance(instance, StampRun):
+            extra_context['stamp_run_v25'] = _stamp_run_v25_context(instance)
+        if isinstance(instance, OperationRun):
+            extra_context['operation_run_context'] = _operation_run_context(instance)
+        if isinstance(instance, ArchitectureWorkspace):
+            extra_context['architecture_workspace_context'] = _architecture_workspace_context(instance)
+        if isinstance(instance, ArchitecturePublishPlan):
+            extra_context['architecture_publish_plan_context'] = _architecture_publish_plan_context(instance)
+        if isinstance(instance, OnboardingWorkspace):
+            extra_context['onboarding_workspace_context'] = _onboarding_workspace_context(instance)
+        if isinstance(instance, OnboardingPlan):
+            extra_context['onboarding_plan_context'] = _onboarding_plan_context(instance)
         return extra_context
+
+
+def _architecture_workspace_detail_url(workspace):
+    return reverse('plugins:netbox_plant_graph:architectureworkspace', kwargs={'pk': workspace.pk})
+
+
+def _architecture_workspace_context(workspace: ArchitectureWorkspace):
+    current_plan = workspace.current_plan
+    return {
+        'summary': architecture_workspace_summary(workspace),
+        'attach_source_form': forms.ArchitectureSourceArtifactAttachForm(),
+        'source_artifacts': tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50]),
+        'design_components': tuple(workspace.design_components.order_by('kind', 'natural_key', 'pk')[:200]),
+        'validation_runs': tuple(workspace.validation_runs.order_by('-created', '-pk')[:10]),
+        'publish_plans': tuple(workspace.publish_plans.order_by('-created', '-pk')[:10]),
+        'current_plan': current_plan,
+        'source_attach_url': reverse('plugins:netbox_plant_graph:architecture_workspace_source_add', kwargs={'pk': workspace.pk}),
+        'validate_url': reverse('plugins:netbox_plant_graph:architecture_workspace_validate', kwargs={'pk': workspace.pk}),
+        'plan_generate_url': reverse('plugins:netbox_plant_graph:architecture_workspace_plan_generate', kwargs={'pk': workspace.pk}),
+        'publish_url': reverse('plugins:netbox_plant_graph:architecture_workspace_publish', kwargs={'pk': workspace.pk}),
+        'handoff_url': reverse('plugins:netbox_plant_graph:architecture_workspace_handoff', kwargs={'pk': workspace.pk}),
+    }
+
+
+def _architecture_publish_plan_context(plan: ArchitecturePublishPlan):
+    return {
+        'approve_url': reverse('plugins:netbox_plant_graph:architecture_publish_plan_approve', kwargs={'pk': plan.pk}),
+        'publish_url': reverse('plugins:netbox_plant_graph:architecture_publish_plan_publish', kwargs={'pk': plan.pk}),
+        'approval_form': forms.ArchitecturePublishPlanApprovalForm(),
+    }
+
+
+def _onboarding_workspace_detail_url(workspace):
+    return reverse('plugins:netbox_plant_graph:onboardingworkspace', kwargs={'pk': workspace.pk})
+
+
+def _onboarding_workspace_context(workspace: OnboardingWorkspace):
+    current_plan = workspace.current_plan
+    return {
+        'attach_source_form': forms.OnboardingSourceArtifactAttachForm(),
+        'source_artifacts': tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50]),
+        'design_items': tuple(workspace.design_items.order_by('kind', 'natural_key', 'pk')[:200]),
+        'prerequisites': tuple(workspace.prerequisites.order_by('status', 'requirement_key', 'pk')[:100]),
+        'plans': tuple(workspace.plans.order_by('-created', '-pk')[:10]),
+        'object_links': tuple(workspace.object_links.order_by('link_kind', 'label', 'pk')[:100]),
+        'current_plan': current_plan,
+        'current_stages': tuple(current_plan.stages.order_by('pk')) if current_plan is not None else (),
+        'source_attach_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_source_add', kwargs={'pk': workspace.pk}),
+        'prerequisites_discover_url': reverse(
+            'plugins:netbox_plant_graph:onboarding_workspace_prerequisites_discover',
+            kwargs={'pk': workspace.pk},
+        ),
+        'plan_generate_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_plan_generate', kwargs={'pk': workspace.pk}),
+        'readiness_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_readiness', kwargs={'pk': workspace.pk}),
+        'publish_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_publish', kwargs={'pk': workspace.pk}),
+        'handoff_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_handoff', kwargs={'pk': workspace.pk}),
+    }
+
+
+def _onboarding_plan_context(plan: OnboardingPlan):
+    return {
+        'approve_url': reverse('plugins:netbox_plant_graph:onboarding_plan_approve', kwargs={'pk': plan.pk}),
+        'apply_url': reverse('plugins:netbox_plant_graph:onboarding_plan_apply', kwargs={'pk': plan.pk}),
+        'approval_form': forms.OnboardingPlanApprovalForm(),
+        'stages': tuple(plan.stages.order_by('pk')),
+    }
+
+
+class ArchitectureWorkspaceSourceAddView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(ArchitectureWorkspace, pk=pk)
+        form = forms.ArchitectureSourceArtifactAttachForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, f'Unable to attach architecture source: {form.errors.as_text()}')
+            return redirect(_architecture_workspace_detail_url(workspace))
+        artifact = attach_architecture_source_artifact(workspace=workspace, actor=request.user, **form.cleaned_data)
+        messages.success(request, f'Attached architecture source artifact {artifact.name}.')
+        return redirect(_architecture_workspace_detail_url(workspace))
+
+
+class ArchitectureSourceArtifactNormalizeView(View):
+    def post(self, request, pk):
+        artifact = get_object_or_404(ArchitectureSourceArtifact.objects.select_related('workspace'), pk=pk)
+        result = normalize_architecture_source_artifact(artifact, actor=request.user)
+        if result.issues:
+            messages.warning(request, f'Normalized architecture source with {len(result.issues)} issue(s).')
+        else:
+            messages.success(
+                request,
+                f'Normalized architecture source: {result.created} created, {result.updated} updated.',
+            )
+        return redirect(_architecture_workspace_detail_url(artifact.workspace))
+
+
+class ArchitectureWorkspaceValidateView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(ArchitectureWorkspace, pk=pk)
+        try:
+            run = validate_architecture_workspace(workspace, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to validate architecture workspace: {exc}')
+            return redirect(_architecture_workspace_detail_url(workspace))
+        if run.status == 'failed':
+            messages.error(request, 'Architecture validation failed; inspect the validation run.')
+        elif run.status == 'warning':
+            messages.warning(request, 'Architecture validation passed with warnings.')
+        else:
+            messages.success(request, 'Architecture validation passed.')
+        return redirect(_architecture_workspace_detail_url(workspace))
+
+
+class ArchitectureWorkspacePlanGenerateView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(ArchitectureWorkspace, pk=pk)
+        try:
+            plan = generate_architecture_publish_plan(workspace, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to generate architecture publish plan: {exc}')
+            return redirect(_architecture_workspace_detail_url(workspace))
+        if plan.status == 'blocked':
+            messages.warning(request, f'Generated blocked architecture publish plan {plan.plan_hash[:12]}.')
+        else:
+            messages.success(request, f'Generated architecture publish plan {plan.plan_hash[:12]}.')
+        return redirect(_architecture_workspace_detail_url(workspace))
+
+
+class ArchitecturePublishPlanApproveView(View):
+    def post(self, request, pk):
+        plan = get_object_or_404(ArchitecturePublishPlan.objects.select_related('workspace'), pk=pk)
+        form = forms.ArchitecturePublishPlanApprovalForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, f'Unable to approve architecture publish plan: {form.errors.as_text()}')
+            return redirect(_architecture_workspace_detail_url(plan.workspace))
+        try:
+            approve_architecture_publish_plan(
+                plan,
+                actor=request.user,
+                acknowledgements=[
+                    {
+                        'acknowledge_warnings': form.cleaned_data.get('acknowledge_warnings'),
+                        'note': form.cleaned_data.get('note') or '',
+                    }
+                ],
+            )
+        except Exception as exc:
+            messages.error(request, f'Unable to approve architecture publish plan: {exc}')
+            return redirect(_architecture_workspace_detail_url(plan.workspace))
+        messages.success(request, f'Approved architecture publish plan {plan.plan_hash[:12]}.')
+        return redirect(_architecture_workspace_detail_url(plan.workspace))
+
+
+class ArchitecturePublishPlanPublishView(View):
+    def post(self, request, pk):
+        plan = get_object_or_404(ArchitecturePublishPlan.objects.select_related('workspace'), pk=pk)
+        try:
+            publish_architecture_plan(plan, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to publish architecture plan: {exc}')
+            return redirect(_architecture_workspace_detail_url(plan.workspace))
+        messages.success(request, 'Architecture workspace published.')
+        return redirect(_architecture_workspace_detail_url(plan.workspace))
+
+
+class ArchitectureWorkspacePublishView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(ArchitectureWorkspace.objects.select_related('current_plan'), pk=pk)
+        if workspace.current_plan is None:
+            messages.error(request, 'Generate and approve an architecture publish plan before publishing.')
+            return redirect(_architecture_workspace_detail_url(workspace))
+        try:
+            publish_architecture_plan(workspace.current_plan, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to publish architecture workspace: {exc}')
+            return redirect(_architecture_workspace_detail_url(workspace))
+        messages.success(request, 'Architecture workspace published.')
+        return redirect(_architecture_workspace_detail_url(workspace))
+
+
+class ArchitectureWorkspaceHandoffView(View):
+    def get(self, request, pk):
+        workspace = get_object_or_404(ArchitectureWorkspace, pk=pk)
+        return JsonResponse(build_architecture_handoff_dossier(workspace), json_dumps_params={'indent': 2})
+
+
+class OnboardingWorkspaceSourceAddView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        form = forms.OnboardingSourceArtifactAttachForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, f'Unable to attach source artifact: {form.errors.as_text()}')
+            return redirect(_onboarding_workspace_detail_url(workspace))
+        artifact = attach_source_artifact(
+            workspace=workspace,
+            actor=request.user,
+            **form.cleaned_data,
+        )
+        messages.success(request, f'Attached source artifact "{artifact.name}".')
+        return redirect(_onboarding_workspace_detail_url(workspace))
+
+
+class OnboardingSourceArtifactNormalizeView(View):
+    def post(self, request, pk):
+        artifact = get_object_or_404(OnboardingSourceArtifact.objects.select_related('workspace'), pk=pk)
+        result = normalize_source_artifact(artifact, actor=request.user)
+        if result.issues:
+            messages.warning(request, f'Normalized with {len(result.issues)} issue(s).')
+        else:
+            messages.success(request, f'Normalized {result.created} new and {result.updated} existing design item(s).')
+        return redirect(_onboarding_workspace_detail_url(artifact.workspace))
+
+
+class OnboardingWorkspacePrerequisitesDiscoverView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        result = discover_prerequisites(workspace, actor=request.user)
+        if result.blocked_count or result.open_count:
+            messages.warning(
+                request,
+                f'Discovered prerequisites: {result.open_count} open, {result.blocked_count} blocked.',
+            )
+        else:
+            messages.success(request, 'Prerequisites discovered and resolved.')
+        return redirect(_onboarding_workspace_detail_url(workspace))
+
+
+class OnboardingPrerequisiteResolveView(View):
+    def post(self, request, pk):
+        prerequisite = get_object_or_404(OnboardingPrerequisite.objects.select_related('workspace'), pk=pk)
+        form = forms.OnboardingPrerequisiteResolveForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, f'Unable to resolve prerequisite: {form.errors.as_text()}')
+            return redirect(_onboarding_workspace_detail_url(prerequisite.workspace))
+        resolve_prerequisite(
+            prerequisite,
+            mode=form.cleaned_data['resolution_mode'],
+            object_id=form.cleaned_data.get('object_id'),
+            object_model=form.cleaned_data.get('object_model') or '',
+            planned_create=form.cleaned_data.get('planned_create') or None,
+            defer_reason=form.cleaned_data.get('defer_reason') or '',
+            actor=request.user,
+        )
+        messages.success(request, f'Updated prerequisite {prerequisite.requirement_key}.')
+        return redirect(_onboarding_workspace_detail_url(prerequisite.workspace))
+
+
+class OnboardingWorkspacePlanGenerateView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        try:
+            plan = generate_onboarding_plan(workspace, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to generate onboarding plan: {exc}')
+            return redirect(_onboarding_workspace_detail_url(workspace))
+        if plan.status == 'blocked':
+            messages.warning(request, f'Generated blocked onboarding plan {plan.plan_hash[:12]}.')
+        else:
+            messages.success(request, f'Generated onboarding plan {plan.plan_hash[:12]}.')
+        return redirect(_onboarding_workspace_detail_url(workspace))
+
+
+class OnboardingPlanApproveView(View):
+    def post(self, request, pk):
+        plan = get_object_or_404(OnboardingPlan.objects.select_related('workspace'), pk=pk)
+        form = forms.OnboardingPlanApprovalForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, f'Unable to approve plan: {form.errors.as_text()}')
+            return redirect(_onboarding_workspace_detail_url(plan.workspace))
+        try:
+            approve_onboarding_plan(
+                plan,
+                actor=request.user,
+                acknowledgements=[
+                    {
+                        'acknowledge_warnings': form.cleaned_data.get('acknowledge_warnings'),
+                        'note': form.cleaned_data.get('note') or '',
+                    }
+                ],
+            )
+        except Exception as exc:
+            messages.error(request, f'Unable to approve plan: {exc}')
+            return redirect(_onboarding_workspace_detail_url(plan.workspace))
+        messages.success(request, f'Approved onboarding plan {plan.plan_hash[:12]}.')
+        return redirect(_onboarding_workspace_detail_url(plan.workspace))
+
+
+class OnboardingPlanApplyView(View):
+    def post(self, request, pk):
+        plan = get_object_or_404(OnboardingPlan.objects.select_related('workspace'), pk=pk)
+        stages = request.POST.getlist('stage')
+        try:
+            result = apply_onboarding_plan(plan, actor=request.user, stages=stages or None)
+        except Exception as exc:
+            messages.error(request, f'Unable to apply plan: {exc}')
+            return redirect(_onboarding_workspace_detail_url(plan.workspace))
+        if result.status == 'failed':
+            messages.error(request, 'Onboarding plan failed; inspect stage details.')
+        else:
+            messages.success(request, f'Applied onboarding plan with {len(result.stages)} stage(s).')
+        return redirect(_onboarding_workspace_detail_url(plan.workspace))
+
+
+class OnboardingWorkspaceReadinessView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        try:
+            readiness = evaluate_onboarding_readiness(workspace, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to evaluate readiness: {exc}')
+            return redirect(_onboarding_workspace_detail_url(workspace))
+        if readiness.get('status') == 'ready':
+            messages.success(request, 'Workspace readiness passed.')
+        else:
+            messages.warning(request, f'Workspace readiness is {readiness.get("status")}: {readiness.get("reason")}')
+        return redirect(_onboarding_workspace_detail_url(workspace))
+
+
+class OnboardingWorkspacePublishView(View):
+    def post(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        try:
+            publish_workspace(workspace, actor=request.user)
+        except Exception as exc:
+            messages.error(request, f'Unable to publish workspace: {exc}')
+            return redirect(_onboarding_workspace_detail_url(workspace))
+        messages.success(request, 'Onboarding workspace published.')
+        return redirect(_onboarding_workspace_detail_url(workspace))
+
+
+class OnboardingWorkspaceHandoffView(View):
+    def get(self, request, pk):
+        workspace = get_object_or_404(OnboardingWorkspace, pk=pk)
+        return JsonResponse(build_handoff_dossier(workspace), json_dumps_params={'indent': 2})
 
 
 class HomeView(TemplateView):
@@ -675,13 +1104,27 @@ class StampTemplateExecuteView(TemplateView):
             messages.error(request, 'Stamp apply is blocked until V2.5 preview errors are resolved.')
             return self.render_to_response(self.get_context_data(form=form))
 
-        result = execute_stamp_template(
-            template=self.template,
-            fabric_name=form.cleaned_data['fabric_name'],
-            fabric_slug=form.cleaned_data['fabric_slug'],
-            source_bindings=form.source_bindings(),
-            creation_options=form.creation_options(),
-            actor=request.user,
+        source_bindings = form.source_bindings()
+        creation_options = form.creation_options()
+        try:
+            apply_result = apply_stamp_template_v25(
+                template=self.template,
+                fabric_name=form.cleaned_data['fabric_name'],
+                fabric_slug=form.cleaned_data['fabric_slug'],
+                source_bindings=source_bindings,
+                creation_options=creation_options,
+                actor=request.user,
+            )
+        except StampValidationError as exc:
+            messages.error(request, f'Stamp apply is blocked by V2.5 validation: {exc}')
+            return self.render_to_response(self.get_context_data(form=form))
+
+        result = apply_result.execution
+        _mark_stamp_run_v25_execution(
+            stamp_run=result.stamp_run,
+            preview=apply_result.preview,
+            source_bindings=source_bindings,
+            creation_options=creation_options,
         )
         failures = [path for path in result.resolved_paths if not path.path_found]
         if failures:
@@ -732,6 +1175,213 @@ def _stamp_v25_operator_summary(preview):
         'retry_supported': preview.retry.supported,
         'rollback_supported': preview.rollback.supported,
     }
+
+
+def _model_reference_payload(obj):
+    if obj is None:
+        return None
+    return {
+        'model': obj._meta.label_lower,
+        'id': obj.pk,
+        'display': str(obj),
+    }
+
+
+def _object_from_reference_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    model_label = payload.get('model')
+    object_id = payload.get('id')
+    if not model_label or object_id is None or '.' not in model_label:
+        return None
+    app_label, model_name = model_label.split('.', 1)
+    try:
+        model = apps.get_model(app_label, model_name)
+    except LookupError:
+        return None
+    return model.objects.filter(pk=object_id).first() if model is not None else None
+
+
+def _serialize_model_bindings(bindings):
+    serialized = {}
+    for group_name, objects_by_address in (bindings or {}).items():
+        serialized[group_name] = {
+            address: _model_reference_payload(obj)
+            for address, obj in (objects_by_address or {}).items()
+            if obj is not None
+        }
+    return serialized
+
+
+def _restore_model_bindings(serialized_bindings):
+    restored = {}
+    for group_name, refs_by_address in (serialized_bindings or {}).items():
+        restored[group_name] = {}
+        for address, reference in (refs_by_address or {}).items():
+            obj = _object_from_reference_payload(reference)
+            if obj is not None:
+                restored[group_name][address] = obj
+    return restored
+
+
+def _serialize_creation_options(options):
+    serialized = {}
+    for key, value in (options or {}).items():
+        if hasattr(value, '_meta') and hasattr(value, 'pk'):
+            serialized[key] = {'kind': 'model', 'ref': _model_reference_payload(value)}
+        else:
+            serialized[key] = {'kind': 'value', 'value': value}
+    return serialized
+
+
+def _restore_creation_options(serialized_options):
+    restored = {}
+    for key, payload in (serialized_options or {}).items():
+        if not isinstance(payload, dict):
+            restored[key] = payload
+            continue
+        if payload.get('kind') == 'model':
+            restored[key] = _object_from_reference_payload(payload.get('ref'))
+        else:
+            restored[key] = payload.get('value')
+    return restored
+
+
+def _stamp_preview_payload(preview):
+    return {
+        'operation_key': preview.operation_key,
+        'template_slug': preview.template_slug,
+        'fabric_slug': preview.fabric_slug,
+        'executor': preview.executor,
+        'is_valid': preview.is_valid,
+        'action_counts': preview.action_counts,
+        'issue_count': len(preview.issues),
+        'change_count': len(preview.changes),
+        'retry': {
+            'supported': preview.retry.supported,
+            'strategy': preview.retry.strategy,
+            'classification': preview.retry.classification,
+            'operation_key': preview.retry.operation_key,
+        },
+        'rollback': {
+            'supported': preview.rollback.supported,
+            'strategy': preview.rollback.strategy,
+            'message': preview.rollback.message,
+        },
+    }
+
+
+def _mark_stamp_run_v25_execution(*, stamp_run, preview, source_bindings, creation_options):
+    parameters = {
+        **(stamp_run.parameters or {}),
+        'v25_operation_key': preview.operation_key,
+        'source_bindings': _serialize_model_bindings(source_bindings),
+        'creation_options': _serialize_creation_options(creation_options),
+    }
+    result = {
+        **(stamp_run.result or {}),
+        'v25': {
+            'applied': True,
+            'preview': _stamp_preview_payload(preview),
+        },
+    }
+    metadata = {
+        **(stamp_run.metadata or {}),
+        'stamp_runner': 'v2.5',
+        'v25_operation_key': preview.operation_key,
+    }
+    stamp_run.parameters = parameters
+    stamp_run.result = result
+    stamp_run.metadata = metadata
+    stamp_run.save(update_fields=['parameters', 'result', 'metadata', 'last_updated'])
+
+
+def _stamp_run_v25_context(stamp_run):
+    parameters = stamp_run.parameters or {}
+    source_bindings = _restore_model_bindings(parameters.get('source_bindings') or {})
+    creation_options = _restore_creation_options(parameters.get('creation_options') or {})
+    retry_plan = classify_stamp_retry_v25(
+        stamp_run=stamp_run,
+        source_bindings=source_bindings,
+        creation_options=creation_options,
+    )
+    rollback_plan = rollback_stamp_run_v25(stamp_run=stamp_run, apply=False)
+    manifest = tuple(rollback_plan.manifest)
+    return {
+        'retry': retry_plan,
+        'rollback': rollback_plan,
+        'manifest_preview': manifest[:50],
+        'manifest_truncated': len(manifest) > 50,
+        'retry_url': reverse('plugins:netbox_plant_graph:stamprun_retry_v25', kwargs={'pk': stamp_run.pk}),
+        'rollback_url': reverse('plugins:netbox_plant_graph:stamprun_rollback_v25', kwargs={'pk': stamp_run.pk}),
+        'stored_replayable_inputs': bool((stamp_run.parameters or {}).get('source_bindings') is not None),
+    }
+
+
+class StampRunRetryV25View(View):
+    def post(self, request, pk):
+        stamp_run = get_object_or_404(StampRun, pk=pk)
+        parameters = stamp_run.parameters or {}
+        source_bindings = _restore_model_bindings(parameters.get('source_bindings') or {})
+        creation_options = _restore_creation_options(parameters.get('creation_options') or {})
+        retry_plan = classify_stamp_retry_v25(
+            stamp_run=stamp_run,
+            source_bindings=source_bindings,
+            creation_options=creation_options,
+        )
+        if not retry_plan.supported:
+            messages.warning(request, f'Retry is {retry_plan.classification}: {retry_plan.message}')
+            return redirect(stamp_run.get_absolute_url())
+
+        template = stamp_run.template
+        if template is None:
+            messages.error(request, 'Retry requires the original stamp template.')
+            return redirect(stamp_run.get_absolute_url())
+
+        try:
+            apply_result = apply_stamp_template_v25(
+                template=template,
+                fabric_name=parameters.get('fabric_name') or getattr(stamp_run.fabric, 'name', ''),
+                fabric_slug=parameters.get('fabric_slug') or getattr(stamp_run.fabric, 'slug', ''),
+                source_bindings=source_bindings,
+                creation_options=creation_options,
+                actor=request.user,
+            )
+        except Exception as exc:
+            messages.error(request, f'V2.5 retry failed: {exc}')
+            return redirect(stamp_run.get_absolute_url())
+
+        _mark_stamp_run_v25_execution(
+            stamp_run=apply_result.execution.stamp_run,
+            preview=apply_result.preview,
+            source_bindings=source_bindings,
+            creation_options=creation_options,
+        )
+        messages.success(
+            request,
+            f'Retry completed as stamp run #{apply_result.execution.stamp_run.pk}.',
+        )
+        return redirect(apply_result.execution.stamp_run.get_absolute_url())
+
+
+class StampRunRollbackV25View(View):
+    def post(self, request, pk):
+        stamp_run = get_object_or_404(StampRun, pk=pk)
+        confirm = (request.POST.get('confirm_rollback') or '').strip().upper()
+        if confirm != 'ROLLBACK':
+            plan = rollback_stamp_run_v25(stamp_run=stamp_run, apply=False)
+            messages.warning(
+                request,
+                f'Type ROLLBACK to apply compensation rollback. Preview: {plan.message}',
+            )
+            return redirect(stamp_run.get_absolute_url())
+
+        plan = rollback_stamp_run_v25(stamp_run=stamp_run, apply=True, actor=request.user)
+        if plan.applied:
+            messages.success(request, plan.message)
+        else:
+            messages.error(request, plan.message)
+        return redirect(stamp_run.get_absolute_url())
 
 
 _BUILDER_NODE_TYPE_CHOICES = (
@@ -4158,6 +4808,51 @@ def _impact_badge_for_rank(rank):
     return ('Very Low', 'secondary')
 
 
+_FABRIC_TIER_LABELS = {
+    'compute': 'Compute / endpoint devices',
+    'leaf': 'Leaf tier',
+    'spine': 'Spine tier',
+    'super_spine': 'Super-spine tier',
+    'meta_spine': 'Meta-spine tier',
+    'unclassified': 'Unclassified fabric tier',
+}
+
+_FABRIC_TIER_ORDER = {
+    'compute': 0,
+    'leaf': 10,
+    'spine': 20,
+    'super_spine': 30,
+    'meta_spine': 40,
+    'unclassified': 100,
+}
+
+
+def _endpoint_fabric_tier(endpoint):
+    node = getattr(endpoint, 'node', None)
+    visited = set()
+    while node is not None and getattr(node, 'pk', None) not in visited:
+        visited.add(node.pk)
+        role = getattr(node, 'role', None)
+        role_metadata = getattr(role, 'metadata', None) or {}
+        node_metadata = getattr(node, 'metadata', None) or {}
+        tier = role_metadata.get('fabric_tier') or node_metadata.get('fabric_tier') or node_metadata.get('tier')
+        if tier:
+            return str(tier)
+
+        role_slug = getattr(role, 'slug', '') or ''
+        role_kind = getattr(role, 'role_kind', '') or ''
+        if 'leaf' in role_slug or role_kind in {'active_tier_2_device', 'active_tier_2_port'}:
+            return 'leaf'
+        if any(token in role_slug for token in ('gpu', 'compute', 'h100')):
+            return 'compute'
+        node = getattr(node, 'parent', None)
+    return 'unclassified'
+
+
+def _fabric_tier_label(tier):
+    return _FABRIC_TIER_LABELS.get(tier, str(tier).replace('_', ' ').title())
+
+
 def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_interface_ids):
     site_groups = {}
     for endpoint_id, stat in endpoint_stats.items():
@@ -4188,10 +4883,20 @@ def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_i
                 'impact_label': 'Very Low' if rack is not None else 'Impacted',
                 'impact_class': 'secondary' if rack is not None else 'warning',
                 'devices': {},
+                'tier_groups': {},
             },
         )
 
         parent_container = _device_parent_container(device) if device is not None else None
+        fabric_tier = _endpoint_fabric_tier(endpoint)
+        tier_group = rack_group['tier_groups'].setdefault(
+            fabric_tier,
+            {
+                'fabric_tier': fabric_tier,
+                'fabric_tier_label': _fabric_tier_label(fabric_tier),
+                'devices': {},
+            },
+        )
         device_entry = rack_group['devices'].setdefault(
             device_key,
             {
@@ -4199,6 +4904,8 @@ def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_i
                 if device is not None
                 else SimpleNamespace(display=endpoint.address, url=endpoint.get_absolute_url()),
                 'container': _object_link_reference(parent_container),
+                'fabric_tier': fabric_tier,
+                'fabric_tier_label': _fabric_tier_label(fabric_tier),
                 'rank': 1,
                 'lane_ids': set(),
                 'path_count': 0,
@@ -4206,6 +4913,7 @@ def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_i
                 'interfaces': {},
             },
         )
+        tier_group['devices'][device_key] = device_entry
         device_entry['lane_ids'].update(stat['lane_ids'])
         device_entry['path_count'] += stat['path_count']
         device_entry['endpoint_count'] += 1
@@ -4259,7 +4967,31 @@ def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_i
                         impacted_lane_total=len(device_entry['lane_ids']),
                         impacted_path_total=device_entry['path_count'],
                         impacted_endpoint_total=device_entry['endpoint_count'],
+                        fabric_tier=device_entry['fabric_tier'],
+                        fabric_tier_label=device_entry['fabric_tier_label'],
                         interfaces=tuple(sorted(rendered_interfaces, key=lambda row: row.interface.display)),
+                    )
+                )
+            rendered_device_by_key = {
+                device_key: rendered_device
+                for device_key, rendered_device in zip(
+                    rack_group['devices'].keys(),
+                    rendered_devices,
+                    strict=True,
+                )
+            }
+            rendered_tier_groups = []
+            for tier_group in rack_group['tier_groups'].values():
+                tier_devices = [
+                    rendered_device_by_key[device_key]
+                    for device_key in tier_group['devices']
+                    if device_key in rendered_device_by_key
+                ]
+                rendered_tier_groups.append(
+                    SimpleNamespace(
+                        fabric_tier=tier_group['fabric_tier'],
+                        fabric_tier_label=tier_group['fabric_tier_label'],
+                        devices=tuple(sorted(tier_devices, key=lambda row: row.device.display)),
                     )
                 )
             rendered_rack_groups.append(
@@ -4268,6 +5000,12 @@ def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_i
                     impact_label=rack_group['impact_label'],
                     impact_class=rack_group['impact_class'],
                     devices=tuple(sorted(rendered_devices, key=lambda row: row.device.display)),
+                    tier_groups=tuple(
+                        sorted(
+                            rendered_tier_groups,
+                            key=lambda row: (_FABRIC_TIER_ORDER.get(row.fabric_tier, 90), row.fabric_tier_label),
+                        )
+                    ),
                 )
             )
         rendered_site_groups.append(
@@ -5222,6 +5960,149 @@ def _fabric_readiness_rows(limit=12):
     return tuple(_fabric_readiness_summary(fabric) for fabric in fabrics)
 
 
+def _integrity_finding_signature(finding):
+    obj = finding.object
+    return ':'.join(
+        str(part)
+        for part in (
+            finding.code,
+            obj.model,
+            obj.object_id or '',
+            finding.message,
+        )
+    )
+
+
+def _resolve_integrity_subject(ref):
+    if ref.object_id is None or '.' not in ref.model:
+        return None
+    app_label, model_name = ref.model.split('.', 1)
+    try:
+        model = apps.get_model(app_label, model_name)
+    except LookupError:
+        return None
+    if model is None:
+        return None
+    return model.objects.filter(pk=ref.object_id).first()
+
+
+def _topology_integrity_primary_events(fabric):
+    events = []
+    for event in AuditEvent.objects.filter(fabric=fabric, event_type='policy_eval').order_by('-created', '-pk'):
+        metadata = event.metadata or {}
+        if metadata.get('finding_transition'):
+            continue
+        if not metadata.get('topology_integrity'):
+            continue
+        events.append(event)
+    return tuple(events)
+
+
+def _promote_topology_integrity_audit_findings(*, run, report, actor=None):
+    fabric = run.fabric
+    if fabric is None:
+        return {'opened': 0, 'refreshed': 0, 'resolved': 0}
+    existing_by_signature = {}
+    for event in _topology_integrity_primary_events(fabric):
+        signature = (event.metadata or {}).get('topology_integrity_signature')
+        if signature and signature not in existing_by_signature:
+            existing_by_signature[signature] = event
+
+    opened = 0
+    refreshed = 0
+    current_signatures = set()
+    for finding in report.findings:
+        signature = _integrity_finding_signature(finding)
+        current_signatures.add(signature)
+        existing = existing_by_signature.get(signature)
+        metadata = {
+            'finding_status': 'open',
+            'finding_type': 'topology_integrity',
+            'severity': finding.severity,
+            'topology_integrity': True,
+            'topology_integrity_signature': signature,
+            'topology_integrity_run_id': run.pk,
+            'topology_integrity_code': finding.code,
+            'path_blocking': finding.path_blocking,
+            'affected_workflows': list(finding.affected_workflows),
+            'object_family': finding.object_family,
+            'remediation': finding.remediation,
+        }
+        if existing is not None:
+            existing_metadata = dict(existing.metadata or {})
+            existing_metadata.update(
+                {
+                    'topology_integrity_run_id': run.pk,
+                    'last_seen_integrity_run_id': run.pk,
+                    'path_blocking': finding.path_blocking,
+                    'affected_workflows': list(finding.affected_workflows),
+                    'remediation': finding.remediation,
+                }
+            )
+            existing.payload = finding.as_dict()
+            existing.message = finding.message
+            existing.metadata = existing_metadata
+            existing.save(update_fields=['payload', 'message', 'metadata', 'last_updated'])
+            if _finding_status(existing) == 'resolved':
+                _set_finding_status(
+                    finding_event=existing,
+                    actor=actor,
+                    new_status='open',
+                    action_name='reopen',
+                    note=f'Reappeared in topology integrity run #{run.pk}.',
+                )
+            refreshed += 1
+            continue
+
+        record_audit_event(
+            event_type='policy_eval',
+            fabric=fabric,
+            actor=actor,
+            subject=_resolve_integrity_subject(finding.object),
+            outcome='failed' if finding.severity in {'critical', 'error'} else 'warning',
+            message=finding.message,
+            payload=finding.as_dict(),
+            metadata=metadata,
+        )
+        opened += 1
+
+    resolved = 0
+    for signature, event in existing_by_signature.items():
+        if signature in current_signatures or _finding_status(event) not in FINDING_STATUS_ACTIVE:
+            continue
+        _set_finding_status(
+            finding_event=event,
+            actor=actor,
+            new_status='resolved',
+            action_name='auto_resolve',
+            note=f'Not present in topology integrity run #{run.pk}.',
+        )
+        resolved += 1
+
+    return {'opened': opened, 'refreshed': refreshed, 'resolved': resolved}
+
+
+def _workflow_surface_groups():
+    groups = []
+    for group in WORKFLOW_SURFACE_CLASSIFICATIONS:
+        rows = []
+        for route_name, label in group['routes']:
+            try:
+                url = reverse(f'plugins:netbox_plant_graph:{route_name}')
+            except NoReverseMatch:
+                url = ''
+            rows.append({'route_name': route_name, 'label': label, 'url': url})
+        groups.append(
+            {
+                'status': group['status'],
+                'label': group['label'],
+                'description': group['description'],
+                'rows': tuple(rows),
+            }
+        )
+    return tuple(groups)
+
+
 def _request_values(data, key):
     getter = getattr(data, 'getlist', None)
     if callable(getter):
@@ -5758,9 +6639,18 @@ class AuditDashboardView(TemplateView):
             actor=request.user if request.user.is_authenticated else None,
             parameters={'trigger_mode': 'ui'},
         )
+        promoted = _promote_topology_integrity_audit_findings(
+            run=run,
+            report=report,
+            actor=request.user,
+        )
         messages.success(
             request,
-            f'Persisted topology integrity run #{run.pk} for {fabric.name}: {report.summary["total"]} findings.',
+            (
+                f'Persisted topology integrity run #{run.pk} for {fabric.name}: '
+                f'{report.summary["total"]} findings; {promoted["opened"]} opened, '
+                f'{promoted["refreshed"]} refreshed, {promoted["resolved"]} auto-resolved.'
+            ),
         )
         return redirect(f'{reverse("plugins:netbox_plant_graph:audit_dashboard")}?{urlencode({"fabric_id": fabric.pk})}')
 
@@ -6587,11 +7477,39 @@ class OperationsCenterView(TemplateView):
             'form': form,
             'recent_runs': recent_runs,
             'impact_report_runs': tuple(_impact_report_runs()[:10]),
+            'import_report_runs': tuple(_import_report_runs()[:10]),
             'readiness_rows': _fabric_readiness_rows(),
+            'workflow_surface_groups': _workflow_surface_groups(),
         })
         return context
 
     def post(self, request, *args, **kwargs):
+        if request.POST.get('action') == 'run_integrity':
+            fabric = Fabric.objects.filter(pk=_parse_int(request.POST.get('fabric_id'))).first()
+            if fabric is None:
+                messages.error(request, 'Select a fabric before running topology integrity.')
+                return redirect(reverse('plugins:netbox_plant_graph:operations_center'))
+            report = audit_topology_integrity(fabric=fabric)
+            run = persist_topology_integrity_report(
+                report,
+                actor=request.user if request.user.is_authenticated else None,
+                parameters={'trigger_mode': 'operations_center'},
+            )
+            promoted = _promote_topology_integrity_audit_findings(
+                run=run,
+                report=report,
+                actor=request.user,
+            )
+            messages.success(
+                request,
+                (
+                    f'Persisted topology integrity run #{run.pk}: {report.summary["total"]} findings; '
+                    f'{promoted["opened"]} opened, {promoted["refreshed"]} refreshed, '
+                    f'{promoted["resolved"]} auto-resolved.'
+                ),
+            )
+            return redirect(reverse('plugins:netbox_plant_graph:operations_center'))
+
         form = forms.OperationExecuteForm(request.POST)
         if not form.is_valid():
             return self.render_to_response(self.get_context_data(form=form))
@@ -6614,12 +7532,29 @@ class ImportPreviewView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         plan = kwargs.get('plan')
+        payload_text = kwargs.get('payload_text', '')
+        loaded_import_run = kwargs.get('loaded_import_run')
+        parse_error = kwargs.get('parse_error', '')
+        report_id = _parse_int(self.request.GET.get('report'))
+        if plan is None and report_id:
+            loaded_import_run = _import_report_runs().filter(pk=report_id).first()
+            if loaded_import_run is not None:
+                payload = _payload_from_import_report_run(loaded_import_run)
+                if payload is not None:
+                    payload_text = json.dumps(payload, indent=2, sort_keys=True)
+                    try:
+                        plan = reconcile_import_payload(payload, apply=False)
+                    except Exception as exc:
+                        parse_error = f'Unable to replay saved import report #{loaded_import_run.pk}: {exc}'
         context.update(
             {
-                'payload_text': kwargs.get('payload_text', ''),
+                'payload_text': payload_text,
                 'plan': plan,
-                'parse_error': kwargs.get('parse_error', ''),
+                'parse_error': parse_error,
                 'apply_requested': kwargs.get('apply_requested', False),
+                'saved_import_run': kwargs.get('saved_import_run'),
+                'loaded_import_run': loaded_import_run,
+                'recent_import_runs': tuple(_import_report_runs()[:25]),
             }
         )
         if plan is not None:
@@ -6629,19 +7564,37 @@ class ImportPreviewView(TemplateView):
     def post(self, request, *args, **kwargs):
         payload_text = (request.POST.get('payload_json') or '').strip()
         uploaded_file = request.FILES.get('payload_file')
-        if uploaded_file is not None and not payload_text:
-            payload_text = uploaded_file.read().decode('utf-8')
-        apply_requested = request.POST.get('action') == 'apply'
+        action = request.POST.get('action') or 'preview'
+        apply_requested = action == 'apply'
+        save_requested = action == 'save_preview'
         confirm_apply = (request.POST.get('confirm_apply') or '').strip().lower() == 'apply'
         plan = None
         parse_error = ''
+        saved_import_run = None
         try:
+            if uploaded_file is not None and not payload_text:
+                payload_text = uploaded_file.read().decode('utf-8')
             payload = json.loads(payload_text or '{}')
             if apply_requested and not confirm_apply:
                 parse_error = 'Type APPLY before applying this reconciliation plan.'
                 plan = reconcile_import_payload(payload, apply=False)
             else:
                 plan = reconcile_import_payload(payload, apply=apply_requested)
+                if save_requested:
+                    saved_import_run = _persist_import_reconciliation_report(
+                        payload=payload,
+                        plan=plan,
+                        actor=request.user,
+                        action='dry_run',
+                    )
+                    messages.success(request, f'Saved dry-run import report #{saved_import_run.pk}.')
+                elif apply_requested:
+                    saved_import_run = _persist_import_reconciliation_report(
+                        payload=payload,
+                        plan=plan,
+                        actor=request.user,
+                        action='apply',
+                    )
                 if apply_requested and plan.committed:
                     messages.success(request, f'Applied import reconciliation plan with {plan.summary.total} rows.')
                 elif apply_requested:
@@ -6658,6 +7611,7 @@ class ImportPreviewView(TemplateView):
                 plan=plan,
                 parse_error=parse_error,
                 apply_requested=apply_requested,
+                saved_import_run=saved_import_run,
             )
         )
 
@@ -6681,6 +7635,7 @@ def _import_preview_operator_context(plan):
     return {
         'import_architecture_conflicts': architecture_conflicts,
         'import_row_diffs': row_diffs,
+        'import_conflict_remediation_rows': _import_conflict_remediation_rows(plan),
         'import_dependency_summary': {
             'total': len(plan.dependency_edges),
             **dependency_counts,
@@ -6690,6 +7645,218 @@ def _import_preview_operator_context(plan):
         'import_apply_order_truncated': len(plan.apply_order) > 32,
         'import_provenance_rows': provenance_rows,
     }
+
+
+def _import_report_runs():
+    return OperationRun.objects.filter(
+        profile=IMPORT_RECONCILIATION_OPERATION_PROFILE,
+        result__operation_kind=IMPORT_RECONCILIATION_OPERATION_KIND,
+    ).select_related('fabric', 'initiated_by').order_by('-created', '-pk')
+
+
+def _payload_from_import_report_run(run):
+    payload = (run.parameters or {}).get('payload')
+    return payload if isinstance(payload, dict) else None
+
+
+def _fabric_from_import_payload(payload, plan=None):
+    candidate_slugs = []
+    if isinstance(payload, dict):
+        for key in ('fabric_slug', 'fabric'):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                candidate_slugs.append(value)
+        for item in payload.get('items') or ():
+            if not isinstance(item, dict):
+                continue
+            for key in ('fabric_slug', 'fabric'):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    candidate_slugs.append(value)
+    if plan is not None:
+        for diff in getattr(plan, 'diffs', ()):
+            details = getattr(diff, 'details', {}) or {}
+            value = details.get('fabric_slug') or details.get('fabric')
+            if isinstance(value, str) and value:
+                candidate_slugs.append(value)
+    for slug in candidate_slugs:
+        fabric = Fabric.objects.filter(slug=slug).first()
+        if fabric is not None:
+            return fabric
+    return None
+
+
+def _persist_import_reconciliation_report(*, payload, plan, actor=None, action='dry_run', source_run=None):
+    now = timezone.now()
+    summary = plan.summary.to_dict()
+    result = {
+        'operation_kind': IMPORT_RECONCILIATION_OPERATION_KIND,
+        'report_schema': IMPORT_RECONCILIATION_REPORT_SCHEMA,
+        'action': action,
+        'applied': plan.applied,
+        'committed': plan.committed,
+        'has_conflicts': plan.has_conflicts,
+        'summary': summary,
+        'payload_version': plan.payload_version,
+        'source_label': plan.source_label,
+        'plan': plan.to_dict(),
+    }
+    metadata = {
+        'operation_kind': IMPORT_RECONCILIATION_OPERATION_KIND,
+        'report_schema': IMPORT_RECONCILIATION_REPORT_SCHEMA,
+        'action': action,
+        'row_count': summary.get('total', 0),
+        'conflict_count': summary.get('conflict', 0),
+        'committed': plan.committed,
+        'source_run_id': source_run.pk if source_run is not None else None,
+    }
+    return OperationRun.objects.create(
+        profile=IMPORT_RECONCILIATION_OPERATION_PROFILE,
+        status='completed',
+        fabric=_fabric_from_import_payload(payload, plan),
+        initiated_by=actor if getattr(actor, 'is_authenticated', False) else None,
+        parameters={
+            'operation_kind': IMPORT_RECONCILIATION_OPERATION_KIND,
+            'action': action,
+            'payload': payload,
+            'source_run_id': source_run.pk if source_run is not None else None,
+        },
+        result=result,
+        metadata=metadata,
+        started_at=now,
+        completed_at=now,
+    )
+
+
+def _import_conflict_remediation_rows(plan):
+    rows = []
+    if getattr(plan.architecture_gate, 'has_errors', False):
+        for issue in plan.architecture_gate.issues:
+            if issue.severity != 'error':
+                continue
+            rows.append(
+                {
+                    'scope': 'architecture',
+                    'identity': issue.path,
+                    'problem': issue.message,
+                    'remediation': (
+                        'Correct the payload architecture hint/schema contract, or target an architecture version '
+                        'compatible with the persisted V2 schema before applying rows.'
+                    ),
+                }
+            )
+    missing_edges = [edge for edge in plan.dependency_edges if edge.status == 'missing']
+    for edge in missing_edges[:20]:
+        rows.append(
+            {
+                'scope': f'row {edge.dependent_index}',
+                'identity': edge.reference.identity,
+                'problem': f'Missing prerequisite for {edge.field}.',
+                'remediation': (
+                    'Add the prerequisite object to the same import payload before this row, '
+                    'or create it in NetBox/plugin inventory before replaying the plan.'
+                ),
+            }
+        )
+    for diff in plan.diffs:
+        if not diff.is_conflict:
+            continue
+        message = f'{diff.message} {diff.error}'.lower()
+        if 'already' in message or 'integrity' in message or 'unique' in message:
+            remediation = (
+                'Inspect the existing object, decide whether this row should become an update, '
+                'or change the natural key in the payload.'
+            )
+        elif 'site' in message or 'missing' in message:
+            remediation = 'Create or correct the referenced site/object, then replay the saved dry run.'
+        else:
+            remediation = 'Correct the row payload and replay the saved dry run before applying.'
+        rows.append(
+            {
+                'scope': f'row {diff.index}',
+                'identity': diff.identity,
+                'problem': diff.message,
+                'remediation': remediation,
+            }
+        )
+    return tuple(rows)
+
+
+def _operation_run_context(run):
+    context = {}
+    if (run.result or {}).get('operation_kind') == IMPORT_RECONCILIATION_OPERATION_KIND:
+        summary = (run.result or {}).get('summary') or {}
+        context['import_report'] = {
+            'action': (run.result or {}).get('action') or (run.metadata or {}).get('action') or 'report',
+            'summary': summary,
+            'committed': bool((run.result or {}).get('committed')),
+            'has_conflicts': bool((run.result or {}).get('has_conflicts')),
+            'export_url': reverse('plugins:netbox_plant_graph:import_report_export', kwargs={'pk': run.pk}),
+            'apply_url': reverse('plugins:netbox_plant_graph:import_report_apply', kwargs={'pk': run.pk}),
+            'replay_url': reverse('plugins:netbox_plant_graph:import_report_replay', kwargs={'pk': run.pk}),
+        }
+    return context
+
+
+class ImportReportExportView(View):
+    def get(self, request, pk):
+        run = get_object_or_404(_import_report_runs(), pk=pk)
+        response = JsonResponse(run.result or {}, json_dumps_params={'indent': 2})
+        response['Content-Disposition'] = f'attachment; filename="import-report-{run.pk}.json"'
+        return response
+
+
+class ImportReportReplayView(View):
+    def post(self, request, pk):
+        run = get_object_or_404(_import_report_runs(), pk=pk)
+        payload = _payload_from_import_report_run(run)
+        if payload is None:
+            messages.error(request, 'Saved import report does not contain a replayable payload.')
+            return redirect(run.get_absolute_url())
+        try:
+            plan = reconcile_import_payload(payload, apply=False)
+            replay = _persist_import_reconciliation_report(
+                payload=payload,
+                plan=plan,
+                actor=request.user,
+                action='replay_dry_run',
+                source_run=run,
+            )
+        except Exception as exc:
+            messages.error(request, f'Unable to replay import report #{run.pk}: {exc}')
+            return redirect(run.get_absolute_url())
+        messages.success(request, f'Replayed import report #{run.pk} as dry-run #{replay.pk}.')
+        return redirect(replay.get_absolute_url())
+
+
+class ImportReportApplyView(View):
+    def post(self, request, pk):
+        run = get_object_or_404(_import_report_runs(), pk=pk)
+        confirm = (request.POST.get('confirm_apply') or '').strip().upper()
+        if confirm != 'APPLY':
+            messages.warning(request, 'Type APPLY to apply the exact saved import payload.')
+            return redirect(run.get_absolute_url())
+        payload = _payload_from_import_report_run(run)
+        if payload is None:
+            messages.error(request, 'Saved import report does not contain a replayable payload.')
+            return redirect(run.get_absolute_url())
+        try:
+            plan = reconcile_import_payload(payload, apply=True)
+            applied = _persist_import_reconciliation_report(
+                payload=payload,
+                plan=plan,
+                actor=request.user,
+                action='apply_replay',
+                source_run=run,
+            )
+        except Exception as exc:
+            messages.error(request, f'Unable to apply saved import report #{run.pk}: {exc}')
+            return redirect(run.get_absolute_url())
+        if plan.committed:
+            messages.success(request, f'Applied saved import report #{run.pk} as run #{applied.pk}.')
+        else:
+            messages.warning(request, f'Saved import report #{run.pk} was replayed but not committed because conflicts remain.')
+        return redirect(applied.get_absolute_url())
 
 
 def _impact_report_runs():

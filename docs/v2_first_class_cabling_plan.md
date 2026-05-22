@@ -1,7 +1,7 @@
 # V2 First-Class Physical Cabling Plan
 
 Status: implementation-complete for current V2 scope
-Last updated: 2026-05-21
+Last updated: 2026-05-22
 
 ## Objective
 
@@ -36,7 +36,7 @@ Delivered:
 3. Added strand validation that enforces pair coherence and assembly existence
    when pair values are provided.
 4. Added migration:
-   - `0003_first_class_cable_assemblies.py`
+   - `0003_cable_assembly.py`
 
 ### Slice 2: Registry/API/UI integration (completed)
 

@@ -25,10 +25,17 @@ V2 provides:
 - first-class `CableAssembly` rows for jumpers, trunks, and parent/child cable
   hierarchy, with each `FiberStrand` able to resolve back to an assembly by
   site-local cable ID;
+- first-class architecture workspaces that capture blueprint/source artifacts,
+  normalize architecture components, validate schema/import/device-type
+  compatibility, generate stable publish plans, and publish reusable
+  architecture blueprints into the persistent model;
 - on-demand optical path resolution at connector-position resolution across
   arbitrary strand and transfer-map hops;
 - stamping templates and `StampRun` provenance for creating V2 fabrics from
   architecture rules;
+- first-class onboarding workspaces that capture source design artifacts,
+  normalize staged design rows, discover prerequisites, generate a unified
+  stamp/import/readiness plan, execute staged apply, and publish handoff JSON;
 - generated list/detail/CRUD/API surfaces from the V2 registry for standard
   model inventory objects;
 - hand-wired operator workflows for path tracing, interface fanout tracing,
@@ -48,8 +55,12 @@ The plugin menu is grouped around current workflows:
   - Path Query
   - Physical Cable Blast Radius
 - **Build & Run**
+  - Architecture Workspaces
+  - Onboarding Workspaces
   - Onboard Fabric
   - Operations Center
+  - Import Preview
+  - Impact Reports
 - **Audit**
   - Audit Dashboard
   - Audit Triage
@@ -136,6 +147,8 @@ See [LOCAL_DEV_SETUP.md](LOCAL_DEV_SETUP.md) for local environment notes and
 - [Cutover runbook](docs/v2_cutover_runbook.md)
 - [Post-MVP expansion plan](docs/v2_post_mvp_expansion_plan.md)
 - [First-class cabling plan](docs/v2_first_class_cabling_plan.md)
+- [First-class architecture workspace](docs/v2_first_class_architecture_workspace.md)
+- [First-class onboarding workspace](docs/v2_first_class_onboarding_workspace_design.md)
 
 ## License
 

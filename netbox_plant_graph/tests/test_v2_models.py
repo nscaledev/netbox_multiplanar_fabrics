@@ -16,6 +16,7 @@ from netbox_plant_graph.models import (
     OpticalLane,
     Plane,
     StrandTermination,
+    TransferPattern,
     TransportChannel,
 )
 
@@ -69,6 +70,48 @@ class V2ModelSemanticsTestCase(TestCase):
             channel_index=1,
             speed_gbps=200,
         )
+
+    def test_fabric_architecture_defaults_to_roce_backend_class(self):
+        architecture = FabricArchitecture.objects.create(
+            name='Default Fabric Class',
+            slug='default-fabric-class',
+            version='v1',
+        )
+
+        self.assertEqual(architecture.fabric_class, 'roce_backend')
+        architecture.full_clean()
+
+    def test_fabric_architecture_accepts_non_backend_fabric_classes(self):
+        for fabric_class in ('ethernet_frontend', 'management', 'storage'):
+            with self.subTest(fabric_class=fabric_class):
+                architecture = FabricArchitecture(
+                    name=f'{fabric_class} Architecture',
+                    slug=f'{fabric_class}-architecture',
+                    version='v1',
+                    fabric_class=fabric_class,
+                )
+
+                architecture.full_clean()
+
+    def test_transfer_pattern_accepts_expansion_pattern_kinds(self):
+        expansion_kinds = (
+            'shuffle_1x4',
+            'shuffle_2x2_mpo24',
+            'shuffle_4x4',
+            'direct_attach',
+            'polarity_type_b',
+            'polarity_type_c',
+            'shuffle_nxm',
+        )
+        for pattern_kind in expansion_kinds:
+            with self.subTest(pattern_kind=pattern_kind):
+                pattern = TransferPattern(
+                    name=pattern_kind,
+                    slug=pattern_kind,
+                    pattern_kind=pattern_kind,
+                )
+
+                pattern.full_clean()
 
     def test_optical_lane_is_transceiver_local(self):
         lane = OpticalLane.objects.create(

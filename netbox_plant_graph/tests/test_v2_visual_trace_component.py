@@ -430,6 +430,118 @@ class V2VisualTraceComponentContractTestCase(SimpleTestCase):
             """
         )
 
+    def test_renderer_handles_large_fanout_fixture_with_links_and_export(self):
+        self.run_renderer_node_probe(
+            """
+            const pathCount = 64;
+            const payload = [];
+            for (let index = 0; index < pathCount; index += 1) {
+              const sourcePosition = (index % 12) + 1;
+              const destinationPosition = 12 - (index % 12);
+              payload.push({
+                path_found: true,
+                source_subinterface_label: `osfp1/${(index % 4) + 1}`,
+                source_subinterface_url: `/dcim/interfaces/${1000 + (index % 4)}/`,
+                source_lane_url: `/plugins/plant-graph/optical-lanes/${2000 + index}/`,
+                destination_interface_layer_label: `leaf-${index % 8}-osfp1/${(index % 4) + 1}`,
+                destination_interface_layer_url: `/dcim/interfaces/${3000 + index}/`,
+                destination_lane_url: `/plugins/plant-graph/optical-lanes/${4000 + index}/`,
+                connector_hops: [
+                  {
+                    endpoint_label: `source.MPO-${(index % 2) + 1}`,
+                    endpoint_url: `/plugins/plant-graph/endpoints/${5000 + (index % 2)}/`,
+                    position_url: `/plugins/plant-graph/connector-positions/${6000 + index}/`,
+                    position: sourcePosition,
+                    position_count: 12,
+                  },
+                  {
+                    endpoint_label: `shuffle.front-${(index % 4) + 1}`,
+                    endpoint_url: `/plugins/plant-graph/endpoints/${7000 + (index % 4)}/`,
+                    position_url: `/plugins/plant-graph/connector-positions/${8000 + index}/`,
+                    position: sourcePosition,
+                    position_count: 12,
+                  },
+                  {
+                    endpoint_label: `shuffle.rear-${(index % 4) + 1}`,
+                    endpoint_url: `/plugins/plant-graph/endpoints/${9000 + (index % 4)}/`,
+                    position_url: `/plugins/plant-graph/connector-positions/${10000 + index}/`,
+                    position: destinationPosition,
+                    position_count: 12,
+                  },
+                  {
+                    endpoint_label: `destination-${index % 8}.MPO-1`,
+                    endpoint_url: `/plugins/plant-graph/endpoints/${11000 + (index % 8)}/`,
+                    position_url: `/plugins/plant-graph/connector-positions/${12000 + index}/`,
+                    position: destinationPosition,
+                    position_count: 12,
+                  },
+                ],
+                cable_spans: [
+                  {
+                    from_hop_index: 0,
+                    to_hop_index: 1,
+                    cable_assembly: {
+                      display: `SRC-BUNDLE-${index % 8}`,
+                      label: `SRC-BUNDLE-${index % 8}`,
+                      url: `/plugins/plant-graph/cable-assemblies/${13000 + (index % 8)}/`,
+                    },
+                  },
+                  {
+                    from_hop_index: 2,
+                    to_hop_index: 3,
+                    cable_assembly: {
+                      display: `DST-BUNDLE-${index % 8}`,
+                      label: `DST-BUNDLE-${index % 8}`,
+                      url: `/plugins/plant-graph/cable-assemblies/${14000 + (index % 8)}/`,
+                    },
+                  },
+                ],
+              });
+            }
+            const stages = [
+              {stage_index: 0, connectors: [
+                {endpoint_label: 'source.MPO-1', endpoint_url: '/plugins/plant-graph/endpoints/1/', position_count: 12, positions: [{position: 1, url: '/plugins/plant-graph/connector-positions/1/'}]},
+                {endpoint_label: 'source.MPO-2', endpoint_url: '/plugins/plant-graph/endpoints/2/', position_count: 12, positions: [{position: 12, url: '/plugins/plant-graph/connector-positions/2/'}]},
+              ]},
+              {stage_index: 1, connectors: [
+                {endpoint_label: 'shuffle.front-1', endpoint_url: '/plugins/plant-graph/endpoints/3/', position_count: 12, positions: [{position: 1, url: '/plugins/plant-graph/connector-positions/3/'}]},
+                {endpoint_label: 'shuffle.front-2', endpoint_url: '/plugins/plant-graph/endpoints/4/', position_count: 12, positions: [{position: 12, url: '/plugins/plant-graph/connector-positions/4/'}]},
+              ]},
+              {stage_index: 2, connectors: [
+                {endpoint_label: 'shuffle.rear-1', endpoint_url: '/plugins/plant-graph/endpoints/5/', position_count: 12, positions: [{position: 1, url: '/plugins/plant-graph/connector-positions/5/'}]},
+                {endpoint_label: 'shuffle.rear-2', endpoint_url: '/plugins/plant-graph/endpoints/6/', position_count: 12, positions: [{position: 12, url: '/plugins/plant-graph/connector-positions/6/'}]},
+              ]},
+              {stage_index: 3, connectors: [
+                {endpoint_label: 'destination-1.MPO-1', endpoint_url: '/plugins/plant-graph/endpoints/7/', position_count: 12, positions: [{position: 1, url: '/plugins/plant-graph/connector-positions/7/'}]},
+                {endpoint_label: 'destination-2.MPO-1', endpoint_url: '/plugins/plant-graph/endpoints/8/', position_count: 12, positions: [{position: 12, url: '/plugins/plant-graph/connector-positions/8/'}]},
+              ]},
+            ];
+            const svg = node('svg', {'data-fanout-schematic-svg': 'true'});
+            const payloadNode = node('script', {'data-fanout-schematic-data': 'true'}, [], JSON.stringify(payload));
+            const stageNode = node('script', {'data-fanout-schematic-stages': 'true'}, [], JSON.stringify(stages));
+            const container = node('div', {
+              'data-fanout-fixture-key': 'large-fanout',
+              'data-fanout-trace-mode': 'expanded',
+              'data-fanout-source-title': 'Source: large-osfp1',
+            }, [payloadNode, stageNode, svg]);
+
+            const started = Date.now();
+            const snapshot = api.goldenSnapshot(container);
+            const elapsedMs = Date.now() - started;
+
+            assert.strictEqual(snapshot.payload.pathCount, pathCount);
+            assert.strictEqual(snapshot.payload.stageCount, 4);
+            assert.strictEqual(snapshot.payload.cableSpanCount, pathCount * 2);
+            assert(snapshot.rendered.sectionCount >= 4);
+            assert(snapshot.rendered.connectorCount >= 8);
+            assert(snapshot.rendered.cableCylinderCount >= 2);
+            assert(snapshot.rendered.objectLinkCount >= pathCount);
+            assert.strictEqual(snapshot.export.hasObjectLinks, true);
+            assert.strictEqual(snapshot.export.hasVisibleContentHooks, true);
+            assert(elapsedMs < 3000, `large fanout render took ${elapsedMs}ms`);
+            """
+        )
+
     def test_exported_svg_keeps_links_tooltips_dimensions_and_visible_hooks(self):
         self.run_renderer_node_probe(
             """

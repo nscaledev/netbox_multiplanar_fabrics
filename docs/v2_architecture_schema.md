@@ -4,17 +4,56 @@ The V2 architecture fixture is executable topology data, not just seed data. The
 `netbox_plant_graph.services.architecture_schema` checks the parts of that data that stamping and path resolution rely
 on before they become database rows.
 
-## Built-in RoCE fixture
+## Built-in RoCE blueprints
 
-The current built-in architecture is `roce-4-plane-gb300-2x2-shuffle` version `v2`. Use:
+The default blueprint registry exposes three active built-in architecture
+families:
 
-- `build_roce_4plane_shuffle_architecture_schema()` to get the fixture as an `ArchitectureSchemaDefinition`.
-- `validate_roce_4plane_shuffle_architecture_fixture()` to validate the built-in data and receive an
-  `ArchitectureSchemaValidationResult`.
-- The persisted built-in row stores `metadata.schema_contract_version` with the current schema contract version.
+- `roce-4-plane-gb300-2x2-shuffle` `v2`: GB300 four-plane 2x2 shuffle.
+- `roce-4-plane-h100-direct-attach` `v2`: H100 four-plane direct attach.
+- `roce-8-plane-gb300-2x2-shuffle` `v2`: GB300 eight-plane 2x2 shuffle.
+
+Use:
+
+- `build_roce_4plane_shuffle_architecture_schema()` for the GB300 four-plane
+  shuffle fixture.
+- `build_roce_4plane_h100_direct_attach_architecture_schema()` for the H100
+  direct-attach fixture.
+- `build_roce_8plane_gb300_shuffle_architecture_schema()` for the GB300
+  eight-plane shuffle fixture.
+- `get_default_blueprint_registry()` to resolve the active built-in registry
+  entries, their lifecycle metadata, required device types, and bundled stamp
+  templates.
+
+Persisted built-in rows store `metadata.schema_contract_version` with the
+current schema contract version. Registry-backed persisted architectures also
+store the importable blueprint definition under `metadata.blueprint.definition`
+so V2.5 stamping and import preflight can validate against the same contract
+later.
 
 Validation returns structured `ArchitectureSchemaError` objects with `code`, `path`, `message`, and optional `context`.
 It does not raise assertions. Callers can show all errors, filter by code, or fail a deployment before writing rows.
+
+## Definition Metadata
+
+`ArchitectureSchemaDefinition` carries both the legacy executable surfaces and newer blueprint metadata:
+
+- plane range: `min_planes`, `max_planes`, and `default_planes`;
+- fabric class: one of `roce_backend`, `ethernet_frontend`, `management`, or `storage`;
+- `parameter_schema`: a JSON Schema object for stamp-time parameters;
+- `required_device_types`: role slug to compatible NetBox DeviceType slugs;
+- lifecycle fields: `status` and `lifecycle`;
+- provider hooks: `transfer_pair_providers` and `custom_validator_entrypoints`.
+
+For custom transfer patterns, `rule.validator_entrypoint` must be a dotted Python import path to a callable. The callable
+receives the transfer rule body and returns either `None`, an empty sequence, or a sequence of
+`ArchitectureSchemaError` objects or mappings with `code`, `path`, `message`, and optional `context`. The reference
+validator is `netbox_plant_graph.services.architecture_schema.noop_custom_transfer_validator`.
+
+Custom validator entrypoints are trusted code. The default allowlist accepts only local
+`netbox_plant_graph.*` entrypoints, including the shipped noop validators. Entry points outside that namespace fail
+schema validation with a trust-policy error instead of being imported. Wrap vendor-specific validation in a local plugin
+adapter before referencing it from architecture data.
 
 ## Persisted Architecture Preflight
 
@@ -65,17 +104,31 @@ The result is an `ArchitectureCompatibilityResult` with one of three statuses:
 
 ## Stamp Preflight Integration
 
-`preview_stamp_template_v25(...)` uses the same helpers as architecture detail/schema tooling:
+`preview_stamp_template_v25(...)` uses the same helpers as architecture
+detail/schema tooling, plus blueprint-registry checks:
 
-- `validate_roce_4plane_shuffle_architecture_fixture()` checks the built-in fixture contract.
-- `validate_persisted_architecture_schema(architecture)` checks a persisted target when it can be inferred from the
-  template FK or a unique template `architecture_slug`/`architecture_version` hint.
-- `compare_persisted_architecture_compatibility(architecture, expected_schema)` runs only after the persisted schema is
-  readable, and maps warning-only drift to non-blocking stamp preview warnings.
+- `get_default_blueprint_registry()` selects the template's requested
+  `architecture_slug`/`architecture_version`, or a compatible persisted
+  architecture blueprint when one is attached to the template.
+- `validate_architecture_schema(...)` checks the selected registry definition or
+  persisted blueprint definition.
+- `validate_blueprint_parameters(...)` checks stamp-time parameters against the
+  selected blueprint `parameter_schema`.
+- `check_blueprint_device_type_compatibility(...)` checks lifecycle state and
+  required NetBox `DeviceType` availability.
+- `validate_persisted_architecture_schema(architecture)` checks a persisted
+  target when it can be inferred from the template FK or template architecture
+  hints.
+- `compare_persisted_architecture_compatibility(architecture, expected_schema)`
+  runs only after the persisted schema is readable, and maps warning-only drift
+  to non-blocking stamp preview warnings.
 
-Stamp preview issue codes keep the architecture code as the suffix. Schema validation appears as
-`architecture_schema.<schema-code>` or `architecture_schema.<persisted-code>`, while compatibility drift appears as
-`architecture_compatibility.<compatibility-code>`.
+Stamp preview issue codes keep the architecture code as the suffix. Schema
+validation appears as `architecture_schema.<schema-code>` or
+`architecture_schema.<persisted-code>`, compatibility drift appears as
+`architecture_compatibility.<compatibility-code>`, blueprint selection appears
+as `architecture_gate.*`, and parameter/lifecycle checks appear as
+`blueprint_parameter.*` or `blueprint_lifecycle`.
 
 ## Error Code Catalog
 
@@ -107,6 +160,32 @@ Compatibility helpers can also wrap validation failures:
 | `schema.positive_int_required` | Stable | Required positive integer is missing or invalid. |
 | `schema.sequence_required` | Stable | Required sequence value is missing or invalid. |
 
+### Blueprint Metadata
+
+| Code | Stability | Notes |
+| --- | --- | --- |
+| `fabric_class.unknown` | Stable | Fabric class is not part of the contract. |
+| `plane_range.min_exceeds_max` | Stable | `min_planes` is larger than `max_planes`. |
+| `plane_range.plane_count_out_of_range` | Stable | `plane_count` is outside the declared range. |
+| `plane_range.default_out_of_range` | Stable | `default_planes` is outside the declared range. |
+| `parameter_schema.type` | Stable | `parameter_schema` is not an object. |
+| `parameter_schema.root_type` | Stable | `parameter_schema.type` is not `object`. |
+| `parameter_schema.properties_type` | Stable | `parameter_schema.properties` is not an object. |
+| `blueprint.status_unknown` | Stable | Blueprint status is not supported. |
+| `blueprint.lifecycle_type` | Stable | Lifecycle metadata is not an object. |
+| `blueprint.lifecycle_successor_required` | Stable | Retired blueprint lacks a successor version. |
+| `mpo_position_count.unsupported` | Stable | MPO position count is not one of 8, 12, 16, or 24. |
+
+### Required Device Types
+
+| Code | Stability | Notes |
+| --- | --- | --- |
+| `required_device_types.type` | Stable | Device type compatibility matrix is not an object. |
+| `required_device_types.role_slug_type` | Stable | A compatibility key is not a role slug string. |
+| `required_device_types.unknown_role` | Stable | Compatibility matrix references an unknown role. |
+| `required_device_types.empty` | Stable | A role lists no compatible DeviceType slugs. |
+| `required_device_types.device_type_slug` | Stable | A compatible DeviceType entry is not a non-empty string. |
+
 ### Roles
 
 | Code | Stability | Notes |
@@ -117,6 +196,15 @@ Compatibility helpers can also wrap validation failures:
 | `roles.unknown_kind` | Stable | Role kind is not supported by the schema contract. |
 | `roles.metadata_type` | Stable | Role metadata is not an object. |
 | `roles.mpo_position_count_mismatch` | Stable | MPO role metadata disagrees with architecture MPO position count. |
+| `roles.speed_gbps_required` | Stable | Active port role lacks positive `metadata.speed_gbps`. |
+| `roles.channels_per_osfp_required` | Stable | Active port role lacks positive `metadata.channels_per_osfp`. |
+| `roles.channel_speed_gbps_required` | Stable | Active port role has invalid `metadata.channel_speed_gbps`. |
+| `roles.channels_per_osfp_mismatch` | Stable | Active port channel count differs from the architecture channel width. |
+| `roles.legacy_channels_mismatch` | Stable | Legacy `metadata.channels` disagrees with `channels_per_osfp`. |
+| `roles.speed_channel_mismatch` | Stable | Active port speed does not equal channels times channel speed. |
+| `roles.fabric_tier_required` | Stable | Tier-2 role lacks `metadata.fabric_tier`. |
+| `roles.fabric_tier_unknown` | Stable | Role fabric tier is not supported. |
+| `roles.fabric_tier_parent_missing` | Stable | Tier-2 port lacks a matching tier device role. |
 
 ### MPO Positions
 
@@ -160,6 +248,67 @@ Compatibility helpers can also wrap validation failures:
 | `identity.mode` | Stable | Identity rule mode is not `identity`. |
 | `stagger.rule_type` | Stable | Stagger rule type is not `allocation_transform`. |
 | `stagger.duplicate_members` | Stable | Staggered members are not unique. |
+
+### Generalized Position-Map Transfers
+
+| Code | Stability | Notes |
+| --- | --- | --- |
+| `transfer_patterns.matrix_rule_type` | Stable | Generalized transfer rule type is not `position_map`. |
+| `transfer_patterns.bidirectional_type` | Stable | Generalized transfer bidirectional flag is not boolean. |
+| `transfer_patterns.position_count_mismatch` | Stable | Transfer rule position count differs from architecture MPO count. |
+| `transfer_patterns.mpo24_position_count` | Stable | `shuffle_2x2_mpo24` is used without MPO-24 geometry. |
+| `transfer_patterns.provider_missing` | Stable | Generalized transfer kind lacks a Python pair provider. |
+| `transfer_patterns.front_mpo_count` | Stable | Named geometry has the wrong front MPO count. |
+| `transfer_patterns.rear_mpo_count` | Stable | Named geometry has the wrong rear MPO count. |
+| `transfer_patterns.front_rear_count_mismatch` | Stable | Paired polarity/direct attach geometry has uneven front/rear counts. |
+| `transfer_patterns.shuffle_nxm_dimension` | Stable | Generic N×M counts differ from declared MPO lists. |
+| `transfer_patterns.matrix_entry_type` | Stable | Generalized matrix row is not an object. |
+| `transfer_patterns.matrix_unknown_mpo` | Stable | Generalized matrix row references an undeclared MPO. |
+| `transfer_patterns.matrix_duplicate_crossing` | Stable | Generalized matrix repeats a front/rear crossing. |
+| `transfer_patterns.matrix_missing_crossing` | Stable | Generalized matrix omits an expected front/rear crossing. |
+| `transfer_patterns.matrix_position_pairs_type` | Stable | Generalized row lacks sequence-shaped `position_pairs`. |
+| `transfer_patterns.matrix_position_pair_type` | Stable | A generalized position pair is not a sequence. |
+| `transfer_patterns.matrix_position_pair_width` | Stable | A generalized position pair is not source/destination width. |
+| `transfer_patterns.matrix_pair_position` | Stable | A generalized position pair exceeds the MPO position count. |
+| `transfer_patterns.matrix_pair_duplicate` | Stable | A generalized position pair is duplicated. |
+| `transfer_patterns.matrix_pair_mismatch` | Stable | Declared pairs differ from provider output. |
+| `transfer_patterns.helper_error` | Stable | Generalized provider raised during validation. |
+
+#### Operational Maturity
+
+Generalized transfer geometry support is staged:
+
+| Geometry | Schema-supported | Preview-supported | Execution-supported |
+| --- | --- | --- | --- |
+| `shuffle_2x2` | Yes, with the dedicated 2x2 validator. | Yes, for the bundled GB300 four-plane and eight-plane mini-proof templates. | Yes, through the current V2.5 GB300 shuffle executors. |
+| `direct_attach` | Yes, through generalized position-map validation and a provider. | Yes, for the bundled H100 direct-attach mini-proof template. | Yes, through the current V2.5 H100 direct-attach executor. |
+| `polarity_type_b`, `polarity_type_c` | Yes, when a provider is supplied. | No generic object-diff preview yet. | No V2.5 executor yet. |
+| `shuffle_1x4`, `shuffle_2x2_mpo24`, `shuffle_4x4`, `shuffle_nxm` | Yes, when declared dimensions and provider output match. | No generic object-diff preview yet. | No V2.5 executor yet. |
+| `custom` | Yes, for trusted validator-entrypoint contracts. | No generic object-diff preview yet. | No generic executor. |
+
+`Schema-supported` means the architecture contract can reject malformed geometry. `Preview-supported` means
+`preview_stamp_template_v25(...)` can produce concrete create/update rows for a template using that geometry.
+`Execution-supported` means `apply_stamp_template_v25(...)` can reconcile the corresponding plugin objects.
+
+### Custom Validators
+
+| Code | Stability | Notes |
+| --- | --- | --- |
+| `custom.validator_entrypoint_required` | Stable | Custom transfer rule lacks `validator_entrypoint`. |
+| `custom.validator_entrypoint_format` | Stable | Custom transfer entrypoint is not a dotted import path. |
+| `custom.validator_entrypoint_not_allowed` | Stable | Custom transfer entrypoint is outside the allowed local namespace. |
+| `custom.validator_entrypoint_import_error` | Stable | Custom transfer entrypoint could not be imported. |
+| `custom.validator_entrypoint_not_callable` | Stable | Custom transfer entrypoint is not callable. |
+| `custom.validator_error` | Stable | Custom transfer validator raised an exception. |
+| `custom.validator_result_type` | Stable | Custom transfer validator returned a non-sequence result. |
+| `custom.validator_result_entry_type` | Stable | Custom transfer validator returned an invalid error entry. |
+| `architecture_validators.entrypoint_format` | Stable | Architecture validator entrypoint is not a dotted import path. |
+| `architecture_validators.entrypoint_not_allowed` | Stable | Architecture validator entrypoint is outside the allowed local namespace. |
+| `architecture_validators.entrypoint_import_error` | Stable | Architecture validator entrypoint could not be imported. |
+| `architecture_validators.entrypoint_not_callable` | Stable | Architecture validator entrypoint is not callable. |
+| `architecture_validators.validator_error` | Stable | Architecture-level validator raised an exception. |
+| `architecture_validators.validator_result_type` | Stable | Architecture-level validator returned a non-sequence result. |
+| `architecture_validators.validator_result_entry_type` | Stable | Architecture-level validator returned an invalid error entry. |
 
 ### 2x2 Shuffle
 
@@ -226,10 +375,14 @@ Compatibility helpers can also wrap validation failures:
 
 Architecture definitions must provide these schema surfaces:
 
+- Blueprint metadata: `plane_count` must be within `min_planes..max_planes`, `default_planes` must be within the same
+  range, `fabric_class` must be supported, and non-empty `parameter_schema` values must be object-shaped JSON Schema.
 - Roles: every role has a unique `slug`, non-empty `name`, supported `role_kind`, and object-shaped `metadata`.
-  MPO-12 connector roles must declare `metadata.position_count` equal to the architecture MPO position count.
+  MPO connector roles must declare `metadata.position_count` equal to the architecture MPO position count. Active port
+  roles must declare `metadata.speed_gbps`, `metadata.channels_per_osfp`, and optionally
+  `metadata.channel_speed_gbps`; speed must equal channels times channel speed.
 - Transfer patterns: every pattern has a unique `slug`, supported `pattern_kind`, and object-shaped `rule`.
-  `identity`, `stagger`, and `shuffle_2x2` have additional rule-shape checks.
+  `identity`, `stagger`, `shuffle_2x2`, generalized position-map kinds, and `custom` have additional checks.
 - Allocation rules: every rule set has a unique `slug`, non-empty `name`, and object-shaped `rule`.
   `channel_subinterface_mapping` is required and must carry the same channel map matrix as the architecture.
 - MPO positions: every physical MPO position must be declared either active or dark. Active groups must be disjoint,
@@ -238,13 +391,41 @@ Architecture definitions must provide these schema surfaces:
   no MPO position may be assigned twice, and dark positions may not be assigned.
 - 2x2 shuffle: active groups are canonical `A` and `B` groups, each shuffle group contains two MPOs, matrix rows cover
   every front/rear crossing once, and destination positions apply the key-down-roll transform.
+- Generalized transfer kinds: `direct_attach`, `polarity_type_b`, `polarity_type_c`, `shuffle_1x4`,
+  `shuffle_2x2_mpo24`, `shuffle_4x4`, and `shuffle_nxm` use `front_mpos`, `rear_mpos`, a position-pair `matrix`, and
+  a named Python provider supplied by `transfer_pair_providers`.
+- Custom transfers: `rule.validator_entrypoint` is mandatory and is invoked during schema validation.
+
+## Architecture Workspace Integration
+
+The first-class architecture workspace is now the preferred operator/API path
+for publishing new or revised architecture definitions. A workspace can ingest
+an `.mpf`-style blueprint bundle, raw architecture schema JSON, stamp-template
+JSON, or manual/API component rows, normalize those inputs, run schema/import
+validation, generate a stable publish plan, and publish through the
+`fabric_architecture_blueprint` import handler.
+
+Built-in registry fixtures still live in code, but site-specific or
+operator-authored blueprint variants should flow through `Build & Run ->
+Architecture Workspaces` so provenance, validation runs, plan approval, and
+handoff JSON are retained.
 
 ## Adding Future Architectures
 
-1. Add architecture constants and fixture definitions in the architecture service.
-2. Build an `ArchitectureSchemaDefinition` for that fixture, including active/dark MPO positions and any transform
-   helper used by stamping.
-3. Add focused schema tests proving the fixture validates and representative broken definitions fail with clear error
-   codes.
-4. Only seed database objects after the schema result is valid. If a future architecture needs a new transform kind,
-   extend `architecture_schema.py` with a named validator instead of embedding assumptions inside stamping code.
+1. Add architecture constants and fixture definitions in the architecture
+   service.
+2. Build an `ArchitectureSchemaDefinition` for that fixture, including
+   fabric-class metadata, plane range, parameter schema, required device types,
+   active/dark MPO positions, and any transfer-pair provider used by stamping.
+3. Register the fixture as a `BlueprintRegistryEntry` in
+   `services/blueprint_registry.py` when it should be selectable by V2.5
+   stamping or import preflight.
+4. Add focused schema and registry tests proving the fixture validates and
+   representative broken definitions fail with clear error codes.
+5. For site-specific or operator-authored variants, exercise the architecture
+   workspace publish flow with a blueprint bundle before using the architecture
+   in onboarding or stamping.
+6. Only seed database objects after the schema result is valid. If a future
+   architecture needs a new transform kind, extend `architecture_schema.py` with
+   a named validator/provider instead of embedding assumptions inside stamping
+   code.

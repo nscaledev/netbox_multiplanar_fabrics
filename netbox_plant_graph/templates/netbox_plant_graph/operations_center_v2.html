@@ -50,6 +50,13 @@
                   <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.topology.audit_url }}">Audit</a>
                   <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.operations_url }}">Ops</a>
                   <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.path_query_url }}">Path Query</a>
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="run_integrity">
+                    <input type="hidden" name="fabric_id" value="{{ readiness.fabric.pk }}">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Run Audit</button>
+                  </form>
+                  <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_triage' %}?fabric_id={{ readiness.fabric.pk }}">Triage</a>
                 </div>
               </td>
             </tr>
@@ -128,6 +135,68 @@
             </tr>
           {% empty %}
             <tr><td colspan="5" class="text-secondary">No saved impact reports yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mt-3">
+    <div class="card-header"><strong>Recent Import Reports</strong></div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Action</th>
+            <th>Fabric</th>
+            <th>Rows</th>
+            <th>Conflicts</th>
+            <th>Committed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in import_report_runs %}
+            <tr>
+              <td><a href="{{ run.get_absolute_url }}">#{{ run.pk }}</a></td>
+              <td>{{ run.result.action|default:run.metadata.action|default:"report" }}</td>
+              <td>{% if run.fabric %}<a href="{{ run.fabric.get_absolute_url }}">{{ run.fabric }}</a>{% else %}-{% endif %}</td>
+              <td>{{ run.result.summary.total|default:run.metadata.row_count|default:"0" }}</td>
+              <td>{{ run.result.summary.conflict|default:run.metadata.conflict_count|default:"0" }}</td>
+              <td>{% if run.result.committed %}<span class="badge text-bg-success">yes</span>{% else %}<span class="badge text-bg-secondary">no</span>{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-secondary">No saved import reports yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mt-3">
+    <div class="card-header"><strong>Workflow Surface Support Matrix</strong></div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Route</th>
+            <th>Page</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for group in workflow_surface_groups %}
+            {% for row in group.rows %}
+              <tr>
+                <td><span class="badge {% if group.status == 'supported' %}text-bg-success{% elif group.status == 'experimental' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ group.status }}</span></td>
+                <td><code>{{ row.route_name }}</code></td>
+                <td>{% if row.url %}<a href="{{ row.url }}">{{ row.label }}</a>{% else %}{{ row.label }}{% endif %}</td>
+                <td>{{ group.description }}</td>
+              </tr>
+            {% endfor %}
+          {% empty %}
+            <tr><td colspan="4" class="text-secondary">No workflow surface classifications configured.</td></tr>
           {% endfor %}
         </tbody>
       </table>

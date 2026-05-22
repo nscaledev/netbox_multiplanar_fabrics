@@ -10,7 +10,7 @@ against a real NetBox instance.
 | --- | --- | --- |
 | `stamp_preview_request.json` | Stable | Request body for `POST /api/plugins/plant-graph/stamps/preview/`. |
 | `stamp_execute_request.json` | Stable | Request body for `POST /api/plugins/plant-graph/stamp-templates/<id>/execute/`. |
-| `sample_import_reconcile.json` | Stable nucleus | Uses `cable_assembly` and `fiber_strand_cable`, the stable import kinds. |
+| `sample_import_reconcile.json` | Stable nucleus | Compact example using `cable_assembly` and `fiber_strand_cable`; the full documented kind list is in `v2_import_reconciliation.md`. |
 | `impact_cable_assembly_cut_request.json` | Stable | Request body for `POST /api/plugins/plant-graph/impact/cable-assembly-cut/`. |
 | `impact_mpo_connector_unplug_request.json` | Stable | Request body for `POST /api/plugins/plant-graph/impact/mpo-connector-unplug/`. |
 | `impact_osfp_transceiver_unseat_request.json` | Stable | Request body for `POST /api/plugins/plant-graph/impact/osfp-transceiver-unseat/`. |

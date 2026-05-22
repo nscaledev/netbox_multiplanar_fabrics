@@ -2,6 +2,7 @@ from django.core.management import call_command
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from tenancy.models import Tenant
 
 from netbox_plant_graph.models import (
     CableAssembly,
@@ -197,6 +198,111 @@ class V2MiniFabricStampTestCase(TestCase):
         self.assertIn('exceeds StampTemplate.template.gpu_tray.positions_per_mpo', str(raised.exception))
         self.assertFalse(Fabric.objects.filter(slug='invalid-channel-map-proof').exists())
         self.assertEqual(StampRun.objects.count(), 0)
+
+    def test_execute_stamp_template_honors_topology_parameters_and_phase(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        template['planes'] = [1, 2]
+        template['topology_parameters'] = {
+            'plane_count': {'value': 2, 'min': 1, 'max': 4},
+            'gpu_tray_count': 1,
+            'leaf_count_per_plane': 1,
+        }
+        template['stamp_phases'] = [
+            {'name': 'phase-a', 'planes': [1]},
+            {'name': 'phase-b', 'planes': [2]},
+        ]
+        template['proof_paths'] = [dict(item) for item in template['proof_paths'] if item['plane'] in {1, 2}]
+        fixture.stamp_template.template = template
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Phase proof',
+            fabric_slug='phase-proof',
+            phase='phase-a',
+        )
+
+        self.assertEqual(Plane.objects.filter(fabric=result.fabric).count(), 1)
+        self.assertEqual(Plane.objects.get(fabric=result.fabric).plane_number, 1)
+        self.assertEqual(len(result.resolved_paths), 1)
+        self.assertEqual(result.stamp_run.parameters['phase'], 'phase-a')
+        self.assertEqual(result.stamp_run.parameters['active_planes'], [1])
+        manifest = result.stamp_run.result['stamp_manifest']
+        self.assertEqual(manifest['phase'], {'name': 'phase-a', 'planes': [1]})
+        self.assertEqual(manifest['topology_parameters']['plane_count'], 2)
+        self.assertEqual(FabricNode.objects.filter(fabric=result.fabric, address__startswith='LEAF-').count(), 1)
+
+    def test_execute_stamp_template_uses_custom_wavelength_plan_and_records_dark_overrides(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        template['wavelength_plan'] = {
+            'band': 'c_band',
+            'channel_count': 4,
+            'channels': ['1550.000', '1551.000', '1552.000', '1553.000'],
+        }
+        template['dark_position_overrides'] = {
+            '1': [5, 6, 7, 8],
+            'Plane 2': [5, 6, 7, 8],
+        }
+        fixture.stamp_template.template = template
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Wavelength proof',
+            fabric_slug='wavelength-proof',
+        )
+
+        wavelengths = sorted(
+            str(value)
+            for value in OpticalLane.objects.filter(fabric=result.fabric, direction='send')
+            .order_by('plane__plane_number')
+            .values_list('wavelength_nm', flat=True)
+        )
+        self.assertEqual(wavelengths, ['1550.000', '1551.000', '1552.000', '1553.000'])
+        self.assertEqual(
+            result.stamp_run.result['dark_position_overrides'],
+            {'1': [5, 6, 7, 8], '2': [5, 6, 7, 8]},
+        )
+
+    def test_execute_stamp_template_injects_fabric_ownership(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        tenant = Tenant.objects.create(name='Research', slug='research')
+        site = Site.objects.create(name='Ownership Site', slug='ownership-site', status='active')
+        template = dict(fixture.stamp_template.template)
+        template['fabric_ownership'] = {
+            'tenant_slug': tenant.slug,
+            'scope_site_slug': site.slug,
+        }
+        fixture.stamp_template.template = template
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Owned proof',
+            fabric_slug='owned-proof',
+        )
+
+        result.fabric.refresh_from_db()
+        self.assertEqual(result.fabric.tenant_id, tenant.pk)
+        self.assertEqual(result.fabric.scope_site_id, site.pk)
+        self.assertEqual(result.stamp_run.result['fabric_ownership']['resolved']['tenant_slug'], 'research')
+
+    def test_execute_stamp_template_rejects_invalid_tier2_parameters(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        template = dict(fixture.stamp_template.template)
+        template['name_patterns'] = {
+            'channel_subinterface': '{unsupported_variable}-{channel_index}',
+        }
+        fixture.stamp_template.template = template
+
+        with self.assertRaises(ValueError) as raised:
+            execute_stamp_template(
+                template=fixture.stamp_template,
+                fabric_name='Invalid pattern proof',
+                fabric_slug='invalid-pattern-proof',
+            )
+
+        self.assertIn('uses unsupported variable', str(raised.exception))
+        self.assertFalse(Fabric.objects.filter(slug='invalid-pattern-proof').exists())
 
     def test_execute_stamp_template_can_create_and_bind_netbox_active_devices(self):
         fixture = ensure_roce_4plane_shuffle_architecture()

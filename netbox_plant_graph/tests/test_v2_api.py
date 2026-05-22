@@ -12,7 +12,12 @@ from netbox_plant_graph.models import (
     AuditEvent,
     OperationRun,
     AllocationRuleSet,
+    ArchitectureDesignComponent,
+    ArchitecturePublishPlan,
     ArchitectureRole,
+    ArchitectureSourceArtifact,
+    ArchitectureValidationRun,
+    ArchitectureWorkspace,
     CableAssembly,
     ConnectorPosition,
     Endpoint,
@@ -22,6 +27,13 @@ from netbox_plant_graph.models import (
     FiberSegment,
     FiberStrand,
     OpticalLane,
+    OnboardingDesignItem,
+    OnboardingExecutionStage,
+    OnboardingObjectLink,
+    OnboardingPlan,
+    OnboardingPrerequisite,
+    OnboardingSourceArtifact,
+    OnboardingWorkspace,
     PathIntent,
     Plane,
     StampRun,
@@ -42,6 +54,11 @@ V2_MODELS = (
     ArchitectureRole,
     TransferPattern,
     AllocationRuleSet,
+    ArchitectureWorkspace,
+    ArchitectureSourceArtifact,
+    ArchitectureDesignComponent,
+    ArchitectureValidationRun,
+    ArchitecturePublishPlan,
     StampTemplate,
     Fabric,
     Plane,
@@ -61,6 +78,13 @@ V2_MODELS = (
     SuppressionRule,
     AuditEvent,
     OperationRun,
+    OnboardingWorkspace,
+    OnboardingSourceArtifact,
+    OnboardingDesignItem,
+    OnboardingPrerequisite,
+    OnboardingPlan,
+    OnboardingExecutionStage,
+    OnboardingObjectLink,
 )
 
 
@@ -108,6 +132,105 @@ class V2APISerializerTestCase(TestCase):
             fabric=result.fabric,
             parameters={'test': True},
             result={'ok': True},
+        )
+        architecture_workspace = ArchitectureWorkspace.objects.create(
+            name='API Architecture Workspace',
+            slug='api-architecture-workspace',
+            target_slug='api-architecture-target',
+            target_version='v1',
+            base_architecture=result.fabric.architecture,
+        )
+        architecture_source = ArchitectureSourceArtifact.objects.create(
+            workspace=architecture_workspace,
+            artifact_type='api_payload',
+            name='API architecture source',
+            parser_key='manual_component',
+            raw_payload={'kind': 'manual_note', 'name': 'API architecture note'},
+        )
+        ArchitectureDesignComponent.objects.create(
+            workspace=architecture_workspace,
+            source_artifact=architecture_source,
+            kind='manual_note',
+            natural_key='manual_note:api-architecture-note',
+            desired_state={'kind': 'manual_note', 'name': 'API architecture note'},
+            validation_status='valid',
+        )
+        ArchitectureValidationRun.objects.create(
+            workspace=architecture_workspace,
+            source_artifact=architecture_source,
+            status='passed',
+            validation_kind='publish_preflight',
+            workspace_revision='api-architecture-revision',
+            summary={'component_counts': {'manual_note': 1}},
+            import_plan={'summary': {'total': 0}},
+        )
+        architecture_plan = ArchitecturePublishPlan.objects.create(
+            workspace=architecture_workspace,
+            status='generated',
+            plan_hash='api-architecture-plan-hash',
+            workspace_revision='api-architecture-revision',
+            publish_payload={'items': []},
+            validation_summary={'status': 'passed', 'issues': []},
+            import_plan={'summary': {'total': 0}},
+        )
+        architecture_workspace.current_plan = architecture_plan
+        architecture_workspace.save(update_fields=('current_plan', 'last_updated'))
+        workspace = OnboardingWorkspace.objects.create(
+            name='API Onboarding Workspace',
+            slug='api-onboarding-workspace',
+            target_fabric_name='API Onboarding Fabric',
+            target_fabric_slug='api-onboarding-fabric',
+            fabric=result.fabric,
+            architecture=result.fabric.architecture,
+        )
+        source = OnboardingSourceArtifact.objects.create(
+            workspace=workspace,
+            artifact_type='api_payload',
+            name='API source',
+            parser_key='manual_design_item',
+            raw_payload={'kind': 'manual_note', 'name': 'API note'},
+        )
+        design_item = OnboardingDesignItem.objects.create(
+            workspace=workspace,
+            source_artifact=source,
+            kind='manual_note',
+            natural_key='manual_note:api-note',
+            desired_state={'kind': 'manual_note', 'name': 'API note'},
+            validation_status='valid',
+        )
+        prereq = OnboardingPrerequisite.objects.create(
+            workspace=workspace,
+            design_item=design_item,
+            requirement_key='site:target',
+            object_model='dcim.site',
+            role='site',
+            status='deferred',
+            resolution_mode='defer',
+            defer_reason='API serializer fixture',
+        )
+        plan = OnboardingPlan.objects.create(
+            workspace=workspace,
+            status='generated',
+            plan_hash='api-plan-hash',
+            workspace_revision='api-revision',
+            plan_payload={'schema': 'v2.onboarding.plan/1'},
+        )
+        workspace.current_plan = plan
+        workspace.save(update_fields=('current_plan', 'last_updated'))
+        stage = OnboardingExecutionStage.objects.create(
+            plan=plan,
+            stage_key='prerequisites',
+            stage_kind='prerequisites',
+            status='completed',
+        )
+        OnboardingObjectLink.objects.create(
+            workspace=workspace,
+            plan=plan,
+            stage=stage,
+            design_item=design_item,
+            source_artifact=source,
+            link_kind='manual_reference',
+            label='API onboarding link',
         )
         return result
 
@@ -177,6 +300,25 @@ class V2APISerializerTestCase(TestCase):
                 )
                 self.assertEqual(detail_response.status_code, 200)
                 self.assertEqual(detail_response.json()['id'], instance.pk)
+
+    def test_fabric_architecture_api_exposes_fabric_class(self):
+        self.client.force_login(self.user)
+        architecture = FabricArchitecture.objects.create(
+            name='Management Architecture',
+            slug='management-architecture',
+            version='v1',
+            fabric_class='management',
+        )
+
+        response = self.client.get(
+            reverse('plugins-api:netbox_plant_graph-api:fabricarchitecture-detail', kwargs={'pk': architecture.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fabric_class = response.json()['fabric_class']
+        if isinstance(fabric_class, dict):
+            fabric_class = fabric_class['value']
+        self.assertEqual(fabric_class, 'management')
 
     def test_path_query_api_resolves_selected_lanes(self):
         self.client.force_login(self.user)

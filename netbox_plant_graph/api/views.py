@@ -16,10 +16,17 @@ from rest_framework.views import APIView
 from netbox_plant_graph.api import serializers as api_serializers
 from netbox_plant_graph.models import (
     AuditEvent,
+    ArchitecturePublishPlan,
+    ArchitectureSourceArtifact,
+    ArchitectureWorkspace,
     CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
+    OnboardingPlan,
+    OnboardingPrerequisite,
+    OnboardingSourceArtifact,
+    OnboardingWorkspace,
     OperationRun,
     OpticalLane,
     Plane,
@@ -27,10 +34,31 @@ from netbox_plant_graph.models import (
     StampTemplate,
     SuppressionRule,
 )
+from netbox_plant_graph.services.architecture_workspace import (
+    approve_architecture_publish_plan,
+    attach_architecture_source_artifact,
+    build_architecture_handoff_dossier,
+    generate_architecture_publish_plan,
+    normalize_architecture_source_artifact,
+    publish_architecture_plan,
+    validate_architecture_workspace,
+)
 from netbox_plant_graph.services.impact_modeling import (
     model_cable_assembly_cut_impact,
     model_mpo_connector_unplug_impact,
     model_osfp_transceiver_unseat_impact,
+)
+from netbox_plant_graph.services.onboarding import (
+    apply_onboarding_plan,
+    approve_onboarding_plan,
+    attach_source_artifact,
+    build_handoff_dossier,
+    discover_prerequisites,
+    evaluate_onboarding_readiness,
+    generate_onboarding_plan,
+    normalize_source_artifact,
+    publish_workspace,
+    resolve_prerequisite,
 )
 from netbox_plant_graph.services.audit import (
     FINDING_EVENT_TYPE,
@@ -88,6 +116,391 @@ def _validated(serializer_class, data):
     serializer = serializer_class(data=data)
     serializer.is_valid(raise_exception=True)
     return serializer.validated_data
+
+
+def _architecture_workspace_payload(workspace: ArchitectureWorkspace) -> dict:
+    return {
+        'id': workspace.pk,
+        'name': workspace.name,
+        'slug': workspace.slug,
+        'workspace_kind': workspace.workspace_kind,
+        'status': workspace.status,
+        'target_slug': workspace.target_slug,
+        'target_version': workspace.target_version,
+        'fabric_class': workspace.fabric_class,
+        'base_architecture_id': workspace.base_architecture_id,
+        'published_architecture_id': workspace.published_architecture_id,
+        'current_plan_id': workspace.current_plan_id,
+        'validation_summary': workspace.validation_summary or {},
+    }
+
+
+def _architecture_publish_plan_payload(plan: ArchitecturePublishPlan) -> dict:
+    return {
+        'id': plan.pk,
+        'workspace_id': plan.workspace_id,
+        'status': plan.status,
+        'plan_hash': plan.plan_hash,
+        'workspace_revision': plan.workspace_revision,
+        'validation_status': (plan.validation_summary or {}).get('status'),
+        'issues': (plan.validation_summary or {}).get('issues') or [],
+        'result': plan.result or {},
+    }
+
+
+class ArchitectureWorkspaceSourceAttachAPIView(APIView):
+    queryset = ArchitectureWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = ArchitectureWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Architecture workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.ArchitectureSourceArtifactAttachRequestSerializer, request.data)
+        artifact = attach_architecture_source_artifact(workspace=workspace, actor=request.user, **validated)
+        return Response(
+            {
+                'workspace': _architecture_workspace_payload(workspace),
+                'artifact': {
+                    'id': artifact.pk,
+                    'name': artifact.name,
+                    'status': artifact.status,
+                    'parser_key': artifact.parser_key,
+                    'content_sha256': artifact.content_sha256,
+                },
+                'next_actions': [{'action': 'normalize', 'label': 'Normalize architecture source artifact'}],
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ArchitectureSourceArtifactNormalizeAPIView(APIView):
+    queryset = ArchitectureSourceArtifact.objects.all()
+
+    def post(self, request, pk):
+        artifact = ArchitectureSourceArtifact.objects.select_related('workspace').filter(pk=pk).first()
+        if artifact is None:
+            return Response({'detail': f'Architecture source artifact {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        result = normalize_architecture_source_artifact(artifact, actor=request.user)
+        return Response(
+            {
+                'workspace': _architecture_workspace_payload(artifact.workspace),
+                'artifact': {'id': artifact.pk, 'status': artifact.status},
+                'result': result.to_dict(),
+                'issues': list(result.issues),
+                'next_actions': [{'action': 'validate', 'label': 'Validate architecture workspace'}],
+            }
+        )
+
+
+class ArchitectureWorkspaceValidateAPIView(APIView):
+    queryset = ArchitectureWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = ArchitectureWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Architecture workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            run = validate_architecture_workspace(workspace, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'workspace': _architecture_workspace_payload(workspace),
+                'validation_run': {'id': run.pk, 'status': run.status},
+                'summary': run.summary or {},
+                'issues': run.issues or [],
+            }
+        )
+
+
+class ArchitectureWorkspacePlanGenerateAPIView(APIView):
+    queryset = ArchitectureWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = ArchitectureWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Architecture workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            plan = generate_architecture_publish_plan(workspace, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'workspace': _architecture_workspace_payload(workspace),
+                'plan': _architecture_publish_plan_payload(plan),
+                'issues': (plan.validation_summary or {}).get('issues') or [],
+                'next_actions': [{'action': 'approve', 'label': 'Approve publish plan'}] if plan.status != 'blocked' else [],
+            }
+        )
+
+
+class ArchitecturePublishPlanApproveAPIView(APIView):
+    queryset = ArchitecturePublishPlan.objects.all()
+
+    def post(self, request, pk):
+        plan = ArchitecturePublishPlan.objects.select_related('workspace').filter(pk=pk).first()
+        if plan is None:
+            return Response({'detail': f'Architecture publish plan {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.ArchitecturePublishPlanApproveRequestSerializer, request.data)
+        try:
+            plan = approve_architecture_publish_plan(
+                plan,
+                actor=request.user,
+                acknowledgements=validated.get('warning_acknowledgements') or [],
+            )
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _architecture_workspace_payload(plan.workspace), 'plan': _architecture_publish_plan_payload(plan)})
+
+
+class ArchitecturePublishPlanPublishAPIView(APIView):
+    queryset = ArchitecturePublishPlan.objects.all()
+
+    def post(self, request, pk):
+        plan = ArchitecturePublishPlan.objects.select_related('workspace').filter(pk=pk).first()
+        if plan is None:
+            return Response({'detail': f'Architecture publish plan {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            plan = publish_architecture_plan(plan, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _architecture_workspace_payload(plan.workspace), 'plan': _architecture_publish_plan_payload(plan)})
+
+
+class ArchitectureWorkspacePublishAPIView(APIView):
+    queryset = ArchitectureWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = ArchitectureWorkspace.objects.select_related('current_plan').filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Architecture workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if workspace.current_plan is None:
+            return Response({'detail': 'Generate and approve an architecture publish plan before publishing.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            plan = publish_architecture_plan(workspace.current_plan, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _architecture_workspace_payload(workspace), 'plan': _architecture_publish_plan_payload(plan)})
+
+
+class ArchitectureWorkspaceHandoffAPIView(APIView):
+    queryset = ArchitectureWorkspace.objects.all()
+
+    def get(self, request, pk):
+        workspace = ArchitectureWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Architecture workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(build_architecture_handoff_dossier(workspace))
+
+
+def _workspace_payload(workspace: OnboardingWorkspace) -> dict:
+    return {
+        'id': workspace.pk,
+        'name': workspace.name,
+        'slug': workspace.slug,
+        'status': workspace.status,
+        'fabric_id': workspace.fabric_id,
+        'architecture_id': workspace.architecture_id,
+        'site_id': workspace.site_id,
+        'current_plan_id': workspace.current_plan_id,
+        'readiness_summary': workspace.readiness_summary or {},
+    }
+
+
+def _plan_payload(plan: OnboardingPlan) -> dict:
+    return {
+        'id': plan.pk,
+        'workspace_id': plan.workspace_id,
+        'status': plan.status,
+        'plan_hash': plan.plan_hash,
+        'workspace_revision': plan.workspace_revision,
+        'issues': (plan.plan_payload or {}).get('issues') or [],
+        'next_actions': (plan.plan_payload or {}).get('next_actions') or [],
+    }
+
+
+class OnboardingWorkspaceSourceAttachAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.OnboardingSourceArtifactAttachRequestSerializer, request.data)
+        artifact = attach_source_artifact(workspace=workspace, actor=request.user, **validated)
+        return Response(
+            {
+                'workspace': _workspace_payload(workspace),
+                'artifact': {
+                    'id': artifact.pk,
+                    'name': artifact.name,
+                    'status': artifact.status,
+                    'parser_key': artifact.parser_key,
+                    'content_sha256': artifact.content_sha256,
+                },
+                'next_actions': [{'action': 'normalize', 'label': 'Normalize source artifact'}],
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class OnboardingSourceArtifactNormalizeAPIView(APIView):
+    queryset = OnboardingSourceArtifact.objects.all()
+
+    def post(self, request, pk):
+        artifact = OnboardingSourceArtifact.objects.select_related('workspace').filter(pk=pk).first()
+        if artifact is None:
+            return Response({'detail': f'Onboarding source artifact {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        result = normalize_source_artifact(artifact, actor=request.user)
+        return Response(
+            {
+                'workspace': _workspace_payload(artifact.workspace),
+                'artifact': {'id': artifact.pk, 'status': artifact.status},
+                'result': result.to_dict(),
+                'issues': list(result.issues),
+                'next_actions': [{'action': 'discover_prerequisites', 'label': 'Discover prerequisites'}],
+            }
+        )
+
+
+class OnboardingWorkspacePrerequisitesDiscoverAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        result = discover_prerequisites(workspace, actor=request.user)
+        return Response(
+            {
+                'workspace': _workspace_payload(workspace),
+                'result': result.to_dict(),
+                'next_actions': [{'action': 'generate_plan', 'label': 'Generate onboarding plan'}],
+            }
+        )
+
+
+class OnboardingPrerequisiteResolveAPIView(APIView):
+    queryset = OnboardingPrerequisite.objects.all()
+
+    def post(self, request, pk):
+        prerequisite = OnboardingPrerequisite.objects.select_related('workspace').filter(pk=pk).first()
+        if prerequisite is None:
+            return Response({'detail': f'Onboarding prerequisite {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.OnboardingPrerequisiteResolveRequestSerializer, request.data)
+        prerequisite = resolve_prerequisite(
+            prerequisite,
+            mode=validated['resolution_mode'],
+            object_model=validated.get('object_model') or '',
+            object_id=validated.get('object_id'),
+            planned_create=validated.get('planned_create') or None,
+            defer_reason=validated.get('defer_reason') or '',
+            actor=request.user,
+        )
+        return Response(
+            {
+                'workspace': _workspace_payload(prerequisite.workspace),
+                'prerequisite': {
+                    'id': prerequisite.pk,
+                    'requirement_key': prerequisite.requirement_key,
+                    'status': prerequisite.status,
+                    'resolution_mode': prerequisite.resolution_mode,
+                },
+            }
+        )
+
+
+class OnboardingWorkspacePlanGenerateAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            plan = generate_onboarding_plan(workspace, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'workspace': _workspace_payload(workspace),
+                'plan': _plan_payload(plan),
+                'issues': (plan.plan_payload or {}).get('issues') or [],
+                'next_actions': (plan.plan_payload or {}).get('next_actions') or [],
+            }
+        )
+
+
+class OnboardingPlanApproveAPIView(APIView):
+    queryset = OnboardingPlan.objects.all()
+
+    def post(self, request, pk):
+        plan = OnboardingPlan.objects.select_related('workspace').filter(pk=pk).first()
+        if plan is None:
+            return Response({'detail': f'Onboarding plan {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.OnboardingPlanApproveRequestSerializer, request.data)
+        try:
+            plan = approve_onboarding_plan(
+                plan,
+                actor=request.user,
+                acknowledgements=validated.get('warning_acknowledgements') or [],
+            )
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _workspace_payload(plan.workspace), 'plan': _plan_payload(plan)})
+
+
+class OnboardingPlanApplyAPIView(APIView):
+    queryset = OnboardingPlan.objects.all()
+
+    def post(self, request, pk):
+        plan = OnboardingPlan.objects.select_related('workspace').filter(pk=pk).first()
+        if plan is None:
+            return Response({'detail': f'Onboarding plan {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        validated = _validated(api_serializers.OnboardingPlanApplyRequestSerializer, request.data)
+        try:
+            result = apply_onboarding_plan(plan, actor=request.user, stages=validated.get('stages') or None)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _workspace_payload(plan.workspace), 'plan': _plan_payload(plan), 'result': result.to_dict()})
+
+
+class OnboardingWorkspaceReadinessAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            readiness = evaluate_onboarding_readiness(workspace, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _workspace_payload(workspace), 'result': readiness})
+
+
+class OnboardingWorkspacePublishAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def post(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            result = publish_workspace(workspace, actor=request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'workspace': _workspace_payload(workspace), 'result': result})
+
+
+class OnboardingWorkspaceHandoffAPIView(APIView):
+    queryset = OnboardingWorkspace.objects.all()
+
+    def get(self, request, pk):
+        workspace = OnboardingWorkspace.objects.filter(pk=pk).first()
+        if workspace is None:
+            return Response({'detail': f'Onboarding workspace {pk!r} was not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(build_handoff_dossier(workspace))
 
 
 def _resolve_fabric_plane_scope(*, fabric_id=None, plane_id=None):

@@ -12,6 +12,8 @@ from django.db.models import Model
 from dcim.models import Site
 
 from netbox_plant_graph.models import (
+    AllocationRuleSet,
+    ArchitectureRole,
     CableAssembly,
     ConnectorPosition,
     Endpoint,
@@ -21,16 +23,13 @@ from netbox_plant_graph.models import (
     FiberSegment,
     FiberStrand,
     Plane,
+    StampTemplate,
     StrandTermination,
     TransportChannel,
     TransportChannelPositionMap,
+    TransferPattern,
 )
 from netbox_plant_graph.services.architecture import (
-    ARCHITECTURE_SLUG,
-    ARCHITECTURE_VERSION,
-    CHANNEL_MAP_MATRIX,
-    MPO_DARK_POSITIONS,
-    MPO_POSITION_COUNT,
     build_roce_4plane_shuffle_architecture_schema,
     shuffle_2x2_transfer_position_pairs,
 )
@@ -40,6 +39,16 @@ from netbox_plant_graph.services.architecture_schema import (
     ARCHITECTURE_COMPATIBILITY_WARNING,
     ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
     compare_persisted_architecture_compatibility,
+    validate_architecture_schema,
+)
+from netbox_plant_graph.services.blueprint_registry import (
+    BLUEPRINT_LIFECYCLE_ACTIVE,
+    BLUEPRINT_LIFECYCLE_RETIRED,
+    architecture_definition_from_payload,
+    architecture_definition_to_payload,
+    check_blueprint_lifecycle,
+    get_default_blueprint_registry,
+    validate_parameter_schema,
 )
 
 
@@ -605,6 +614,140 @@ class StrandTerminationHandler(BaseHandler):
         )
 
 
+class FabricArchitectureBlueprintHandler(BaseHandler):
+    kind = 'fabric_architecture_blueprint'
+    model = FabricArchitecture
+
+    def reconcile(self, *, index, data, context, apply):
+        definition_payload = _blueprint_definition_payload(data)
+        parameter_schema = _mapping_value(
+            _optional_default(data, 'parameter_schema', default={}),
+            field_name='parameter_schema',
+        )
+        required_device_types = _mapping_value(
+            _optional_default(data, 'required_device_types', default={}),
+            field_name='required_device_types',
+        )
+        lifecycle = str(_optional_default(data, 'lifecycle', default=BLUEPRINT_LIFECYCLE_ACTIVE))
+        successor_version = str(_optional_default(data, 'successor_version', default=''))
+        schema_contract_version = _blueprint_schema_contract_version(data)
+
+        try:
+            definition = architecture_definition_from_payload(definition_payload)
+        except ValueError as exc:
+            return self.conflict(
+                index=index,
+                identity=f'item[{index}]',
+                reason=str(exc),
+                details={'code': 'architecture_schema_payload_invalid'},
+            )
+
+        identity = f'slug={definition.slug} version={definition.version}'
+        if schema_contract_version != ARCHITECTURE_SCHEMA_CONTRACT_VERSION:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason=(
+                    f'schema_contract_version {schema_contract_version!r} does not match '
+                    f'{ARCHITECTURE_SCHEMA_CONTRACT_VERSION!r}'
+                ),
+                details={
+                    'code': 'schema_contract_version_mismatch',
+                    'actual': schema_contract_version,
+                    'expected': ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+                },
+            )
+        if lifecycle == BLUEPRINT_LIFECYCLE_RETIRED:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason='retired blueprints cannot be imported as active architecture definitions',
+                details={'code': 'blueprint_lifecycle', 'lifecycle': lifecycle},
+            )
+
+        schema_result = validate_architecture_schema(definition)
+        if not schema_result.is_valid:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason='architecture schema validation failed',
+                details={
+                    'code': 'architecture_schema_invalid',
+                    'issues': [
+                        {
+                            'code': error.code,
+                            'path': error.path,
+                            'message': error.message,
+                            'context': dict(error.context),
+                        }
+                        for error in schema_result.errors
+                    ],
+                },
+            )
+
+        parameter_schema_issues = validate_parameter_schema(parameter_schema)
+        if parameter_schema_issues:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason='parameter_schema validation failed',
+                details={
+                    'code': 'parameter_schema_invalid',
+                    'issues': [issue.to_dict() for issue in parameter_schema_issues],
+                },
+            )
+
+        architecture = FabricArchitecture.objects.filter(slug=definition.slug, version=definition.version).first()
+        desired = _blueprint_architecture_desired_fields(
+            data=data,
+            definition=definition,
+            parameter_schema=parameter_schema,
+            required_device_types=required_device_types,
+            lifecycle=lifecycle,
+            successor_version=successor_version,
+            schema_contract_version=schema_contract_version,
+        )
+        child_state = _blueprint_child_state(architecture, definition, data)
+        outcome = OUTCOME_CREATE if architecture is None else OUTCOME_SKIP
+        changes = ()
+        if architecture is not None:
+            changes = tuple(
+                FieldChange(field=name, current=getattr(architecture, name), desired=value)
+                for name, value in desired.items()
+                if not _values_equal(getattr(architecture, name), value)
+            )
+            if changes or child_state['has_changes']:
+                outcome = OUTCOME_UPDATE
+
+        if apply:
+            architecture = _apply_blueprint_architecture(
+                architecture=architecture,
+                definition=definition,
+                desired=desired,
+                data=data,
+            )
+
+        details = {
+            'code': 'fabric_architecture_blueprint',
+            'schema_contract_version': schema_contract_version,
+            'lifecycle': lifecycle,
+            'successor_version': successor_version,
+            'child_state': child_state,
+            'parameter_schema': parameter_schema,
+            'required_device_types': required_device_types,
+        }
+        diff = _diff(
+            index=index,
+            kind=self.kind,
+            identity=identity,
+            outcome=outcome,
+            model=FabricArchitecture,
+            object_id=getattr(architecture, 'pk', None),
+            changes=changes,
+        )
+        return replace(diff, details=details)
+
+
 HANDLERS = {
     'cable_assembly': CableAssemblyHandler(),
     'fiber_strand_cable': FiberStrandCableHandler(),
@@ -612,6 +755,7 @@ HANDLERS = {
     'transport_channel': TransportChannelHandler(),
     'transport_channel_position_map': TransportChannelPositionMapHandler(),
     'strand_termination': StrandTerminationHandler(),
+    'fabric_architecture_blueprint': FabricArchitectureBlueprintHandler(),
 }
 
 KIND_ALIASES = {
@@ -632,6 +776,10 @@ KIND_ALIASES = {
     'transportchannelpositionmap': 'transport_channel_position_map',
     'strand_termination': 'strand_termination',
     'strandtermination': 'strand_termination',
+    'architecture_blueprint': 'fabric_architecture_blueprint',
+    'blueprint': 'fabric_architecture_blueprint',
+    'fabric_architecture_blueprint': 'fabric_architecture_blueprint',
+    'fabricarchitectureblueprint': 'fabric_architecture_blueprint',
 }
 
 
@@ -697,13 +845,16 @@ def reconcile_import_payload(payload: Any, *, apply: bool = False) -> ImportPlan
 def _build_import_architecture_gate(payload: Any) -> ImportArchitectureGate:
     if not isinstance(payload, Mapping):
         return ImportArchitectureGate()
+    if _payload_contains_blueprint_import(payload):
+        return ImportArchitectureGate()
 
     hint = _architecture_hint(payload)
     if not hint:
         return ImportArchitectureGate()
 
     issues: list[ImportArchitectureIssue] = []
-    expected = build_roce_4plane_shuffle_architecture_schema()
+    registry_entry = _blueprint_entry_for_hint(hint)
+    expected = registry_entry.definition if registry_entry is not None else build_roce_4plane_shuffle_architecture_schema()
     architecture, target_source = _architecture_from_hint(hint, issues)
 
     slug = _hint_string(hint, 'slug', 'architecture_slug')
@@ -715,7 +866,7 @@ def _build_import_architecture_gate(payload: Any) -> ImportArchitectureGate:
         compatibility = compare_persisted_architecture_compatibility(
             architecture,
             expected,
-            shuffle_pair_provider=shuffle_2x2_transfer_position_pairs,
+            shuffle_pair_provider=expected.shuffle_pair_provider or shuffle_2x2_transfer_position_pairs,
         )
         issues.extend(_import_compatibility_issues(compatibility.issues))
     else:
@@ -726,7 +877,9 @@ def _build_import_architecture_gate(payload: Any) -> ImportArchitectureGate:
             expected_version=expected.version,
         )
 
-    _compare_explicit_architecture_contract_hint(hint, issues=issues)
+    if registry_entry is not None:
+        issues.extend(_import_blueprint_lifecycle_issues(registry_entry))
+    _compare_explicit_architecture_contract_hint(hint, issues=issues, expected=expected)
     status = ARCHITECTURE_COMPATIBILITY_COMPATIBLE
     if any(issue.severity == 'error' for issue in issues):
         status = ARCHITECTURE_COMPATIBILITY_INCOMPATIBLE
@@ -807,6 +960,45 @@ def _architecture_from_hint(
     return None, 'payload_hint'
 
 
+def _blueprint_entry_for_hint(hint: Mapping[str, Any]):
+    slug = _hint_string(hint, 'slug', 'architecture_slug')
+    version = _hint_string(hint, 'version', 'architecture_version')
+    if not slug:
+        return None
+    try:
+        return get_default_blueprint_registry().get_blueprint(slug, version)
+    except KeyError:
+        return None
+
+
+def _import_blueprint_lifecycle_issues(entry) -> list[ImportArchitectureIssue]:
+    return [
+        ImportArchitectureIssue(
+            code=issue.code,
+            path=issue.path,
+            message=issue.message,
+            severity=issue.severity,
+            context=issue.context,
+        )
+        for issue in check_blueprint_lifecycle(entry)
+    ]
+
+
+def _payload_contains_blueprint_import(payload: Mapping[str, Any]) -> bool:
+    if _is_blueprint_bundle_payload(payload):
+        return True
+    items = payload.get('items')
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        raw_kind = _optional(item, 'kind', 'object_type', 'model')
+        if raw_kind is not MISSING and _normalize_kind(str(raw_kind)) == 'fabric_architecture_blueprint':
+            return True
+    return False
+
+
 def _compare_declared_architecture_hint(
     hint: Mapping[str, Any],
     *,
@@ -843,6 +1035,7 @@ def _compare_explicit_architecture_contract_hint(
     hint: Mapping[str, Any],
     *,
     issues: list[ImportArchitectureIssue],
+    expected,
 ) -> None:
     schema_contract_version = _schema_contract_hint(hint)
     if schema_contract_version and schema_contract_version != ARCHITECTURE_SCHEMA_CONTRACT_VERSION:
@@ -859,7 +1052,10 @@ def _compare_explicit_architecture_contract_hint(
         )
 
     channel_map_matrix = _channel_map_hint(hint)
-    if channel_map_matrix is not None and _normalize_channel_map_hint(channel_map_matrix) != _normalize_channel_map_hint(CHANNEL_MAP_MATRIX):
+    if (
+        channel_map_matrix is not None
+        and _normalize_channel_map_hint(channel_map_matrix) != _normalize_channel_map_hint(expected.channel_map_matrix)
+    ):
         issues.append(
             ImportArchitectureIssue(
                 code='channel_map_matrix_mismatch',
@@ -867,33 +1063,33 @@ def _compare_explicit_architecture_contract_hint(
                 message='Import payload channel map matrix does not match the supported architecture contract.',
                 context={
                     'actual': _normalize_channel_map_hint(channel_map_matrix),
-                    'expected': _normalize_channel_map_hint(CHANNEL_MAP_MATRIX),
+                    'expected': _normalize_channel_map_hint(expected.channel_map_matrix),
                 },
             )
         )
 
     mpo_position_count = _hint_int(hint, 'mpo_position_count', 'position_count')
-    if mpo_position_count is not None and mpo_position_count != MPO_POSITION_COUNT:
+    if mpo_position_count is not None and mpo_position_count != expected.mpo_position_count:
         issues.append(
             ImportArchitectureIssue(
                 code='mpo_position_count_mismatch',
                 path='architecture.mpo_position_count',
                 message=(
                     f'Import payload MPO position count {mpo_position_count!r} does not match supported count '
-                    f'{MPO_POSITION_COUNT!r}.'
+                    f'{expected.mpo_position_count!r}.'
                 ),
-                context={'actual': mpo_position_count, 'expected': MPO_POSITION_COUNT},
+                context={'actual': mpo_position_count, 'expected': expected.mpo_position_count},
             )
         )
 
     dark_positions = _int_tuple_hint(hint, 'dark_positions')
-    if dark_positions is not None and tuple(sorted(dark_positions)) != tuple(sorted(MPO_DARK_POSITIONS)):
+    if dark_positions is not None and tuple(sorted(dark_positions)) != tuple(sorted(expected.dark_positions)):
         issues.append(
             ImportArchitectureIssue(
                 code='dark_positions_mismatch',
                 path='architecture.dark_positions',
                 message='Import payload dark MPO positions do not match the supported architecture contract.',
-                context={'actual': tuple(sorted(dark_positions)), 'expected': tuple(sorted(MPO_DARK_POSITIONS))},
+                context={'actual': tuple(sorted(dark_positions)), 'expected': tuple(sorted(expected.dark_positions))},
             )
         )
 
@@ -1108,8 +1304,8 @@ def _reconcile_ordered_items(
 def _payload_metadata(payload: Any) -> tuple[str, str]:
     if not isinstance(payload, Mapping):
         return '', ''
-    version = _optional(payload, 'payload_version', 'version', 'schema_version')
-    source = _optional(payload, 'source_label', 'source', 'source_name')
+    version = _optional(payload, 'payload_version', 'version', 'schema_version', 'bundle_version')
+    source = _optional(payload, 'source_label', 'source', 'source_name', 'bundle_author')
     return _label_value(version), _label_value(source)
 
 
@@ -1520,10 +1716,365 @@ def _reference_exists(reference: ImportReference) -> bool:
     return False
 
 
+def _is_blueprint_bundle_payload(payload: Mapping[str, Any]) -> bool:
+    if not isinstance(payload, Mapping) or isinstance(payload.get('items'), list):
+        return False
+    if not any(
+        key in payload
+        for key in (
+            'bundle_version',
+            'bundle_author',
+            'parameter_schema',
+            'required_device_types',
+            'stamp_templates',
+            'templates',
+        )
+    ):
+        return False
+    definition = payload.get('definition') or payload.get('architecture') or payload.get('blueprint') or payload
+    return (
+        isinstance(definition, Mapping)
+        and 'roles' in definition
+        and 'transfer_patterns' in definition
+        and 'allocation_rule_sets' in definition
+    )
+
+
+def _blueprint_bundle_item(payload: Mapping[str, Any]) -> dict[str, Any]:
+    definition = payload.get('definition') or payload.get('architecture') or payload.get('blueprint') or payload
+    item = {
+        'kind': 'fabric_architecture_blueprint',
+        'definition': definition,
+        'parameter_schema': payload.get('parameter_schema') or {},
+        'required_device_types': payload.get('required_device_types') or {},
+        'stamp_templates': payload.get('stamp_templates') or payload.get('templates') or {},
+        'schema_contract_version': payload.get('schema_contract_version') or ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+        'bundle': {
+            'bundle_version': payload.get('bundle_version') or '',
+            'bundle_author': payload.get('bundle_author') or '',
+            'schema_contract_version': payload.get('schema_contract_version') or ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+        },
+    }
+    for key in ('name', 'description', 'status', 'lifecycle', 'successor_version', 'metadata'):
+        if key in payload:
+            item[key] = payload[key]
+    return item
+
+
+def _blueprint_definition_payload(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    for key in ('definition', 'architecture', 'blueprint'):
+        value = data.get(key)
+        if isinstance(value, Mapping):
+            if key == 'blueprint' and isinstance(value.get('definition'), Mapping):
+                return value['definition']
+            return value
+    return data
+
+
+def _blueprint_schema_contract_version(data: Mapping[str, Any]) -> str:
+    value = _optional(data, 'schema_contract_version', 'architecture_schema_contract_version')
+    if value not in (MISSING, None, ''):
+        return str(value)
+    bundle = data.get('bundle')
+    if isinstance(bundle, Mapping):
+        value = bundle.get('schema_contract_version')
+        if value not in (None, ''):
+            return str(value)
+    metadata = data.get('metadata')
+    if isinstance(metadata, Mapping):
+        value = _schema_contract_hint(metadata)
+        if value:
+            return value
+    return ARCHITECTURE_SCHEMA_CONTRACT_VERSION
+
+
+def _blueprint_architecture_desired_fields(
+    *,
+    data: Mapping[str, Any],
+    definition,
+    parameter_schema: Mapping[str, Any],
+    required_device_types: Mapping[str, Any],
+    lifecycle: str,
+    successor_version: str,
+    schema_contract_version: str,
+) -> dict[str, Any]:
+    metadata = dict(data.get('metadata') or {}) if isinstance(data.get('metadata'), Mapping) else {}
+    bundle = data.get('bundle') if isinstance(data.get('bundle'), Mapping) else {}
+    metadata['schema_contract_version'] = schema_contract_version
+    metadata['blueprint'] = {
+        'lifecycle': lifecycle,
+        'successor_version': successor_version,
+        'parameter_schema': dict(parameter_schema),
+        'required_device_types': {
+            str(role_slug): list(slugs) if isinstance(slugs, Sequence) and not isinstance(slugs, str) else [str(slugs)]
+            for role_slug, slugs in required_device_types.items()
+        },
+        'schema_contract_version': schema_contract_version,
+        'definition': architecture_definition_to_payload(definition),
+        'bundle': dict(bundle),
+    }
+    return {
+        'name': str(_optional_default(data, 'name', default=_humanize_slug(definition.slug)))[:200],
+        'status': str(_optional_default(data, 'status', default='active')),
+        'plane_count': definition.plane_count,
+        'description': str(_optional_default(data, 'description', default='')),
+        'metadata': metadata,
+    }
+
+
+def _blueprint_child_state(
+    architecture: FabricArchitecture | None,
+    definition,
+    data: Mapping[str, Any],
+) -> dict[str, Any]:
+    desired_roles = _definitions_by_slug(definition.roles)
+    desired_patterns = _definitions_by_slug(definition.transfer_patterns)
+    desired_rules = _definitions_by_slug(definition.allocation_rule_sets)
+    desired_templates = _stamp_templates_by_slug(_normalize_stamp_templates(data))
+    existing_roles = _existing_role_definitions(architecture)
+    existing_patterns = _existing_transfer_pattern_definitions(architecture)
+    existing_rules = _existing_allocation_rule_definitions(architecture)
+    existing_templates = _existing_stamp_template_definitions(architecture, desired_templates)
+
+    changed_sections = []
+    for section, desired, existing in (
+        ('roles', desired_roles, existing_roles),
+        ('transfer_patterns', desired_patterns, existing_patterns),
+        ('allocation_rule_sets', desired_rules, existing_rules),
+        ('stamp_templates', desired_templates, existing_templates),
+    ):
+        if architecture is None and desired:
+            changed_sections.append(section)
+        elif desired and desired != {slug: existing.get(slug) for slug in desired}:
+            changed_sections.append(section)
+
+    return {
+        'has_changes': bool(changed_sections),
+        'changed_sections': changed_sections,
+        'desired_counts': {
+            'roles': len(desired_roles),
+            'transfer_patterns': len(desired_patterns),
+            'allocation_rule_sets': len(desired_rules),
+            'stamp_templates': len(desired_templates),
+        },
+        'existing_counts': {
+            'roles': len(existing_roles),
+            'transfer_patterns': len(existing_patterns),
+            'allocation_rule_sets': len(existing_rules),
+            'stamp_templates': len(existing_templates),
+        },
+    }
+
+
+def _apply_blueprint_architecture(
+    *,
+    architecture: FabricArchitecture | None,
+    definition,
+    desired: Mapping[str, Any],
+    data: Mapping[str, Any],
+) -> FabricArchitecture:
+    if architecture is None:
+        architecture = FabricArchitecture(slug=definition.slug, version=definition.version, **desired)
+    else:
+        for field_name, value in desired.items():
+            setattr(architecture, field_name, value)
+    architecture.full_clean()
+    architecture.save()
+    _sync_architecture_roles(architecture, definition.roles)
+    _sync_transfer_patterns(architecture, definition.transfer_patterns)
+    _sync_allocation_rule_sets(architecture, definition.allocation_rule_sets)
+    _sync_stamp_templates(architecture, _normalize_stamp_templates(data))
+    return architecture
+
+
+def _sync_architecture_roles(architecture: FabricArchitecture, roles: Sequence[Mapping[str, Any]]) -> None:
+    for role in roles:
+        ArchitectureRole.objects.update_or_create(
+            architecture=architecture,
+            slug=str(role['slug']),
+            defaults={
+                'name': role.get('name') or role['slug'],
+                'role_kind': role.get('role_kind') or '',
+                'description': role.get('description') or '',
+                'metadata': dict(role.get('metadata') or {}),
+            },
+        )
+
+
+def _sync_transfer_patterns(architecture: FabricArchitecture, patterns: Sequence[Mapping[str, Any]]) -> None:
+    for pattern in patterns:
+        TransferPattern.objects.update_or_create(
+            architecture=architecture,
+            slug=str(pattern['slug']),
+            defaults={
+                'name': pattern.get('name') or pattern['slug'],
+                'pattern_kind': pattern.get('pattern_kind') or 'custom',
+                'rule': dict(pattern.get('rule') or {}),
+                'metadata': dict(pattern.get('metadata') or {}),
+            },
+        )
+
+
+def _sync_allocation_rule_sets(architecture: FabricArchitecture, rule_sets: Sequence[Mapping[str, Any]]) -> None:
+    for rule_set in rule_sets:
+        AllocationRuleSet.objects.update_or_create(
+            architecture=architecture,
+            slug=str(rule_set['slug']),
+            defaults={
+                'name': rule_set.get('name') or rule_set['slug'],
+                'rule': dict(rule_set.get('rule') or {}),
+                'metadata': dict(rule_set.get('metadata') or {}),
+            },
+        )
+
+
+def _sync_stamp_templates(architecture: FabricArchitecture, templates: Sequence[Mapping[str, Any]]) -> None:
+    for template in templates:
+        metadata = dict(template.get('metadata') or {})
+        metadata.setdefault('blueprint_import', True)
+        StampTemplate.objects.update_or_create(
+            slug=str(template['slug']),
+            defaults={
+                'architecture': architecture,
+                'name': template.get('name') or template['slug'],
+                'description': template.get('description') or '',
+                'template': dict(template.get('template') or {}),
+                'metadata': metadata,
+            },
+        )
+
+
+def _normalize_stamp_templates(data: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    raw_templates = _optional(data, 'stamp_templates', 'templates')
+    if raw_templates in (MISSING, None, ''):
+        return ()
+    normalized: list[dict[str, Any]] = []
+    if isinstance(raw_templates, Mapping):
+        iterable = raw_templates.items()
+    elif isinstance(raw_templates, Sequence) and not isinstance(raw_templates, (str, bytes, bytearray)):
+        iterable = ((None, item) for item in raw_templates)
+    else:
+        raise ImportRowError('stamp_templates must be an object or array')
+
+    for key, raw_template in iterable:
+        if not isinstance(raw_template, Mapping):
+            raise ImportRowError('stamp_templates entries must be objects')
+        slug = str(raw_template.get('slug') or key or '')
+        if not slug:
+            raise ImportRowError('stamp_templates entries require a slug')
+        template_body = raw_template.get('template')
+        if template_body is None:
+            template_body = {
+                item_key: item_value
+                for item_key, item_value in raw_template.items()
+                if item_key not in {'slug', 'name', 'description', 'metadata'}
+            }
+        if not isinstance(template_body, Mapping):
+            raise ImportRowError(f'stamp_templates.{slug}.template must be an object')
+        normalized.append(
+            {
+                'slug': slug,
+                'name': str(raw_template.get('name') or _humanize_slug(slug)),
+                'description': str(raw_template.get('description') or ''),
+                'template': dict(template_body),
+                'metadata': dict(raw_template.get('metadata') or {}),
+            }
+        )
+    return tuple(normalized)
+
+
+def _definitions_by_slug(definitions: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(definition.get('slug')): _normalize_definition(definition) for definition in definitions}
+
+
+def _stamp_templates_by_slug(templates: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(template.get('slug')): _normalize_definition(template) for template in templates}
+
+
+def _existing_role_definitions(architecture: FabricArchitecture | None) -> dict[str, dict[str, Any]]:
+    if architecture is None:
+        return {}
+    return {
+        role.slug: _normalize_definition(
+            {
+                'slug': role.slug,
+                'name': role.name,
+                'role_kind': role.role_kind,
+                'description': role.description,
+                'metadata': role.metadata or {},
+            }
+        )
+        for role in architecture.roles.all()
+    }
+
+
+def _existing_transfer_pattern_definitions(architecture: FabricArchitecture | None) -> dict[str, dict[str, Any]]:
+    if architecture is None:
+        return {}
+    return {
+        pattern.slug: _normalize_definition(
+            {
+                'slug': pattern.slug,
+                'name': pattern.name,
+                'pattern_kind': pattern.pattern_kind,
+                'rule': pattern.rule or {},
+                'metadata': pattern.metadata or {},
+            }
+        )
+        for pattern in architecture.transfer_patterns.all()
+    }
+
+
+def _existing_allocation_rule_definitions(architecture: FabricArchitecture | None) -> dict[str, dict[str, Any]]:
+    if architecture is None:
+        return {}
+    return {
+        rule_set.slug: _normalize_definition(
+            {
+                'slug': rule_set.slug,
+                'name': rule_set.name,
+                'rule': rule_set.rule or {},
+                'metadata': rule_set.metadata or {},
+            }
+        )
+        for rule_set in architecture.allocation_rule_sets.all()
+    }
+
+
+def _existing_stamp_template_definitions(
+    architecture: FabricArchitecture | None,
+    desired_templates: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if architecture is None or not desired_templates:
+        return {}
+    return {
+        template.slug: _normalize_definition(
+            {
+                'slug': template.slug,
+                'name': template.name,
+                'description': template.description,
+                'template': template.template or {},
+                'metadata': template.metadata or {},
+            }
+        )
+        for template in StampTemplate.objects.filter(architecture=architecture, slug__in=desired_templates.keys())
+    }
+
+
+def _normalize_definition(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _serializable_value(dict(value))
+
+
+def _humanize_slug(slug: str) -> str:
+    return str(slug).replace('-', ' ').replace('_', ' ').title()
+
+
 def _payload_items(payload: Any) -> list[Any]:
     if isinstance(payload, list):
         return payload
     if isinstance(payload, Mapping):
+        if _is_blueprint_bundle_payload(payload):
+            return [_blueprint_bundle_item(payload)]
         items = payload.get('items')
         if isinstance(items, list):
             return items
@@ -1719,6 +2270,13 @@ def _optional(data: Mapping[str, Any], *names: str) -> Any:
             if name in fields:
                 return fields[name]
     return MISSING
+
+
+def _optional_default(data: Mapping[str, Any], *names: str, default: Any = None) -> Any:
+    value = _optional(data, *names)
+    if value is MISSING or value is None or value == '':
+        return default
+    return value
 
 
 def _has_any(data: Mapping[str, Any], *names: str) -> bool:

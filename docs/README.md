@@ -13,15 +13,42 @@ active implementation contract.
 - [External automation contracts](v2_external_contracts.md): stable vs
   experimental labels for REST, GraphQL, import/reconcile, topology audit, and
   visual trace surfaces.
+- [Architecture schema](v2_architecture_schema.md): executable architecture
+  schema contract, built-in blueprint families, validation codes, and transfer
+  geometry maturity.
+- [Blueprint versioning policy](blueprint_versioning_policy.md): lifecycle,
+  immutability, compatibility, and current built-in blueprint support.
+- [V2.5 stamping](v2_stamping_v25.md): registry-backed stamp preview/apply,
+  retry classification, and rollback preview/apply behavior.
 - [Import reconciliation](v2_import_reconciliation.md): JSON shape and command
-  contract for plugin-native dry-run/apply imports.
+  contract for plugin-native dry-run/apply imports and saved import reports.
+- [Operational impact modeling](v2_operational_impact_modeling.md): cable cut,
+  MPO unplug, OSFP unseat, saved impact reports, JSON export, and comparison
+  contracts.
 - [Topology integrity audit](v2_topology_integrity.md): command and JSON report
   contract for preflight topology checks.
 - [Visual trace component](v2_visual_trace_component.md): reusable Path Query
   and Interface Fanout Trace renderer shell and test hooks.
-- [High-value deepening plan](v2_high_value_deepening_plan.md): second-stage
-  plan for fleshing out the seven highest-value V2 improvements after their
-  first implementation wave.
+- [Fabric onboarding workflows](v2_fabric_onboarding_workflows.md): current and
+  desired end-to-end process for onboarding a net-new multi-planar RoCE fabric,
+  including site design documents and direct UI/API entry paths.
+- [Desired onboarding dry-run gap log](v2_desired_onboarding_dry_run_gap_log.md):
+  historical dry run that motivated the first-class onboarding workspace. Its
+  early workspace/source/plan gaps are now addressed by the first-slice
+  implementation; later planned-graph simulation gaps remain useful context.
+- [First-class architecture workspace](v2_first_class_architecture_workspace.md):
+  current design and implementation notes for architecture source artifacts,
+  normalized blueprint components, validation runs, publish plans, and publish
+  handoff JSON.
+- [First-class onboarding workspace](v2_first_class_onboarding_workspace_design.md):
+  implemented first-slice data model, services, UI, API, migration, and
+  follow-on roadmap for turning fabric onboarding into a persistent guided
+  workspace.
+- [Blueprint library expansion targets](blueprint_library_expansion_targets.md):
+  implemented baseline for generalized blueprint shapes and remaining hardening
+  notes.
+- [High-value deepening plan](v2_high_value_deepening_plan.md): historical
+  second-stage plan for fleshing out the seven highest-value V2 improvements.
 - [Cutover runbook](v2_cutover_runbook.md): validation checklist for bringing
   V2 online.
 - [Post-MVP expansion plan](v2_post_mvp_expansion_plan.md): completed and
@@ -62,7 +89,8 @@ The active NetBox menu is:
 
 - `Operate`: Fabric Overview, Interface Fanout Trace, Path Query, Physical Cable
   Blast Radius
-- `Build & Run`: Onboard Fabric, Operations Center
+- `Build & Run`: Architecture Workspaces, Onboarding Workspaces, Onboard
+  Fabric, Operations Center, Import Preview, Impact Reports
 - `Audit`: Audit Dashboard, Audit Triage, Exception Requests
 - `Model Inventory`: Fabrics, Architectures, Cable Assemblies, Lane Inventory,
   Model Catalog

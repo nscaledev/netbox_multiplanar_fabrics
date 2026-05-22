@@ -20,6 +20,7 @@ from netbox_plant_graph.models import (
     FiberStrand,
     OperationRun,
     OpticalLane,
+    StampRun,
     StrandTermination,
     TransferMap,
     TransportChannel,
@@ -577,6 +578,7 @@ class MPOPositionPolicy:
     active_positions: frozenset[int]
     dark_positions: frozenset[int]
     source: str
+    dark_positions_by_plane: Mapping[int, frozenset[int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1564,12 +1566,69 @@ def _mpo_position_policy(fabric: Fabric) -> MPOPositionPolicy | None:
     if not dark_positions:
         return None
 
+    dark_positions_by_plane = _dark_position_overrides_from_stamp_manifest(
+        fabric=fabric,
+        active_positions=frozenset(active_positions),
+        position_count=position_count,
+    )
+    if dark_positions_by_plane:
+        dark_positions = dark_positions.union(*dark_positions_by_plane.values())
+        source = 'stamp_run.dark_position_overrides'
+
     return MPOPositionPolicy(
         position_count=position_count,
         active_positions=frozenset(active_positions),
         dark_positions=dark_positions,
         source=source or 'architecture',
+        dark_positions_by_plane=dark_positions_by_plane,
     )
+
+
+def _dark_position_overrides_from_stamp_manifest(
+    *,
+    fabric: Fabric,
+    active_positions: frozenset[int],
+    position_count: int,
+) -> dict[int, frozenset[int]]:
+    run = StampRun.objects.filter(fabric=fabric, status='completed').order_by('-created', '-pk').first()
+    if run is None:
+        return {}
+    result = run.result if isinstance(run.result, Mapping) else {}
+    overrides = result.get('dark_position_overrides') or (result.get('stamp_manifest') or {}).get('dark_position_overrides')
+    if not isinstance(overrides, Mapping):
+        return {}
+    all_positions = set(range(1, position_count + 1))
+    normalized = {}
+    for raw_plane, raw_positions in overrides.items():
+        plane = _safe_int(raw_plane)
+        if plane is None or not isinstance(raw_positions, (list, tuple, set)):
+            continue
+        dark_positions = frozenset(
+            position
+            for position in (_safe_int(raw_position) for raw_position in raw_positions)
+            if position is not None
+        )
+        if not dark_positions:
+            continue
+        if active_positions & dark_positions:
+            continue
+        if set(active_positions) | set(dark_positions) != all_positions:
+            continue
+        normalized[plane] = dark_positions
+    return normalized
+
+
+def _dark_positions_for_plane(policy: MPOPositionPolicy, plane_number: int | None) -> frozenset[int]:
+    if plane_number is not None and policy.dark_positions_by_plane:
+        return policy.dark_positions_by_plane.get(plane_number, policy.dark_positions)
+    return policy.dark_positions
+
+
+def _plane_number_from_segment_name(name: str | None) -> int | None:
+    if not name or not name.startswith('P'):
+        return None
+    raw_value = name[1:].split('-', 1)[0]
+    return _safe_int(raw_value)
 
 
 def _is_mpo_endpoint(endpoint: Endpoint | None) -> bool:
@@ -1592,11 +1651,14 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 fabric=fabric,
                 local_mpo_position__position_number__in=dark_positions,
             )
-            .select_related('local_mpo_endpoint', 'local_mpo_position')
+            .select_related('local_mpo_endpoint', 'local_mpo_position', 'plane')
             .order_by('pk')
         )
         for lane in lane_queryset:
             if not _is_mpo_endpoint(lane.local_mpo_endpoint):
+                continue
+            lane_dark_positions = _dark_positions_for_plane(policy, getattr(lane.plane, 'plane_number', None))
+            if lane.local_mpo_position.position_number not in lane_dark_positions:
                 continue
             _add_finding(
                 findings,
@@ -1612,8 +1674,9 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 related_objects=(_ref(lane.local_mpo_position),),
                 details={
                     'position_number': lane.local_mpo_position.position_number,
-                    'dark_positions': sorted(policy.dark_positions),
+                    'dark_positions': sorted(lane_dark_positions),
                     'policy_source': policy.source,
+                    'plane_number': getattr(lane.plane, 'plane_number', None),
                 },
             )
 
@@ -1622,11 +1685,15 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 strand__segment__fabric=fabric,
                 mpo_position__position_number__in=dark_positions,
             )
-            .select_related('strand', 'mpo_endpoint', 'mpo_position')
+            .select_related('strand', 'strand__segment', 'mpo_endpoint', 'mpo_position')
             .order_by('pk')
         )
         for termination in termination_queryset:
             if not _is_mpo_endpoint(termination.mpo_endpoint):
+                continue
+            plane_number = _plane_number_from_segment_name(getattr(termination.strand.segment, 'name', ''))
+            termination_dark_positions = _dark_positions_for_plane(policy, plane_number)
+            if termination.mpo_position.position_number not in termination_dark_positions:
                 continue
             _add_finding(
                 findings,
@@ -1642,8 +1709,9 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 related_objects=(_ref(termination.mpo_position), _ref(termination.strand)),
                 details={
                     'position_number': termination.mpo_position.position_number,
-                    'dark_positions': sorted(policy.dark_positions),
+                    'dark_positions': sorted(termination_dark_positions),
                     'policy_source': policy.source,
+                    'plane_number': plane_number,
                 },
             )
 
@@ -1652,11 +1720,17 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 channel__fabric=fabric,
                 mpo_position__position_number__in=dark_positions,
             )
-            .select_related('channel', 'mpo_endpoint', 'mpo_position')
+            .select_related('channel', 'channel__plane', 'mpo_endpoint', 'mpo_position')
             .order_by('pk')
         )
         for position_map in channel_map_queryset:
             if not _is_mpo_endpoint(position_map.mpo_endpoint):
+                continue
+            map_dark_positions = _dark_positions_for_plane(
+                policy,
+                getattr(position_map.channel.plane, 'plane_number', None),
+            )
+            if position_map.mpo_position.position_number not in map_dark_positions:
                 continue
             _add_finding(
                 findings,
@@ -1672,8 +1746,9 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 related_objects=(_ref(position_map.mpo_position), _ref(position_map.channel)),
                 details={
                     'position_number': position_map.mpo_position.position_number,
-                    'dark_positions': sorted(policy.dark_positions),
+                    'dark_positions': sorted(map_dark_positions),
                     'policy_source': policy.source,
+                    'plane_number': getattr(position_map.channel.plane, 'plane_number', None),
                 },
             )
 
@@ -1687,10 +1762,12 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
             .order_by('pk')
         )
         for transfer_map in transfer_map_queryset:
+            transfer_plane_number = _safe_int((transfer_map.metadata or {}).get('plane_number'))
+            transfer_dark_positions = _dark_positions_for_plane(policy, transfer_plane_number)
             dark_related = []
             position_numbers = []
             for position in (transfer_map.src_position, transfer_map.dst_position):
-                if position.position_number in dark_positions and _is_mpo_endpoint(position.endpoint):
+                if position.position_number in transfer_dark_positions and _is_mpo_endpoint(position.endpoint):
                     dark_related.append(_ref(position))
                     position_numbers.append(position.position_number)
             if not dark_related:
@@ -1706,8 +1783,9 @@ def _check_dark_mpo_position_usage(*, fabrics: tuple[Fabric, ...], findings: lis
                 related_objects=tuple(dark_related),
                 details={
                     'position_numbers': position_numbers,
-                    'dark_positions': sorted(policy.dark_positions),
+                    'dark_positions': sorted(transfer_dark_positions),
                     'policy_source': policy.source,
+                    'plane_number': transfer_plane_number,
                 },
             )
 

@@ -1,19 +1,39 @@
 # V2.5 Stamping
 
-V2.5 adds a safer operator-facing layer around the existing RoCE mini-proof stamp executor. The MVP executor still owns
-the actual object reconciliation; V2.5 adds dry-run preview, validation, retry shape, name-pattern inspection, and an
-explicit rollback contract.
+V2.5 is the operator-facing stamp path for current V2 fabrics. It adds
+registry-backed blueprint selection, dry-run preview, validation, retry
+classification, name-pattern inspection, and explicit rollback preview/apply
+around the idempotent object reconciliation layer.
+
+Low-level reconciliation still lives in `services/stamping.py`, but it is no
+longer GB300-only: the executor registry currently supports the bundled GB300
+4-plane shuffle, GB300 8-plane shuffle, and H100 direct-attach mini-proof
+templates.
 
 ## Service Entry Points
 
-- `preview_stamp_template_v25(...)` reads the template and database, returns a `StampOperationPreview`, and does not
-  mutate state.
-- `apply_stamp_template_v25(...)` builds the same preview, blocks on validation errors, then calls the existing
-  idempotent stamp executor.
+- `preview_stamp_template_v25(...)` reads the template, selects a registered or
+  persisted blueprint, validates parameters and compatibility, returns a
+  `StampOperationPreview`, and does not mutate state.
+- `apply_stamp_template_v25(...)` builds the same preview, blocks on validation
+  errors, then calls the registry-aware idempotent stamp executor and persists
+  the resulting `StampRun`.
 - `rollback_stamp_run_v25(...)` returns a `StampRollbackPlan` preview by default. Passing `apply=True` executes the
   constrained compensation plan when every manifest object is clearly plugin-owned and dependency checks pass.
 - `classify_stamp_retry_v25(...)` classifies an existing `StampRun` as `retryable`, `blocked`, or
   `already-converged`.
+
+## Supported Bundled Executors
+
+The default blueprint registry and stamp executor registry currently wire these
+operator-ready templates:
+
+- `roce-4-plane-gb300-2x2-shuffle` `v2` with primitive
+  `roce_4plane_mini_proof`.
+- `roce-8-plane-gb300-2x2-shuffle` `v2` with primitive
+  `roce_gb300_shuffle_mini_proof`.
+- `roce-4-plane-h100-direct-attach` `v2` with primitive
+  `roce_direct_attach_mini_proof`.
 
 ## Preview Model
 
@@ -28,8 +48,12 @@ explicit rollback contract.
   persisted `StampRun`, but the same plan schema is used by `rollback_stamp_run_v25(...)`.
 - `name_pattern_samples`: generated NetBox device/interface/sub-interface names, whether they already exist, and whether
   an existing object is a collision.
-- `architecture_gate`: a lightweight architecture preflight summary with fixture validity, inferred persisted
-  architecture target, persisted schema validity, and compatibility status.
+- `architecture_gate`: a blueprint/architecture preflight summary with selected
+  blueprint source, slug, version, lifecycle, fixture validity, persisted
+  architecture target, persisted schema validity, compatibility status, and
+  blueprint issue count.
+- `parameter_metadata`: resolved stamp-time parameters, selected phase, wavelength plan, allocation override,
+  dark-position overrides, and fabric ownership lookup results.
 
 Preview is a dry run. It may query existing rows to classify `create` vs. `update`, but it must not create fabrics,
 NetBox devices, interfaces, stamp runs, or plugin topology rows.
@@ -61,20 +85,39 @@ The older lightweight count preview remains visible for quick object-count
 scanning, but the V2.5 sections are the authoritative safety surface before
 execution.
 
+Saved `StampRun` views also expose the V2.5 recovery surface: retry
+classification explains whether a failed/incomplete run can be retried, and the
+rollback action supports preview-first compensation with an explicit apply step
+when the manifest is safe to delete.
+
 ## Validation Hooks
 
 Before apply, V2.5 checks:
 
-- The built-in architecture schema helper validates successfully.
-- The persisted architecture target validates when it can be inferred from the template FK or from a unique
-  `architecture_slug`/`architecture_version` template hint.
-- The persisted architecture target is compatible with the built-in RoCE V2 contract when persisted validation passes.
-- The selected template targets the supported built-in architecture/version.
+- The template exposes enough architecture identity to select a registered
+  blueprint, or a compatible persisted `FabricArchitecture` stores an importable
+  blueprint definition.
+- The selected blueprint validates against the architecture schema contract.
+- Blueprint lifecycle and required NetBox `DeviceType` compatibility checks pass
+  at error severity.
+- Stamp-time blueprint parameters validate against the selected blueprint
+  `parameter_schema`.
+- The persisted architecture target validates when it can be inferred from the
+  template FK or from a template `architecture_slug`/`architecture_version`
+  hint.
+- The persisted architecture target is compatible with the selected blueprint
+  contract when persisted validation passes.
 - Required architecture roles still exist in the database.
-- The template channel map matches the architecture channel map and still has complete MPO/subinterface coverage.
-- Creation options include required Site, DeviceType, and DeviceRole selections when NetBox object creation is enabled.
+- The template channel map matches the selected blueprint channel map and still
+  has complete MPO/subinterface coverage.
+- Creation options include required Site, DeviceType, and DeviceRole selections
+  when NetBox object creation is enabled.
 - Planned fabric/device names do not collide with unrelated existing objects.
 - Source bindings use the expected NetBox object types.
+- Optional `topology_parameters`, `stamp_phases`, `wavelength_plan`,
+  `name_patterns`, `allocation_rule_override`, `dark_position_overrides`, and
+  `fabric_ownership` sections are structurally valid before preview or apply
+  proceeds.
 
 Validation failures are returned in preview and raise `StampValidationError` from apply. Apply does not partially mutate
 when validation fails.
@@ -83,20 +126,54 @@ Architecture gate issue prefixes:
 
 - `architecture_schema.*`: built-in fixture validation, persisted architecture validation, or template channel-map schema
   failures. Persisted architecture paths are prefixed with `architecture.` in stamp preview issues.
+- `architecture_gate.*`: blueprint identity, registry lookup, or persisted
+  blueprint-definition selection failures.
 - `architecture_compatibility.*`: persisted architecture compatibility drift. Error-severity issues block apply; warning
   issues, such as a missing `metadata.schema_contract_version`, remain visible but do not block apply.
-- `unsupported_architecture` and `unsupported_architecture_version`: template hints target an architecture outside the
-  conservative V2.5 runner contract.
+- `blueprint_parameter.*`: template parameter values that violate the selected
+  blueprint `parameter_schema`.
+- `blueprint_lifecycle`: deprecated or retired blueprint lifecycle status.
 
 Name collisions are conservative: an existing generated device name is acceptable only when its site, device type, and
 role match the requested creation options. A matching existing object is treated as an idempotent update; a mismatch is
 reported as `name_collision_risk`.
 
+## Stamp-Time Parameters
+
+Templates may now opt into a conservative Tier 2 parameter block:
+
+- `topology_parameters`: positive integer parameters for `plane_count`, `gpu_tray_count`,
+  `leaf_count_per_plane`, `racks_per_pod`, and `pods_per_fabric`. Values may be simple integers or objects with
+  `value`, `min`, and `max`. Legacy templates derive the same defaults they used before.
+- `stamp_phases`: named phase entries with a `planes` list. `preview_stamp_template_v25(..., phase="phase-a")`,
+  `apply_stamp_template_v25(..., phase="phase-a")`, and `execute_stamp_template(..., phase="phase-a")` limit stamping
+  to that phase's planes and record the selected phase in `StampRun.parameters` and `StampRun.result.stamp_manifest`.
+- `wavelength_plan`: optional `band`, `channel_count`, and explicit `channels` list. Optical lanes use the resolved
+  channel values; absent plans keep the original 1311/1313/1315/1317 nm O-band default.
+- `name_patterns`: per-kind format strings for preview samples and channel sub-interface creation. Supported variables
+  are `{rack_id}`, `{tray_index}`, `{plane_index}`, `{port_index}`, `{channel_index}`, `{node_address}`, and
+  `{fabric_slug}`.
+- `allocation_rule_override`: selects an alternate `AllocationRuleSet` by slug. Preview errors when the slug is missing
+  and warns with `allocation_rule_override_delta` when the override changes the default channel map.
+- `dark_position_overrides`: maps plane numbers or labels such as `"Plane 2"` to replacement dark MPO position lists.
+  Stamps record the normalized overrides in the manifest, and the topology-integrity dark-position check reads the latest
+  completed stamp manifest for per-plane policy.
+- `fabric_ownership`: optional `tenant_slug`, `scope_site_slug`, and `scope_location_slug`. Resolved objects are injected
+  into the `Fabric`; generated NetBox devices use the resolved site/tenant/location where those Device fields are
+  available. Missing references are warning-severity preview issues.
+
+Phase-scoped rollback is conservative but no longer blocked solely by the presence of another phase's `StampRun`. When a
+run records phase scope and its `managed_objects` manifest contains only objects local to that phase, the compensation
+planner can roll that phase back while leaving other phase runs on the same fabric in place. Unphased runs, same-phase
+reapplies, manifests containing shared objects such as the `Fabric`, and manifests that overlap another active run remain
+blocked.
+
 ## Idempotent Apply
 
-The safe subset relies on existing `update_or_create` reconciliation in the MVP executor. Reapplying the same V2.5
-operation should reuse the fabric and managed topology rows; only a new `StampRun`/audit record is expected for the
-operator action itself.
+The safe subset relies on `update_or_create` reconciliation in
+`services/stamping.py`. Reapplying the same V2.5 operation should reuse the
+fabric and managed topology rows; only a new `StampRun`/audit record is expected
+for the operator action itself.
 
 ## Rollback Compensation
 
@@ -113,7 +190,9 @@ The planner supports rollback only when all of the following are true:
 
 - The run status is `completed`.
 - No previous rollback metadata says the run was already rolled back.
-- The fabric has no other stamp runs, because repeated idempotent applies make per-run creation ownership ambiguous.
+- The fabric has no other stamp runs, or the target run is phase-scoped, every other active run on the fabric is scoped
+  to a different phase, and the target manifest contains only phase-local objects with no overlap against other run
+  manifests. Repeated unphased applies and shared phase manifests remain ambiguous and blocked.
 - Every manifest object still exists or can be skipped as already absent, and every existing object has a clear ownership
   marker. Most plugin rows use `metadata.fixture == true`; connector positions inherit ownership from their endpoint;
   cable assemblies require `metadata.fixture == true` plus `metadata.fabric_id`; fabrics require fixture, template slug,
