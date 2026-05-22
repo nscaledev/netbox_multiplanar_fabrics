@@ -14,7 +14,7 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -26,9 +26,9 @@ DEFAULT_NVL72_SLOT = 'A2'
 LEAFS_PER_PLANE = 16
 
 NVL72_DEVICE_TYPE_SLUGS = {
-    'poweredge-xe9712-gb300-compute-tray',
-    'ps33-33kw-power-shelf',
-    'gb300-nvl72-nvlink-switch-tray',
+    'gb300ct',
+    'gb300ps',
+    'gb300st',
     'sn2201_m',
 }
 
@@ -122,7 +122,7 @@ def device_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{slot}-{ru}-{row["device_type_slug"]}'
+    return f'gs001-{slot}-{ru}-{row["device_type_slug"]}'
 
 
 def staged_comments(row: dict[str, str]) -> str:

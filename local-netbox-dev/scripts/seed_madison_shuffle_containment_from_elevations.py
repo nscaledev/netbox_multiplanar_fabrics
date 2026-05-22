@@ -24,13 +24,13 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 
-BOX_ROLE_SLUG = 'shuffle-box'
+BOX_ROLE_SLUG = 'sb'
 CASSETTE_ROLE_SLUG = 'shuffle-cassette'
-BOX_TYPE_SLUG = 'shuffle-box-3tray-18cassette'
+BOX_TYPE_SLUG = 'sb'
 CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
 SU_TAG_PREFIX = 'nv_su_'
@@ -126,7 +126,9 @@ def cassette_position(ordinal: int) -> tuple[int, int, str]:
 
 def cassette_name(box_name: str, ordinal: int) -> str:
     tray, slot, _ = cassette_position(ordinal)
-    return f'{box_name}-cassette-{tray}.{slot}'
+    if box_name.endswith('-sb'):
+        return f'{box_name[:-3]}-sbc-{tray}.{slot}'
+    return f'{box_name}-sbc-{tray}.{slot}'
 
 
 def marker_comments(row: dict[str, str], modeled_role: str) -> str:
@@ -291,8 +293,8 @@ def main() -> None:
                     'face': 'front',
                     'status': PLANNED_STATUS,
                     'description': f'1RU shuffle box; {row["populated_cassettes"]} populated cassette positions from row-elevation label.',
-                    'comments': marker_comments(row, 'shuffle-box'),
-                    'local_context_data': marker_context(row, 'shuffle-box'),
+                    'comments': marker_comments(row, 'sb'),
+                    'local_context_data': marker_context(row, 'sb'),
                 },
             )
             counters['shuffle_boxes_created' if box_created else 'shuffle_boxes_updated'] += 1

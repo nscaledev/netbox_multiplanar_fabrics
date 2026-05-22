@@ -43,7 +43,9 @@ def read_rows() -> list[dict[str, str]]:
 
 
 def cassette_name(box_name: str, tray: str, cassette: str) -> str:
-    return f'{box_name}-cassette-{int(tray)}.{int(cassette)}'
+    if box_name.endswith('-sb'):
+        return f'{box_name[:-3]}-sbc-{int(tray)}.{int(cassette)}'
+    return f'{box_name}-sbc-{int(tray)}.{int(cassette)}'
 
 
 def endpoint(device_name: str, port_name: str, mpo: int) -> tuple[str, str, int]:

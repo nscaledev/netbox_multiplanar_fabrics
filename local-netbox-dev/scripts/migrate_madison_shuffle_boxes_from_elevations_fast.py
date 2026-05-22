@@ -27,14 +27,14 @@ from tenancy.models import Tenant
 from netbox_plant_graph.models import PlantNode
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 
-BOX_ROLE_SLUG = 'shuffle-box'
+BOX_ROLE_SLUG = 'sb'
 TRAY_ROLE_SLUG = 'shuffle-tray'
 CASSETTE_ROLE_SLUG = 'shuffle-cassette'
-BOX_TYPE_SLUG = 'shuffle-box-3tray-18cassette'
+BOX_TYPE_SLUG = 'sb'
 TRAY_TYPE_SLUG = 'shuffle-tray-6cassette'
 CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -81,7 +81,7 @@ def old_cassette_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{slot}-{ru}-{CASSETTE_TYPE_SLUG}'
+    return f'gs001-{slot}-{ru}-{CASSETTE_TYPE_SLUG}'
 
 
 def marker_comments(row: dict[str, str], role: str) -> str:
@@ -340,7 +340,7 @@ def main() -> None:
         DeviceBay.objects.filter(installed_device_id__in=legacy_ids).update(installed_device=None)
 
         slots = sorted({row['physical_slot'] for row in rows})
-        stale_box_names = [f'mad1-{slot.lower()}-shuffle-box-01' for slot in slots]
+        stale_box_names = [f'gs001-{slot.lower()}-sb-01' for slot in slots]
         stale_tray_names = [f'{box_name}-tray-{index:02d}' for box_name in stale_box_names for index in range(1, 4)]
         stale_tray_ids = list(Device.objects.filter(site__slug=MAD_SITE_SLUG, name__in=stale_tray_names).values_list('id', flat=True))
         stale_box_ids = list(Device.objects.filter(site__slug=MAD_SITE_SLUG, name__in=stale_box_names).values_list('id', flat=True))
@@ -354,7 +354,7 @@ def main() -> None:
         for row in rows:
             rack = racks.get(row['physical_slot'])
             if rack is None:
-                raise RuntimeError(f'No MAD-1 rack found for shuffle box slot {row["physical_slot"]}.')
+                raise RuntimeError(f'No GS001 rack found for shuffle box slot {row["physical_slot"]}.')
             box = legacy_by_box_name[row['box_name']]
             box.name = row['box_name']
             box.device_type = box_type
@@ -367,7 +367,7 @@ def main() -> None:
             box.face = 'front'
             box.status = PLANNED_STATUS
             box.description = f'1RU shuffle box; {row["populated_cassettes"]} populated cassettes from row-elevation label.'
-            box.comments = marker_comments(row, 'shuffle-box')
+            box.comments = marker_comments(row, 'sb')
             box.local_context_data = marker_context(row)
             box_updates.append(box)
         Device.objects.bulk_update(

@@ -15,7 +15,7 @@ from netbox_plant_graph.models import (
 )
 
 
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
+FABRIC_NAME = 'GS001 RoCE Fabric'
 
 
 def managed(metadata: dict | None) -> bool:

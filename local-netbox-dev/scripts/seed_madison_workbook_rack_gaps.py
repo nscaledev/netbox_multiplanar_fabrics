@@ -9,7 +9,7 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 
@@ -149,7 +149,7 @@ def main():
 
     missing_locations = sorted({entry['location'] for entry in WORKBOOK_ONLY_BE_RACKS if entry['location'] not in locations_by_name})
     if missing_locations:
-        raise RuntimeError(f'Missing MAD-1 locations: {missing_locations}')
+        raise RuntimeError(f'Missing GS001 locations: {missing_locations}')
 
     counters = Counter()
     with transaction.atomic():

@@ -12,6 +12,7 @@ from dcim.models import Device, FrontPort, Interface, RearPort, Site
 from tenancy.models import Tenant
 
 from netbox_plant_graph.models import (
+    CableAssembly,
     ConnectorPosition,
     Endpoint,
     Fabric,
@@ -38,10 +39,10 @@ from netbox_plant_graph.services.architecture import (
 )
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
-FABRIC_SLUG = 'mad-1-roce-fabric'
+FABRIC_NAME = 'GS001 RoCE Fabric'
+FABRIC_SLUG = 'gs001-roce-fabric'
 DEFAULT_WAVELENGTH_NM = Decimal('1310.000')
 ACTIVE_MPO_POSITIONS_BY_MPO = {
     mpo_index: tuple(
@@ -192,6 +193,25 @@ def get_fabric() -> Fabric:
     return Fabric.objects.get(slug=FABRIC_SLUG)
 
 
+def site_for_endpoint(endpoint: Endpoint) -> Site | None:
+    source = endpoint.source
+    device = getattr(source, 'device', None)
+    site = getattr(device, 'site', None) or getattr(source, 'site', None)
+    if isinstance(site, Site):
+        return site
+    node_source = endpoint.node.source
+    node_site = getattr(node_source, 'site', None)
+    if isinstance(node_site, Site):
+        return node_site
+    return None
+
+
+def cable_site_for_segment(fabric: Fabric, a_endpoint: Endpoint, b_endpoint: Endpoint) -> Site:
+    if fabric.scope_site_id:
+        return fabric.scope_site
+    return site_for_endpoint(a_endpoint) or site_for_endpoint(b_endpoint) or get_site()
+
+
 def node_kind_for(device: Device) -> str:
     if device.device_type.slug == 'shuffle-cassette-2x2-mpo':
         return 'passive_assembly'
@@ -308,7 +328,11 @@ def ensure_channel_subinterface(
     source = parent_endpoint.source
     if not isinstance(source, Interface):
         return None
-    child_name = f'{source.name}/{channel_index}'
+    child_name = (
+        f'{source.name}s{channel_index}'
+        if source.name.startswith('swp')
+        else f'{source.name}/{channel_index}'
+    )
     child, created = Interface.objects.update_or_create(
         device=source.device,
         name=child_name,
@@ -571,15 +595,91 @@ def segment_position_numbers(segment: dict) -> list[int]:
 
 
 def delete_marked_connectivity(marker: str, *, fabric: Fabric, counters: Counter | None = None) -> None:
+    managed_cable_ids = set(
+        FiberStrand.objects.filter(segment__fabric=fabric, segment__metadata__has_key=marker)
+        .exclude(cable_site__isnull=True)
+        .exclude(cable_id='')
+        .values_list('cable_site_id', 'cable_id')
+    )
     segments = FiberSegment.objects.filter(fabric=fabric, metadata__has_key=marker)
     strand_ids = list(FiberStrand.objects.filter(segment__in=segments).values_list('pk', flat=True))
     deleted_terminations, _ = StrandTermination.objects.filter(strand_id__in=strand_ids).delete()
     deleted_strands, _ = FiberStrand.objects.filter(pk__in=strand_ids).delete()
     deleted_segments, _ = segments.delete()
+    stale_assemblies = CableAssembly.objects.filter(metadata__has_key=marker)
+    if managed_cable_ids:
+        from django.db.models import Q
+
+        owned_query = Q()
+        for site_id, cable_id in managed_cable_ids:
+            owned_query |= Q(site_id=site_id, cable_id=cable_id)
+        stale_assemblies = stale_assemblies | CableAssembly.objects.filter(owned_query)
+    deleted_cable_assemblies, _ = stale_assemblies.distinct().delete()
     if counters is not None:
         counters['stale_strand_terminations_deleted'] += deleted_terminations
         counters['stale_fiber_strands_deleted'] += deleted_strands
         counters['stale_fiber_segments_deleted'] += deleted_segments
+        counters['stale_cable_assemblies_deleted'] += deleted_cable_assemblies
+
+
+def cable_assembly_for_segment(
+    fabric: Fabric,
+    *,
+    name: str,
+    a_endpoint: Endpoint,
+    b_endpoint: Endpoint,
+    marker: str,
+    segment_kind: str,
+    position_numbers: list[int],
+    metadata: dict | None = None,
+    counters: Counter | None = None,
+) -> CableAssembly:
+    metadata = metadata or {}
+    site = cable_site_for_segment(fabric, a_endpoint, b_endpoint)
+    cable_id = str(metadata.get('cable_id') or f'{fabric.slug}:{name}')
+    parent_cable = None
+    parent_cable_id = metadata.get('parent_cable_id')
+    if parent_cable_id:
+        parent_cable = CableAssembly.objects.filter(site=site, cable_id=str(parent_cable_id)).first()
+    cable, created = CableAssembly.objects.update_or_create(
+        site=site,
+        cable_id=cable_id,
+        defaults={
+            'manufacturer': str(metadata.get('cable_manufacturer') or metadata.get('manufacturer') or 'Unknown'),
+            'serial_number': str(metadata.get('serial_number') or ''),
+            'model_id': str(metadata.get('cable_model') or metadata.get('model_id') or segment_kind),
+            'description': str(metadata.get('cable_description') or f'{segment_kind} cable assembly for {name}'),
+            'parent_cable': parent_cable,
+            'metadata': {
+                marker: True,
+                'modeled_status': 'planned',
+                'fabric_id': fabric.pk,
+                'fabric_slug': fabric.slug,
+                'segment_name': name,
+                'segment_kind': segment_kind,
+                'path_key': metadata.get('path_key', ''),
+                'segment_role': metadata.get('segment_role', ''),
+                'a_endpoint': metadata.get('a_endpoint') or a_endpoint.address,
+                'b_endpoint': metadata.get('b_endpoint') or b_endpoint.address,
+                'a_endpoint_address': a_endpoint.address,
+                'b_endpoint_address': b_endpoint.address,
+                'a_connector_kind': a_endpoint.connector_kind,
+                'b_connector_kind': b_endpoint.connector_kind,
+                'connector_type': metadata.get('connector_type') or a_endpoint.connector_kind or b_endpoint.connector_kind,
+                'fiber_count': len(position_numbers),
+                'strand_indexes': position_numbers,
+                **({
+                    'bundle_id': metadata.get('bundle_id'),
+                } if metadata.get('bundle_id') is not None else {}),
+                **({
+                    'bundle_position': metadata.get('bundle_position'),
+                } if metadata.get('bundle_position') is not None else {}),
+            },
+        },
+    )
+    if counters is not None:
+        counters['cable_assemblies_created' if created else 'cable_assemblies_updated'] += 1
+    return cable
 
 
 def connect_mpo_endpoints(
@@ -596,6 +696,17 @@ def connect_mpo_endpoints(
 ) -> FiberSegment:
     selected_positions = position_numbers or list(active_positions_for_mpo(1))
     position_plane_numbers = normalized_position_plane_numbers((metadata or {}).get('position_plane_numbers'))
+    cable_assembly = cable_assembly_for_segment(
+        fabric,
+        name=name,
+        a_endpoint=a_endpoint,
+        b_endpoint=b_endpoint,
+        marker=marker,
+        segment_kind=segment_kind,
+        position_numbers=selected_positions,
+        metadata=metadata,
+        counters=counters,
+    )
     segment, created = FiberSegment.objects.update_or_create(
         fabric=fabric,
         name=name,
@@ -618,11 +729,14 @@ def connect_mpo_endpoints(
             segment=segment,
             strand_index=position_number,
             defaults={
+                'cable_site': cable_assembly.site,
+                'cable_id': cable_assembly.cable_id,
                 'label': f'{segment.name}:strand-{position_number:02d}',
                 'metadata': {
                     marker: True,
                     'modeled_status': 'planned',
                     'mpo_position_number': position_number,
+                    'cable_id': cable_assembly.cable_id,
                     **({
                         'plane_number': position_plane_number,
                     } if position_plane_number is not None else {}),

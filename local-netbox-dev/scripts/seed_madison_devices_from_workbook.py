@@ -12,7 +12,7 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -42,9 +42,9 @@ SU_INHERIT_DEVICE_ROLES = {
     'be-leaf-switch',
     'fe-leaf-switch',
     'fe-spine-switch',
-    'poweredge-xe9712-gb300-compute-tray',
-    'ps33-33kw-power-shelf',
-    'nvlink-switch',
+    'gb300ct',
+    'gb300ps',
+    'gb300st',
     'shuffle-cassette',
 }
 
@@ -90,7 +90,7 @@ def device_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{slot}-{ru}-{row["device_type_slug"]}'
+    return f'gs001-{slot}-{ru}-{row["device_type_slug"]}'
 
 
 def racks_by_slot():
@@ -225,7 +225,7 @@ def main():
         for row in seed_rows:
             rack = racks.get(row['physical_slot'])
             if rack is None:
-                raise RuntimeError(f'No MAD-1 rack found with row-id slot {row["physical_slot"]}')
+                raise RuntimeError(f'No GS001 rack found with row-id slot {row["physical_slot"]}')
 
             device_type = device_types[row['device_type_slug']]
             validate_placement_height(row, device_type)

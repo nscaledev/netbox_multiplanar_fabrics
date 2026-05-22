@@ -16,7 +16,7 @@ from netbox_plant_graph.models import (
 from netbox_plant_graph.services.architecture import CHANNEL_MAP_MATRIX
 
 
-FABRIC_SLUG = 'mad-1-roce-fabric'
+FABRIC_SLUG = os.environ.get('MADISON_FABRIC_SLUG', 'gs001-roce-fabric')
 DEFAULT_PATH_KEY = 'madison-ready-sus-leaf16-four-plane-lane-aware-v2'
 PATH_KEY = os.environ.get('MADISON_FIBER_PATH_KEY', DEFAULT_PATH_KEY)
 ACTIVE_MPO_POSITIONS = tuple(

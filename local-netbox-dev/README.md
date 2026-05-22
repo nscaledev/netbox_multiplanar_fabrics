@@ -15,6 +15,13 @@ Production-like local NetBox runtime with auth plugins intentionally omitted.
 The local source directories for `netbox_multiplanar_fabrics` and
 `netbox_power_plant` are installed editable in the image and bind-mounted at
 runtime so ordinary Python/template edits are visible inside the containers.
+The local image raises NGINX Unit's request body limit to 3 GiB so CAD/DWG
+packages can be uploaded through the `netbox_power_plant` Madison underlay UI;
+the local Django `DATA_UPLOAD_MAX_MEMORY_SIZE` is raised to the same ceiling, and
+the image patches NetBox's Django settings to expose
+`DATA_UPLOAD_MAX_NUMBER_FILES`, which is raised to 500 for direct multi-file CAD
+selection. The plugin enforces its own CAD package limits after the request
+reaches Django.
 
 ## Start
 
@@ -60,8 +67,9 @@ docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/man
 .venv/bin/python scripts/report_madison_shuffle_box_placements.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/migrate_madison_shuffle_boxes_from_elevations_fast.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/sync_madison_power_ports_from_templates.py
-docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/bind_madison_gb300_power_shelf_delivery_points.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_apdu11450me_pdus.py
+docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_power_handoff_points.py
+docker compose exec -T -e MADISON_POWER_HANDOFF_APPLY=1 netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_power_handoff_points.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_conventional_pdu_power_cables.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_nvl72_internal_busbars.py
 .venv/bin/python scripts/report_madison_fiber_bom.py
@@ -129,17 +137,19 @@ afterward.
 NetBox power ports on the instantiated MAD-1 devices from their device-type
 templates. Passive fiber panels and shuffle cassettes are intentionally skipped.
 
-`bind_madison_gb300_power_shelf_delivery_points.py` binds GB300 rack delivery
-points to the `facility-input` power ports on the eight GB300 power shelves in
-each NVL72/GB300 rack. It requires an exact 8:8 delivery-point-to-power-shelf
-match per rack and maps `CKT1..CKT8` to power shelves ordered by rack RU.
-
 `seed_madison_apdu11450me_pdus.py` creates APDU11450ME rack-mounted PDU pairs
 for the conventional non-NVL72 racks only. These are modeled as 0U vertical rack
 devices, with one 560P6/IEC 60309 60A 3P+N+PE input, 21 C13/C15 outlets,
 21 C13/C15/C19/C21 combination outlets, and one 1000BASE-T management interface
-per PDU. Existing non-NVL72 rack delivery points are rebound from rack-level
-targets to the corresponding PDU input ports.
+per PDU. If non-NVL72 `PowerHandoffPoint` rows already exist, they are rebound
+from rack-level targets to the corresponding PDU input ports.
+
+`seed_madison_power_handoff_points.py` reconciles drawing-derived cabinet
+circuit endpoints to NetBox-native power ports. It maps electrical rack IDs such
+as `GB300-P1-R1-C16` to workbook rack slots, binds conventional `CKT1/CKT2`
+handoffs to APDU A/B `input` ports, and binds NVL72 `CKT1..CKT8` handoffs to
+PS33 `facility-input` ports ordered by rack RU. It is dry-run by default; set
+`MADISON_POWER_HANDOFF_APPLY=1` to create/update `PowerHandoffPoint` rows.
 
 `seed_madison_conventional_pdu_power_cables.py` creates planned NetBox power
 cables from conventional-rack APDU11450ME outlets to downstream device power
@@ -148,8 +158,8 @@ powered device in those racks is split across the A and B PDUs.
 
 `seed_madison_nvl72_internal_busbars.py` creates one shared internal `NVL72`
 busbar per NVL72 rack. Each busbar attaches the eight power-shelf
-`facility-input` ports as source attachments and the GB300 compute-tray plus
-NVLink-switch `nvl72-busbar` ports as load attachments.
+`busbar-output-1` ports as source attachments and the GB300 compute-tray,
+NVLink-switch, and `SN2201_M` busbar ports as load attachments.
 
 `report_madison_fiber_bom.py` parses `Nscale NC 18k Fiber BOM v1.4.xlsx` and
 writes a normalized Madison fiber BOM manifest under `data/generated/`. The

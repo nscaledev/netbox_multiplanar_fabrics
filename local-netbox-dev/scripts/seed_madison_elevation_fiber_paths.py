@@ -99,7 +99,7 @@ def gb300_racks_by_su() -> dict[int, list[Rack]]:
 def gb300_trays_by_rack(rack_ids: list[int]) -> dict[int, list[Device]]:
     grouped: dict[int, list[Device]] = {}
     for device in (
-        Device.objects.filter(site__slug=MAD_SITE_SLUG, rack_id__in=rack_ids, device_type__slug='poweredge-xe9712-gb300-compute-tray')
+        Device.objects.filter(site__slug=MAD_SITE_SLUG, rack_id__in=rack_ids, device_type__slug='gb300ct')
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
     ):

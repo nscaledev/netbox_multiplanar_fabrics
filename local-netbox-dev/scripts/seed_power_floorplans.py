@@ -1,25 +1,39 @@
 from __future__ import annotations
 
-import math
 import re
 from collections import defaultdict
 from decimal import Decimal
 
+from django.contrib.contenttypes.models import ContentType
 from django.utils.text import slugify
 
 from dcim.models import Location, Rack, Site
-from netbox_floorplan.models import Floorplan
-from netbox_power_plant.choices import PlacementLabelModeChoices, PlacementScopeChoices, PlacementSymbolKindChoices
-from netbox_power_plant.models import ElectricalNode, ElectricalNodePlacement, ElectricalSegment, PowerSystem, RackDeliveryPoint
+from netbox_power_plant.choices import (
+    PlacementLabelModeChoices,
+    PlacementScopeChoices,
+    SpatialAnchorChoices,
+    SpatialAxisOrientationChoices,
+    SpatialConfidenceChoices,
+    SpatialPlacementKindChoices,
+)
+from netbox_power_plant.models import (
+    ElectricalNode,
+    ElectricalNodePlacement,
+    ElectricalSegment,
+    PowerHandoffPoint,
+    PowerSystem,
+    SpatialFrame,
+    SpatialPlacement,
+)
 
 
-MAD_SITE_SLUG = 'mad-1'
-MARKER = 'Generated local-dev power floorplan placement from blueprint-derived NetBox naming/topology.'
+MAD_SITE_SLUG = 'gs001'
+MARKER = 'Generated local-dev power spatial placement from blueprint-derived NetBox naming/topology.'
 BLUEPRINT_SOURCE = '/Users/mencken/Documents/madison-temp-design-input-docs/madison-physical-layout.svg'
 
 # Coordinates below are in the SVG coordinate system from madison-physical-layout.svg.
-# Data Hall 1 and Data Hall 2 floorplans translate the blueprint origin to the
-# upper-left corner of the corresponding NetBox Location canvas.
+# Data Hall 1 and Data Hall 2 spatial frames translate the blueprint origin to
+# the upper-left corner of the corresponding NetBox Location coordinate space.
 BLUEPRINT_LOCATION_ORIGINS = {
     'Data Hall 1': (6320, 2430),
     'Data Hall 2': (18, 2420),
@@ -39,19 +53,6 @@ SITE_OFFSETS = {
     'Mechanical Plant': (1040, 50),
     'Data Hall 2': (18, 2420),
     'Data Hall 1': (6320, 2430),
-}
-
-BLUEPRINT_ROOMS = {
-    'Data Hall 1': [
-        ('Data Hall 1a', 'B1109/B1110-side', 6320, 2430, 5930, 1130),
-        ('Gallery B1110', 'B1110', 6320, 3580, 5930, 480),
-        ('Data Hall 1b', 'B1111', 6320, 4080, 5928, 800),
-    ],
-    'Data Hall 2': [
-        ('Data Hall 2a', 'B1209', 18, 2420, 5760, 1130),
-        ('Gallery B1210', 'B1210', 19, 3583, 5760, 480),
-        ('Data Hall 2b', 'B1211', 20, 4080, 5760, 800),
-    ],
 }
 
 BLUEPRINT_SCALABLE_UNIT_BLOCKS = {
@@ -120,125 +121,6 @@ YARD_KIND_Y = {
     'mv_switchgear': 220,
     'transformer': 350,
 }
-
-
-def rect_object(left, top, width, height, fill, *, opacity=0.82, stroke=None, meta=None, angle=0):
-    obj = {
-        'type': 'rect',
-        'version': '6.0.2',
-        'left': round(left, 2),
-        'top': round(top, 2),
-        'width': round(width, 2),
-        'height': round(height, 2),
-        'originX': 'center',
-        'originY': 'center',
-        'fill': f'#{fill}' if fill else None,
-        'opacity': opacity,
-        'angle': angle,
-        'stroke': f'#{stroke}' if stroke else None,
-        'strokeWidth': 2 if stroke else 0,
-        'selectable': True,
-        'evented': True,
-    }
-    if meta:
-        obj['custom_meta'] = meta
-    return obj
-
-
-def text_object(text, left, top, *, size=12, fill='ffffff'):
-    return {
-        'type': 'textbox',
-        'version': '6.0.2',
-        'left': round(left, 2),
-        'top': round(top, 2),
-        'width': max(42, min(180, len(text) * size * 0.62)),
-        'originX': 'center',
-        'originY': 'center',
-        'fontFamily': 'Courier New',
-        'fontSize': size,
-        'fill': f'#{fill}',
-        'text': text,
-        'textAlign': 'center',
-        'paintFirst': 'stroke',
-        'stroke': '#000000',
-        'strokeWidth': 1,
-        'selectable': True,
-        'evented': True,
-    }
-
-
-def boundary_objects(name, width, height, *, subtitle=None):
-    subtitle = subtitle or f'{width / 100:.1f} m x {height / 100:.1f} m schematic coordinate space'
-    return [
-        rect_object(width / 2, height / 2, width, height, None, opacity=1, stroke='6ea8fe', meta={'object_type': 'floorplan_boundry'}),
-        text_object(name, width / 2, height - 44, size=18),
-        text_object(subtitle, width / 2, height - 20, size=10),
-    ]
-
-
-def rack_canvas_object(rack, x, y, *, width=18, height=28):
-    meta = {
-        'object_type': 'rack',
-        'object_id': rack.pk,
-        'object_name': rack.name,
-        'object_url': f'/dcim/racks/{rack.pk}/',
-    }
-    return [
-        rect_object(x, y, width, height, '4e79a7', meta=meta),
-        text_object(rack.name, x, y + height / 2 + 12, size=7),
-    ]
-
-
-def node_canvas_object(node, x, y, *, global_scale=1):
-    symbol, color, width, height, _ = style_for_kind(node.node_kind)
-    meta = {
-        'object_type': 'electrical_node',
-        'object_id': node.pk,
-        'object_name': node.name,
-        'object_url': f'/plugins/power-plant/electrical-nodes/{node.pk}/',
-    }
-    label_size = 5 if node.node_kind == 'rack_circuit_terminator' else 8
-    label = '' if node.node_kind == 'rack_circuit_terminator' else node.name
-    objects = [rect_object(x, y, max(4, width * global_scale), max(4, height * global_scale), color, meta=meta)]
-    if label:
-        objects.append(text_object(label, x, y + max(7, height * global_scale / 2 + 8), size=label_size))
-    return objects
-
-
-def room_canvas_objects(location_name, x, y, width, height):
-    return [
-        rect_object(x + width / 2, y + height / 2, width, height, '253746', opacity=0.16, stroke='6ea8fe', meta={'object_type': 'area', 'object_name': location_name}),
-        text_object(location_name, x + width / 2, y + 24, size=18),
-    ]
-
-
-def blueprint_room_canvas_objects(location_name):
-    objects = []
-    origin_x, origin_y = BLUEPRINT_LOCATION_ORIGINS[location_name]
-    for room_name, room_number, x, y, width, height in BLUEPRINT_ROOMS.get(location_name, ()):
-        local_x = x - origin_x
-        local_y = y - origin_y
-        objects.append(rect_object(
-            local_x + width / 2,
-            local_y + height / 2,
-            width,
-            height,
-            None,
-            opacity=1,
-            stroke='007fff',
-            meta={
-                'object_type': 'blueprint_room',
-                'object_name': room_name,
-                'room_number': room_number,
-                'source': BLUEPRINT_SOURCE,
-                'source_x': x,
-                'source_y': y,
-                'source_width': width,
-                'source_height': height,
-            },
-        ))
-        objects.append(text_object(f'{room_name} ({room_number})', local_x + width / 2, local_y + 28, size=18, fill='007fff'))
-    return objects
 
 
 def style_for_kind(kind):
@@ -384,12 +266,19 @@ def build_coordinates():
         rack_coords[rack.pk] = rack_local_coordinates(rack)
 
     coords_by_node_id = {}
-    delivery_by_node = RackDeliveryPoint.objects.select_related('rack', 'electrical_node').filter(rack__isnull=False)
-    for delivery in delivery_by_node:
-        if delivery.rack_id in rack_coords:
-            rx, ry = rack_coords[delivery.rack_id]
-            ox, oy = ckt_offset(delivery.electrical_node.name)
-            coords_by_node_id[delivery.electrical_node_id] = (rx + ox, ry + oy)
+    handoffs_by_node = PowerHandoffPoint.objects.select_related(
+        'electrical_node',
+        'power_port__device__rack',
+    ).filter(
+        electrical_node__isnull=False,
+        power_port__device__rack__isnull=False,
+    )
+    for handoff in handoffs_by_node:
+        rack = handoff.power_port.device.rack
+        if rack.pk in rack_coords:
+            rx, ry = rack_coords[rack.pk]
+            ox, oy = ckt_offset(handoff.electrical_node.name)
+            coords_by_node_id[handoff.electrical_node_id] = (rx + ox, ry + oy)
 
     index_by_location_kind = defaultdict(int)
     for node in ElectricalNode.objects.select_related('location').order_by('location__name', 'node_kind', 'name'):
@@ -399,90 +288,187 @@ def build_coordinates():
     return rack_coords, coords_by_node_id
 
 
-def get_or_create_floorplan(*, site=None, location=None, width, height):
-    floorplan = Floorplan.objects.filter(site=site, location=location).order_by('pk').first()
-    if floorplan is None:
-        floorplan = Floorplan(site=site, location=location)
-    floorplan.width = Decimal(str(width))
-    floorplan.height = Decimal(str(height))
-    floorplan.measurement_unit = 'm'
-    return floorplan
+def decimal_value(value):
+    return Decimal(str(round(value, 3)))
 
 
-def save_floorplans(site, locations, rack_coords, coords_by_node_id):
-    touched = []
+def upsert_spatial_frame(*, site, location=None, parent_frame=None, origin_x=None, origin_y=None, width, height, name, slug, source_ref=''):
+    frame, _ = SpatialFrame.objects.get_or_create(
+        slug=slug,
+        defaults={
+            'name': name,
+            'site': site,
+        },
+    )
+    frame.name = name
+    frame.site = site
+    frame.location = location
+    frame.parent_frame = parent_frame
+    frame.origin_x_in_parent = decimal_value(origin_x) if origin_x is not None else None
+    frame.origin_y_in_parent = decimal_value(origin_y) if origin_y is not None else None
+    frame.width = decimal_value(width)
+    frame.height = decimal_value(height)
+    frame.units = 'madison_svg_unit'
+    frame.axis_orientation = SpatialAxisOrientationChoices.ORIENTATION_UPPER_LEFT_X_RIGHT_Y_DOWN
+    frame.source_document = BLUEPRINT_SOURCE
+    frame.source_ref = source_ref
+    frame.full_clean()
+    frame.save()
+    return frame
 
-    for location in locations:
-        width, height = LOCATION_SIZES[location.name]
-        if location.name in BLUEPRINT_LOCATION_ORIGINS:
-            subtitle = f'Blueprint SVG coordinate space translated from {BLUEPRINT_SOURCE}'
-        else:
-            subtitle = f'{width / 100:.1f} m x {height / 100:.1f} m schematic coordinate space'
-        canvas_objects = boundary_objects(f'{site.name} / {location.name}', width, height, subtitle=subtitle)
-        if location.name in BLUEPRINT_LOCATION_ORIGINS:
-            canvas_objects.extend(blueprint_room_canvas_objects(location.name))
 
-        for rack in Rack.objects.filter(location=location).order_by('name'):
-            if rack.pk in rack_coords:
-                if location.name in BLUEPRINT_LOCATION_ORIGINS:
-                    canvas_objects.extend(rack_canvas_object(
-                        rack,
-                        *rack_coords[rack.pk],
-                        width=BLUEPRINT_SLOT_WIDTH,
-                        height=BLUEPRINT_SLOT_HEIGHT,
-                    ))
-                else:
-                    canvas_objects.extend(rack_canvas_object(rack, *rack_coords[rack.pk]))
+def upsert_spatial_placement(*, frame, assigned_object, name, slug, x, y, width=None, depth=None, height=None, rotation=0, placement_kind=None, confidence=None, metadata=None, source_ref=''):
+    assigned_object_type = ContentType.objects.get_for_model(assigned_object)
+    placement, _ = SpatialPlacement.objects.get_or_create(
+        slug=slug,
+        defaults={
+            'name': name,
+            'spatial_frame': frame,
+            'assigned_object_type': assigned_object_type,
+            'assigned_object_id': assigned_object.pk,
+            'x': decimal_value(x),
+            'y': decimal_value(y),
+        },
+    )
+    placement.name = name
+    placement.spatial_frame = frame
+    placement.assigned_object_type = assigned_object_type
+    placement.assigned_object_id = assigned_object.pk
+    placement.x = decimal_value(x)
+    placement.y = decimal_value(y)
+    placement.z = Decimal('0.000')
+    placement.width = decimal_value(width) if width is not None else None
+    placement.depth = decimal_value(depth) if depth is not None else None
+    placement.height = decimal_value(height) if height is not None else None
+    placement.rotation_degrees = Decimal(str(rotation))
+    placement.anchor = SpatialAnchorChoices.ANCHOR_CENTER
+    placement.placement_kind = placement_kind or SpatialPlacementKindChoices.KIND_PHYSICAL
+    placement.confidence = confidence or SpatialConfidenceChoices.CONFIDENCE_DERIVED
+    placement.source_document = BLUEPRINT_SOURCE
+    placement.source_ref = source_ref
+    placement.metadata = metadata or {}
+    placement.full_clean()
+    placement.save()
+    return placement
 
-        nodes = ElectricalNode.objects.filter(location=location).order_by('node_kind', 'name')
-        for node in nodes:
-            canvas_objects.extend(node_canvas_object(node, *coords_by_node_id[node.pk]))
 
-        floorplan = get_or_create_floorplan(location=location, width=width, height=height)
-        floorplan.canvas = {'version': '6.0.2', 'objects': canvas_objects}
-        floorplan.save()
-        touched.append(floorplan)
+def save_spatial_layout(site, locations, rack_coords, coords_by_node_id):
+    touched_frames = []
+    touched_placements = []
 
     site_width = 12500
     site_height = 5300
-    site_objects = boundary_objects(
-        f'{site.name} electrical plant overview',
-        site_width,
-        site_height,
-        subtitle=f'Blueprint SVG coordinate space with schematic non-data-hall plant areas; source {BLUEPRINT_SOURCE}',
+    site_frame = upsert_spatial_frame(
+        site=site,
+        width=site_width,
+        height=site_height,
+        name=f'{site.name} electrical plant overview',
+        slug=slugify(f'{site.slug}-electrical-plant-overview')[:100],
+        source_ref='site-overview',
     )
+    touched_frames.append(site_frame)
+    touched_placements.append(upsert_spatial_placement(
+        frame=site_frame,
+        assigned_object=site,
+        name=f'{site.name} site underlay',
+        slug=slugify(f'{site.slug}-site-underlay')[:100],
+        x=site_width / 2,
+        y=site_height / 2,
+        width=site_width,
+        depth=site_height,
+        height=0,
+        placement_kind=SpatialPlacementKindChoices.KIND_SCHEMATIC,
+        metadata={
+            'marker': MARKER,
+            'object_type': 'site_underlay',
+            'source': BLUEPRINT_SOURCE,
+        },
+        source_ref='site-underlay',
+    ))
     for location in locations:
-        ox, oy = SITE_OFFSETS[location.name]
         width, height = LOCATION_SIZES[location.name]
-        site_objects.extend(room_canvas_objects(location.name, ox, oy, width, height))
-        if location.name in BLUEPRINT_LOCATION_ORIGINS:
-            for room_object in blueprint_room_canvas_objects(location.name):
-                room_object = dict(room_object)
-                room_object['left'] = round(room_object.get('left', 0) + ox, 2)
-                room_object['top'] = round(room_object.get('top', 0) + oy, 2)
-                site_objects.append(room_object)
+        ox, oy = SITE_OFFSETS[location.name]
+        location_frame = upsert_spatial_frame(
+            site=site,
+            location=location,
+            parent_frame=site_frame,
+            origin_x=ox,
+            origin_y=oy,
+            width=width,
+            height=height,
+            name=f'{site.name} / {location.name}',
+            slug=slugify(f'{site.slug}-{location.slug}-electrical-layout')[:100],
+            source_ref=f'location:{location.name}',
+        )
+        touched_frames.append(location_frame)
+        touched_placements.append(upsert_spatial_placement(
+            frame=site_frame,
+            assigned_object=location,
+            name=f'{location.name} underlay',
+            slug=slugify(f'{site.slug}-{location.slug}-underlay')[:100],
+            x=ox + width / 2,
+            y=oy + height / 2,
+            width=width,
+            depth=height,
+            height=0,
+            placement_kind=SpatialPlacementKindChoices.KIND_SCHEMATIC,
+            metadata={
+                'marker': MARKER,
+                'object_type': 'location_underlay',
+                'source': BLUEPRINT_SOURCE,
+            },
+            source_ref=f'location-underlay:{location.name}',
+        ))
+
         for rack in Rack.objects.filter(location=location).order_by('name'):
             if rack.pk in rack_coords:
+                rack_width = BLUEPRINT_SLOT_WIDTH if location.name in BLUEPRINT_LOCATION_ORIGINS else 18
+                rack_depth = BLUEPRINT_SLOT_HEIGHT if location.name in BLUEPRINT_LOCATION_ORIGINS else 28
                 x, y = rack_coords[rack.pk]
-                if location.name in BLUEPRINT_LOCATION_ORIGINS:
-                    site_objects.extend(rack_canvas_object(
-                        rack,
-                        ox + x,
-                        oy + y,
-                        width=BLUEPRINT_SLOT_WIDTH * 0.72,
-                        height=BLUEPRINT_SLOT_HEIGHT * 0.72,
-                    ))
-                else:
-                    site_objects.extend(rack_canvas_object(rack, ox + x, oy + y))
-        for node in ElectricalNode.objects.filter(location=location).order_by('node_kind', 'name'):
-            x, y = coords_by_node_id[node.pk]
-            site_objects.extend(node_canvas_object(node, ox + x, oy + y, global_scale=0.72))
+                touched_placements.append(upsert_spatial_placement(
+                    frame=location_frame,
+                    assigned_object=rack,
+                    name=f'{rack.name} layout',
+                    slug=slugify(f'{site.slug}-{rack.name}-rack-layout')[:100],
+                    x=x,
+                    y=y,
+                    width=rack_width,
+                    depth=rack_depth,
+                    height=0,
+                    metadata={
+                        'marker': MARKER,
+                        'object_type': 'rack',
+                    },
+                    source_ref=f'rack:{rack.name}',
+                ))
 
-    site_floorplan = get_or_create_floorplan(site=site, width=site_width, height=site_height)
-    site_floorplan.canvas = {'version': '6.0.2', 'objects': site_objects}
-    site_floorplan.save()
-    touched.append(site_floorplan)
-    return touched
+        nodes = ElectricalNode.objects.filter(location=location).order_by('node_kind', 'name')
+        for node in nodes:
+            x, y = coords_by_node_id[node.pk]
+            symbol, color, node_width, node_height, z_index = style_for_kind(node.node_kind)
+            touched_placements.append(upsert_spatial_placement(
+                frame=location_frame,
+                assigned_object=node,
+                name=f'{node.name} layout',
+                slug=slugify(f'{site.slug}-{node.slug}-node-layout')[:100],
+                x=x,
+                y=y,
+                width=node_width,
+                depth=node_height,
+                height=0,
+                placement_kind=SpatialPlacementKindChoices.KIND_SCHEMATIC,
+                metadata={
+                    'marker': MARKER,
+                    'object_type': 'electrical_node',
+                    'node_kind': node.node_kind,
+                    'symbol_kind': symbol,
+                    'color': color,
+                    'z_index': z_index,
+                },
+                source_ref=f'electrical-node:{node.slug}',
+            ))
+
+    return touched_frames, touched_placements
 
 
 def save_node_placements(power_system, locations, coords_by_node_id):
@@ -532,20 +518,20 @@ def main():
     locations = list(Location.objects.filter(site=site, name__in=LOCATION_SIZES).order_by('name'))
     missing = set(LOCATION_SIZES) - {location.name for location in locations}
     if missing:
-        raise RuntimeError(f'Missing expected MAD-1 locations: {sorted(missing)}')
+        raise RuntimeError(f'Missing expected GS001 locations: {sorted(missing)}')
 
     rack_coords, coords_by_node_id = build_coordinates()
-    floorplans = save_floorplans(site, locations, rack_coords, coords_by_node_id)
+    spatial_frames, spatial_placements = save_spatial_layout(site, locations, rack_coords, coords_by_node_id)
     created, updated = save_node_placements(power_system, locations, coords_by_node_id)
 
-    print(f'Floorplans touched: {len(floorplans)}')
-    for floorplan in floorplans:
-        scope = floorplan.location or floorplan.site
-        object_count = len(floorplan.canvas.get('objects', []))
-        print(f'  {floorplan.pk}: {scope} ({object_count} canvas objects)')
+    print(f'SpatialFrame rows touched: {len(spatial_frames)}')
+    for frame in spatial_frames:
+        scope = frame.location or frame.site
+        print(f'  {frame.pk}: {scope} ({frame.width} x {frame.height} {frame.units})')
+    print(f'SpatialPlacement rows touched: {len(spatial_placements)}')
     print(f'ElectricalNodePlacement rows created={created} updated={updated}')
     print(f'Electrical nodes with coordinates={len(coords_by_node_id)}')
-    print(f'Rack canvas coordinates={len(rack_coords)}')
+    print(f'Rack spatial coordinates={len(rack_coords)}')
 
 
 main()

@@ -25,8 +25,8 @@ from madison_v2_graph import (  # noqa: E402
 )
 
 
-MAD_SITE_SLUG = 'mad-1'
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
+MAD_SITE_SLUG = 'gs001'
+FABRIC_NAME = 'GS001 RoCE Fabric'
 SOURCE_WORKBOOK_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/source/mencken-nc-backend-fiber-worksheet.xlsx'),
     Path('/Users/mencken/Documents/mencken-nc-backend-fiber-worksheet.xlsx'),
@@ -138,7 +138,7 @@ def gb300_trays_by_rack(racks: list[Rack]) -> dict[int, list[Device]]:
     rack_ids = [rack.pk for rack in racks]
     grouped = defaultdict(list)
     for device in (
-        Device.objects.filter(site__slug=MAD_SITE_SLUG, rack_id__in=rack_ids, device_type__slug='poweredge-xe9712-gb300-compute-tray')
+        Device.objects.filter(site__slug=MAD_SITE_SLUG, rack_id__in=rack_ids, device_type__slug='gb300ct')
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
     ):
@@ -175,7 +175,7 @@ def shuffle_candidates_by_su_and_group() -> dict[tuple[int, int, str], list[Devi
 
     grouped = defaultdict(list)
     for box in (
-        Device.objects.filter(site__slug=MAD_SITE_SLUG, device_type__slug='shuffle-box-3tray-18cassette', rack_id__in=rack_su)
+        Device.objects.filter(site__slug=MAD_SITE_SLUG, device_type__slug='sb', rack_id__in=rack_su)
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
     ):

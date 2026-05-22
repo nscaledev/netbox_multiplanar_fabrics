@@ -8,7 +8,7 @@ from pathlib import Path
 from dcim.models import Device
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 OUTPUT_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/generated/madison_elevation_shuffle_leaf_patterns.csv'),
     Path('/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/data/generated/madison_elevation_shuffle_leaf_patterns.csv'),
@@ -87,7 +87,7 @@ def main() -> None:
 
     box_groups = defaultdict(list)
     for device in (
-        Device.objects.filter(site__slug=MAD_SITE_SLUG, device_type__slug='shuffle-box-3tray-18cassette')
+        Device.objects.filter(site__slug=MAD_SITE_SLUG, device_type__slug='sb')
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
     ):

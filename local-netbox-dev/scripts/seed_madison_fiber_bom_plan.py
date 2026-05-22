@@ -14,12 +14,12 @@ from netbox_plant_graph.models import Fabric, FabricNode, Plane, StampTemplate, 
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
-FABRIC_SLUG = 'mad-1-roce-fabric'
-PLAN_NAME = 'MAD-1 Fiber BOM v1.4'
-PLAN_SLUG = 'mad-1-fiber-bom-v1-4'
+FABRIC_NAME = 'GS001 RoCE Fabric'
+FABRIC_SLUG = 'gs001-roce-fabric'
+PLAN_NAME = 'GS001 Fiber BOM v1.4'
+PLAN_SLUG = 'gs001-fiber-bom-v1-4'
 SOURCE_MARKER = 'madison_fiber_bom_v1_4'
 
 MANIFEST_PATHS = [

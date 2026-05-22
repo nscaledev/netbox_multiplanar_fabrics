@@ -30,7 +30,7 @@ from madison_v2_graph import (  # noqa: E402
 )
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 TARGET_NVL72_RACK = 'A2'
 TARGET_SU_TAG = 'nv_su_1'
 SOURCE_MARKER = 'madison_first_nvl72_fiber_policy_v2'
@@ -79,7 +79,7 @@ def target_gb300_trays() -> list[Device]:
         Device.objects.filter(
             site__slug=MAD_SITE_SLUG,
             rack__name=TARGET_NVL72_RACK,
-            device_type__slug='poweredge-xe9712-gb300-compute-tray',
+            device_type__slug='gb300ct',
             local_context_data__madison_active_endpoint_test_subset=True,
         )
         .select_related('rack')

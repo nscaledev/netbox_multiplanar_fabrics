@@ -9,7 +9,7 @@ from dcim.models import Rack
 from extras.models import Tag
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
 ROW_ID_TAG_COLOR = '607d8b'
 

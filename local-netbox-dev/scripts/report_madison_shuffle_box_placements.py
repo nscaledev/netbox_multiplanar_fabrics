@@ -65,7 +65,7 @@ def parse_shuffle_label(label: str) -> tuple[dict[str, int | str | None], str]:
     if populated_cassettes > 18:
         notes.append('Parsed populated cassette count exceeds the 18-cassette physical capacity.')
     if logical_shuffle_box is None:
-        notes.append('No logical shuffle-box number is present in the source label.')
+        notes.append('No logical shuffle box number is present in the source label.')
     if nic_index_zero is None:
         notes.append('No NIC/CX-8 group is present in the source label.')
     if not side:
@@ -105,7 +105,7 @@ def load_shuffle_placements(path: Path) -> list[ShuffleBoxPlacement]:
             physical_slot = row['physical_slot']
             ru_top = int_field(row, 'ru_top')
             source_cell = row['source_cell']
-            box_name = f'mad1-{physical_slot.lower()}-u{ru_top:02d}-shuffle-box'
+            box_name = f'gs001-{physical_slot.lower()}-u{ru_top:02d}-sb'
 
             placements.append(
                 ShuffleBoxPlacement(
@@ -219,7 +219,7 @@ def print_report(placements: list[ShuffleBoxPlacement], *, include_samples: bool
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Extract physical 1RU shuffle-box placements from the Madison workbook row-elevation manifest.'
+        description='Extract physical 1RU shuffle box placements from the Madison workbook row-elevation manifest.'
     )
     parser.add_argument('--placement-manifest', type=Path, default=DEFAULT_PLACEMENT_MANIFEST)
     parser.add_argument('--output-dir', type=Path, default=DEFAULT_OUTPUT_DIR)

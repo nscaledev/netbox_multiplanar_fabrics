@@ -47,9 +47,9 @@ MANUFACTURERS = {
 }
 
 ROLES = [
-    ('poweredge-xe9712-gb300-compute-tray', 'PowerEdge XE9712 GB300 Compute Tray', '00bcd4', 'GB300 GPU tray endpoint; workbook pattern sys1-gso1-p-phy-gpu#-su# with 126 trays per SU.'),
-    ('ps33-33kw-power-shelf', 'PS33 33kW Power Shelf', 'ffc107', '1RU GB300 power shelf; workbook pattern sys1-gso1-p-phy-pwt(1-56)-su#.'),
-    ('nvlink-switch', 'NVLink Switch', '2196f3', 'GB300 NVLswitch/NVLink switch; workbook pattern sys1-gso1-p-phy-nvs(1-63)-su#.'),
+    ('gb300ct', 'PowerEdge XE9712 GB300 Compute Tray', '00bcd4', 'GB300 GPU tray endpoint; workbook pattern sys1-gso1-p-phy-gpu#-su# with 126 trays per SU.'),
+    ('gb300ps', 'PS33 33kW Power Shelf', 'ffc107', '1RU GB300 power shelf; workbook pattern sys1-gso1-p-phy-pwt(1-56)-su#.'),
+    ('gb300st', 'GB300 NVL72 NVLink Switch Tray', '2196f3', 'GB300 NVL72 NVLink switch tray; workbook pattern sys1-gso1-p-phy-nvs(1-63)-su#.'),
     ('oob-leaf', 'OOB Leaf', '9c27b0', 'Out-of-band leaf switch; includes GPU, row, storage, and management-row OOB leaves.'),
     ('oob-spine', 'OOB Spine', '7b1fa2', 'Out-of-band spine switch; workbook patterns obs1/obs2.'),
     ('oob-core', 'OOB Core', '6a1b9a', 'Out-of-band core switch; workbook pattern obc.'),
@@ -82,7 +82,7 @@ ROLES = [
     ('ufm-server', 'UFM Server', '00bfa5', 'UFM server staged from workbook device summary.'),
     ('pdu', 'PDU', 'ffb300', 'Rack PDU; workbook indicates A/B PDU pairs with 415V 60A 560P6 feeds.'),
     ('fiber-panel', 'Fiber Panel', '90a4ae', 'Passive fiber panel for Madison fiber plant.'),
-    ('shuffle-box', 'Shuffle Box', '4dd0e1', 'Passive RoCE shuffle box containing trays/cassettes.'),
+    ('sb', 'Shuffle Box', '4dd0e1', 'Passive RoCE shuffle box containing trays/cassettes.'),
     ('shuffle-cassette', 'Shuffle Cassette', '26c6da', '2x2 RoCE shuffle cassette; internal transfer map belongs in plant graph.'),
 ]
 
@@ -103,79 +103,79 @@ RACK_ROLES = [
     ),
     (
         'madison-t1-ew-plane-1-2',
-        'MAD-1 T1 E-W Plane 1-2',
+        'GS001 T1 E-W Plane 1-2',
         '1e88e5',
         'Madison T1 East/West BE leaf rack layout for planes 1 and 2; workbook BE Leaf Rack 1 patterns bel*-su#-pl1/pl2-nc*a.',
     ),
     (
         'madison-t1-ew-plane-3-4',
-        'MAD-1 T1 E-W Plane 3-4',
+        'GS001 T1 E-W Plane 3-4',
         '42a5f5',
         'Madison T1 East/West BE leaf rack layout for planes 3 and 4; workbook BE Leaf Rack 2 patterns bel*-su#-pl3/pl4-nc*b.',
     ),
     (
         'madison-t1-t2-ns',
-        'MAD-1 T1/T2 N-S',
+        'GS001 T1/T2 N-S',
         '43a047',
         'Madison North/South FE leaf/spine rack layout; workbook headers identify paired T1/T2 N-S racks with fes/fel and row OOB/console equipment.',
     ),
     (
         'madison-t2-ew',
-        'MAD-1 T2 E-W',
+        'GS001 T2 E-W',
         '1565c0',
         'Madison East/West spine/shuffle rack layout; workbook T2 E-W elevations include E-W spine switches, fiber panels, and 2x2 shuffle assemblies.',
     ),
     (
         'madison-t3-ns',
-        'MAD-1 T3 N-S',
+        'GS001 T3 N-S',
         '2e7d32',
         'Madison T3 North/South spine/core rack layout; workbook T3 N-S elevations include N-S spine/FEC group equipment.',
     ),
     (
         'madison-be-spine-plane-1',
-        'MAD-1 BE Spine Plane 1',
+        'GS001 BE Spine Plane 1',
         '0d47a1',
         'Madison BE spine rack block for plane 1; workbook maps full/half racks across ER10/J and ER9/I positions.',
     ),
     (
         'madison-be-spine-plane-2',
-        'MAD-1 BE Spine Plane 2',
+        'GS001 BE Spine Plane 2',
         '1976d2',
         'Madison BE spine rack block for plane 2; workbook maps full/half racks across ER12/L and ER11/K positions.',
     ),
     (
         'madison-be-spine-plane-3',
-        'MAD-1 BE Spine Plane 3',
+        'GS001 BE Spine Plane 3',
         '5e35b1',
         'Madison BE spine rack block for plane 3; workbook maps full/half racks across ER13/M and ER14/N positions.',
     ),
     (
         'madison-be-spine-plane-4',
-        'MAD-1 BE Spine Plane 4',
+        'GS001 BE Spine Plane 4',
         '7e57c2',
         'Madison BE spine rack block for plane 4; workbook maps full/half racks across ER15/O and ER16/P positions.',
     ),
     (
         'madison-fe-core-edge',
-        'MAD-1 FE Core + Edge',
+        'GS001 FE Core + Edge',
         '00897b',
         'Madison front-end core/super-spine plus edge rack layout; workbook Fe-Core + Edge section includes esw, feb, and fec group patterns.',
     ),
     (
         'madison-control',
-        'MAD-1 Control',
+        'GS001 Control',
         '00acc1',
         'Madison central control rack layout; workbook central control racks include OOB, console, control spine/leaf, NMX, OpenStack, Ceph, and control nodes.',
     ),
     (
         'madison-t1-t2-storage',
-        'MAD-1 T1/T2 Storage',
+        'GS001 T1/T2 Storage',
         'fb8c00',
         'Madison central storage rack layout; workbook T1/T2 storage racks include storage spines, storage leaves, Meta Storage, and Data Storage nodes.',
     ),
     (
         'madison-nscale-edge-mmr',
-        'MAD-1 Nscale Edge / MMR',
+        'GS001 Nscale Edge / MMR',
         '795548',
         'Madison Nscale edge/MMR rack layout; workbook section includes Nokia, Palo Alto, Opengear, edge switch, and MMR-facing fiber panel equipment.',
     ),
@@ -277,7 +277,7 @@ def shuffle_box_cassette_bays():
 
 DEVICE_TYPES = [
     {
-        'slug': 'poweredge-xe9712-gb300-compute-tray',
+        'slug': 'gb300ct',
         'manufacturer': 'dell',
         'model': 'PowerEdge XE9712 GB300 Compute Tray',
         'u_height': Decimal('1.0'),
@@ -300,7 +300,7 @@ Power model: GPU trays consume rack-internal NVL72 busbar power from the GB300 p
         ),
     },
     {
-        'slug': 'ps33-33kw-power-shelf',
+        'slug': 'gb300ps',
         'manufacturer': 'dell',
         'model': 'PS33 33kW Power Shelf',
         'u_height': Decimal('1.0'),
@@ -313,14 +313,23 @@ Each shelf sources the rack-internal NVL72 busbar; facility-side delivery remain
 Native NetBox power cables/outlets are intentionally not inserted into the NVL72 internal power path.
 """,
         'interfaces': [{'name': 'pmc-mgmt0', 'type': '1000base-t', 'mgmt_only': True, 'description': 'PS33 shelf management interface.'}],
-        'power_ports': single_power_port(
-            'busbar-output-1',
-            'nvl72-busbar',
-            'Rack-internal NVL72 busbar source output from the PS33 power shelf.',
-        ),
+        'power_ports': [
+            {
+                'name': 'facility-input',
+                'type': 'iec-60309-560p6',
+                'maximum_draw': 33000,
+                'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+            },
+            {
+                'name': 'busbar-output-1',
+                'type': 'nvl72-busbar',
+                'maximum_draw': 33000,
+                'description': 'Rack-internal NVL72 busbar source output from the PS33 power shelf.',
+            },
+        ],
     },
     {
-        'slug': 'gb300-nvl72-nvlink-switch-tray',
+        'slug': 'gb300st',
         'manufacturer': 'nvidia',
         'model': 'GB300 NVL72 NVLink Switch Tray',
         'u_height': Decimal('1.0'),
@@ -717,14 +726,14 @@ Model as a definition placeholder only; rack types and individual PDU devices ca
         'description': 'Passive 2x2 shuffle cassette for RoCE cable plant.',
         'comments': """\
 Notion architecture: each shuffle cassette has 4 front MPOs and 4 rear MPOs with two internal 2x2 shuffles.
-Physical tray position is encoded by the parent shuffle-box device bay/index, e.g. cassette-1.1 through cassette-3.6.
+Physical tray position is encoded by the parent sb device bay/index, e.g. cassette-1.1 through cassette-3.6.
 NetBox front/rear ports stage physical terminations only; the non-1:1 internal shuffle map belongs in netbox_plant_graph TransferPattern and TransferMap definitions.
 """,
         'subdevice_role': 'child',
         'mpo_pairs': 4,
     },
     {
-        'slug': 'shuffle-box-3tray-18cassette',
+        'slug': 'sb',
         'manufacturer': 'nscale',
         'model': '3-Tray 18-Cassette Shuffle Box',
         'u_height': Decimal('1.0'),

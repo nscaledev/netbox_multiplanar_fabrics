@@ -9,7 +9,7 @@ from django.db.models import Q
 from netbox_plant_graph.models import CoarseEdge, Fabric, FineEdge, LaneMap, PlaneMembership, SignalLane
 
 
-FABRIC_NAME = 'MAD-1 RoCE Fabric'
+FABRIC_NAME = 'GS001 RoCE Fabric'
 DEFAULT_PATH_KEY = 'madison-first-nvl72-a2-leaf16-four-plane-lane-aware-v1'
 PATH_KEY = os.environ.get('MADISON_FIBER_PATH_KEY', DEFAULT_PATH_KEY)
 

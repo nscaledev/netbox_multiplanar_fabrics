@@ -14,10 +14,10 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
-TARGET_DEVICE_TYPE = 'poweredge-xe9712-gb300-compute-tray'
+TARGET_DEVICE_TYPE = 'gb300ct'
 SOURCE_MARKER_BEGIN = '<!-- madison-pattern-su-gb300-compute-trays:start -->'
 SOURCE_MARKER_END = '<!-- madison-pattern-su-gb300-compute-trays:end -->'
 
@@ -115,7 +115,7 @@ def selected_manifest_rows(racks: dict[int, list[Rack]]) -> list[dict[str, str]]
 def device_name(row: dict[str, str]) -> str:
     slot = row['physical_slot'].lower()
     ru = int(row['ru_bottom'])
-    return f'mad1-{slot}-u{ru:02d}-{row["device_type_slug"]}'
+    return f'gs001-{slot}-u{ru:02d}-{row["device_type_slug"]}'
 
 
 def staged_comments(row: dict[str, str], su: int) -> str:
@@ -177,7 +177,7 @@ def main() -> None:
         for row in rows:
             rack = slot_to_rack.get(row['physical_slot'].upper())
             if rack is None:
-                raise RuntimeError(f'No MAD-1 target rack found for slot {row["physical_slot"]}.')
+                raise RuntimeError(f'No GS001 target rack found for slot {row["physical_slot"]}.')
             su = slot_to_su[rack.name]
             row_tag = row_tags.get(row['row_id_tag'].lower())
             su_tag = su_tags.get(su)

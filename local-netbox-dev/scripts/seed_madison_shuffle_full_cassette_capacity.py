@@ -11,10 +11,10 @@ from extras.models import TaggedItem
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
-BOX_TYPE_SLUG = 'shuffle-box-3tray-18cassette'
+BOX_TYPE_SLUG = 'sb'
 TRAY_TYPE_SLUG = 'shuffle-tray-6cassette'
 CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 CASSETTE_ROLE_SLUG = 'shuffle-cassette'

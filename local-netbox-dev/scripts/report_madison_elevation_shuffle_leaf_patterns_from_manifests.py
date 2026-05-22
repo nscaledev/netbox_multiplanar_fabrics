@@ -97,7 +97,7 @@ def device_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{row["physical_slot"].lower()}-{ru}-{row["device_type_slug"]}'
+    return f'gs001-{row["physical_slot"].lower()}-{ru}-{row["device_type_slug"]}'
 
 
 def parse_leaf(row: dict[str, str]) -> dict[str, object] | None:

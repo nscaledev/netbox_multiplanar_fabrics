@@ -41,6 +41,7 @@ rsync -a --delete \
     --exclude .git \
     --exclude .venv \
     --exclude local-netbox-dev \
+    --exclude /netbox_power_plant/ \
     "$MPF_SRC/" "$MPF_VENDOR/"
 rsync -a --delete \
     --exclude .git \
@@ -55,32 +56,35 @@ if ! docker compose up -d; then
     exit 1
 fi
 
-printf 'Waiting for NetBox health check'
-for _ in $(seq 1 120); do
-    status_json="$(docker compose ps --format json netbox 2>/dev/null || true)"
-    if printf '%s' "$status_json" | grep -q '"Health":"healthy"'; then
-        printf '\n'
-        break
-    fi
-    if printf '%s' "$status_json" | grep -Eq '"State":"(dead|exited)"|"ExitCode":[1-9]'; then
-        printf '\nNetBox exited while waiting for health. Recent logs:\n' >&2
-        docker compose logs --tail=120 netbox >&2 || true
-        exit 1
-    fi
-    printf '.'
-    sleep 2
-done
+wait_for_netbox_health() {
+    printf 'Waiting for NetBox health check'
+    for _ in $(seq 1 120); do
+        status_json="$(docker compose ps --format json netbox 2>/dev/null || true)"
+        if printf '%s' "$status_json" | grep -q '"Health":"healthy"'; then
+            printf '\n'
+            return 0
+        fi
+        if printf '%s' "$status_json" | grep -Eq '"State":"(dead|exited)"|"ExitCode":[1-9]'; then
+            printf '\nNetBox exited while waiting for health. Recent logs:\n' >&2
+            docker compose logs --tail=120 netbox >&2 || true
+            exit 1
+        fi
+        printf '.'
+        sleep 2
+    done
 
-if ! docker compose ps --format json netbox 2>/dev/null | grep -q '"Health":"healthy"'; then
     printf '\nNetBox did not become healthy in time. Recent logs:\n' >&2
     docker compose logs --tail=100 netbox >&2
     exit 1
-fi
+}
+
+wait_for_netbox_health
 
 docker compose exec -T netbox \
     /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate --noinput
 
 docker compose restart netbox netbox-worker >/dev/null
+wait_for_netbox_health
 
 docker compose exec -T netbox \
     /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell <<'PY'

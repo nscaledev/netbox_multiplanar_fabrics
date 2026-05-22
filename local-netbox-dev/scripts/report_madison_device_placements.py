@@ -27,9 +27,9 @@ PLANE_PATTERN = re.compile(r'\bPL(?:ANE)?\s*([1-4])\b', re.IGNORECASE)
 KNOWN_DEVICE_TYPE_SLUGS = {
     'arista-7280',
     'cm8148',
-    'poweredge-xe9712-gb300-compute-tray',
-    'gb300-nvl72-nvlink-switch-tray',
-    'ps33-33kw-power-shelf',
+    'gb300ct',
+    'gb300st',
+    'gb300ps',
     'generic-ceph-storage-node',
     'generic-cpu-control-node',
     'generic-data-storage-node',
@@ -49,7 +49,7 @@ KNOWN_DEVICE_TYPE_SLUGS = {
     'palo-alto-pa-1410',
     'palo-alto-pa-1420',
     'palo-alto-pa-550',
-    'shuffle-box-3tray-18cassette',
+    'sb',
     'shuffle-cassette-2x2-mpo',
     'sn4700',
     'sn5610',
@@ -146,11 +146,11 @@ def classify_label(label: str) -> tuple[str, str, str, list[str]]:
         return 'rack-label', '', '', ['Rack role/SU label at RU48; not a device placement.']
 
     if lower == 'gpu-node':
-        return 'poweredge-xe9712-gb300-compute-tray', 'poweredge-xe9712-gb300-compute-tray', 'PowerEdge XE9712 GB300 Compute Tray', []
+        return 'gb300ct', 'gb300ct', 'PowerEdge XE9712 GB300 Compute Tray', []
     if 'powershelf' in lower:
-        return 'ps33-33kw-power-shelf', 'ps33-33kw-power-shelf', 'PS33 33kW Power Shelf', []
+        return 'gb300ps', 'gb300ps', 'PS33 33kW Power Shelf', []
     if 'nvlink-shelf' in lower:
-        return 'gb300-nvl72-nvlink-switch-tray', 'nvlink-switch', 'GB300 NVL72 NVLink Switch Tray', []
+        return 'gb300st', 'gb300st', 'GB300 NVL72 NVLink Switch Tray', []
     if lower == 'in rack 1gb switch':
         return 'sn2201_m', 'oob-leaf', 'SN2201_M GPU OOB TOR', []
 

@@ -24,16 +24,16 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
 SU_TAG_PREFIX = 'nv_su_'
 
-BOX_ROLE_SLUG = 'shuffle-box'
+BOX_ROLE_SLUG = 'sb'
 TRAY_ROLE_SLUG = 'shuffle-tray'
 CASSETTE_ROLE_SLUG = 'shuffle-cassette'
-BOX_TYPE_SLUG = 'shuffle-box-3tray-18cassette'
+BOX_TYPE_SLUG = 'sb'
 TRAY_TYPE_SLUG = 'shuffle-tray-6cassette'
 CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 
@@ -66,7 +66,7 @@ def device_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{slot}-{ru}-{row["device_type_slug"]}'
+    return f'gs001-{slot}-{ru}-{row["device_type_slug"]}'
 
 
 def merge_staged_comments(existing, staged):
@@ -279,7 +279,7 @@ def current_parent_bay(device):
 
 
 def upsert_box(slot, rack, cassette_count, box_type, role, tenant, counters):
-    name = f'mad1-{slot.lower()}-shuffle-box-01'
+    name = f'gs001-{slot.lower()}-sb-01'
     box, created = Device.objects.get_or_create(
         site=rack.site,
         name=name,
@@ -310,7 +310,7 @@ def upsert_box(slot, rack, cassette_count, box_type, role, tenant, counters):
             **(box.local_context_data or {}),
             'madison_shuffle_hierarchy': {
                 'physical_slot': slot,
-                'container_role': 'shuffle-box',
+                'container_role': 'sb',
                 'tray_capacity': 3,
                 'cassette_capacity': 18,
                 'populated_cassettes': cassette_count,
@@ -452,7 +452,7 @@ def main():
         for slot, slot_rows in sorted(rows_by_slot.items()):
             rack = racks.get(slot)
             if rack is None:
-                raise RuntimeError(f'No MAD-1 rack found for shuffle slot {slot}.')
+                raise RuntimeError(f'No GS001 rack found for shuffle slot {slot}.')
 
             ordered_rows = sorted(slot_rows, key=row_sort_key)
             cassettes = []

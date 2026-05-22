@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
 
@@ -10,7 +11,7 @@ from dcim.models import Cable, CableTermination, Device, PowerOutlet, PowerPort,
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
 NSCALE_TENANT_SLUG = 'nscale'
 PDU_DEVICE_TYPE_SLUG = 'apc-apdu11450me'
 NVL72_RACK_ROLE_SLUG = 'nvl72_poweredgexe9712'
@@ -74,8 +75,8 @@ def desired_side(port, index):
 
 def compatible_outlet_type(port):
     if port.type in {'iec-60320-c20', 'iec-60320-c22'}:
-        return 'iec-60320-c13-c15-c19-c21'
-    return 'iec-60320-c13-c15'
+        return 'iec-60320-c19'
+    return 'iec-60320-c13'
 
 
 def cable_label(outlet, port):
@@ -141,8 +142,8 @@ def reserve_outlet(outlets_by_side, side, port):
     if outlets_by_side[side][preferred_type]:
         return outlets_by_side[side][preferred_type].pop(0)
 
-    if preferred_type == 'iec-60320-c13-c15' and outlets_by_side[side]['iec-60320-c13-c15-c19-c21']:
-        return outlets_by_side[side]['iec-60320-c13-c15-c19-c21'].pop(0)
+    if preferred_type == 'iec-60320-c13' and outlets_by_side[side]['iec-60320-c19']:
+        return outlets_by_side[side]['iec-60320-c19'].pop(0)
 
     raise RuntimeError(
         f'No available {preferred_type} outlet on PDU side {side.upper()} for '
@@ -222,7 +223,7 @@ def connect_rack(rack, tenant, counters):
             assignments.append((side, port))
 
     # Assign C20/C22 loads first so high-current inlets reserve the combo outlets.
-    assignments.sort(key=lambda item: (compatible_outlet_type(item[1]) != 'iec-60320-c13-c15-c19-c21', port_sort_key(item[1])))
+    assignments.sort(key=lambda item: (compatible_outlet_type(item[1]) != 'iec-60320-c19', port_sort_key(item[1])))
 
     with transaction.atomic():
         for side, port in assignments:

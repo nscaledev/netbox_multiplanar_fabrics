@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from decimal import Decimal
 
 from django.db import transaction
-from django.utils.text import slugify
 
 from dcim.models import (
     Device,
@@ -20,11 +20,12 @@ from dcim.models import (
     PowerPortTemplate,
     Rack,
 )
-from netbox_power_plant.models import RackDeliveryPoint
+from netbox_power_plant.models import PowerHandoffPoint
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
+DEVICE_NAME_PREFIX = os.environ.get('MADISON_DEVICE_NAME_PREFIX', 'mad1')
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -34,8 +35,8 @@ DEVICE_TYPE_SLUG = 'apc-apdu11450me'
 DEVICE_ROLE_SLUG = 'PDU'
 INPUT_PORT_NAME = 'input'
 INPUT_PORT_TYPE = 'iec-60309-560p6'
-C13_C15_OUTLET_TYPE = 'iec-60320-c13-c15'
-COMBO_OUTLET_TYPE = 'iec-60320-c13-c15-c19-c21'
+C13_C15_OUTLET_TYPE = 'iec-60320-c13'
+COMBO_OUTLET_TYPE = 'iec-60320-c19'
 MGMT_INTERFACE_NAME = 'mgmt'
 MGMT_INTERFACE_TYPE = '1000base-t'
 PDU_SIDES = ('a', 'b')
@@ -50,10 +51,10 @@ def row_id_slot(rack):
     return row_tags[0].slug[len(ROW_ID_TAG_PREFIX):], row_tags[0]
 
 
-def circuit_number(delivery_point):
-    match = re.search(r'CKT(?P<number>\d+)$', delivery_point.name)
+def circuit_number(handoff_point):
+    match = re.search(r'CKT(?P<number>\d+)$', handoff_point.name)
     if match is None:
-        raise RuntimeError(f'Rack delivery point does not end with CKT number: {delivery_point.name}')
+        raise RuntimeError(f'Power handoff point does not end with CKT number: {handoff_point.name}')
     return int(match.group('number'))
 
 
@@ -290,7 +291,7 @@ def upsert_interface(device, template, counters):
 
 
 def upsert_pdu_device(rack, side, slot, row_tag, device_type, role, tenant, counters):
-    name = f'mad1-{slot.lower()}-pdu-{side}'
+    name = f'{DEVICE_NAME_PREFIX}-{slot.lower()}-pdu-{side}'
     device, created = Device.objects.get_or_create(
         site=rack.site,
         name=name,
@@ -331,42 +332,43 @@ def upsert_pdu_device(rack, side, slot, row_tag, device_type, role, tenant, coun
     return device
 
 
-def bind_delivery_points(rack, pdu_by_side, counters):
-    delivery_points = list(
-        RackDeliveryPoint.objects.filter(power_system__site__slug=MAD_SITE_SLUG, rack=rack)
-        .select_related('rack')
+def bind_handoff_points(rack, pdu_by_side, counters):
+    handoff_points = list(
+        PowerHandoffPoint.objects.filter(
+            power_system__site__slug=MAD_SITE_SLUG,
+            power_port__device__rack=rack,
+        )
+        .select_related('power_port__device__rack')
         .order_by('name')
     )
-    if not delivery_points:
-        already_bound_count = RackDeliveryPoint.objects.filter(
+    if not handoff_points:
+        already_bound_count = PowerHandoffPoint.objects.filter(
             power_system__site__slug=MAD_SITE_SLUG,
             power_port__device__in=pdu_by_side.values(),
             power_port__name=INPUT_PORT_NAME,
         ).count()
         if already_bound_count == 2:
-            counters['racks_with_delivery_points_already_bound'] += 1
+            counters['racks_with_handoff_points_already_bound'] += 1
         elif already_bound_count:
-            raise RuntimeError(f'Rack {rack.name} has {already_bound_count} delivery points already bound to PDU inputs; expected 2.')
+            raise RuntimeError(f'Rack {rack.name} has {already_bound_count} handoff points already bound to PDU inputs; expected 2.')
         else:
-            counters['racks_without_delivery_points'] += 1
+            counters['racks_without_handoff_points'] += 1
         return
-    if len(delivery_points) != 2:
-        raise RuntimeError(f'Rack {rack.name} has {len(delivery_points)} rack-target delivery points; expected 2.')
+    if len(handoff_points) != 2:
+        raise RuntimeError(f'Rack {rack.name} has {len(handoff_points)} rack-derived handoff points; expected 2.')
 
     side_by_circuit = {1: 'a', 2: 'b'}
-    for delivery_point in delivery_points:
-        circuit = circuit_number(delivery_point)
+    for handoff_point in handoff_points:
+        circuit = circuit_number(handoff_point)
         side = side_by_circuit.get(circuit)
         if side is None:
-            raise RuntimeError(f'{delivery_point.name} has unexpected circuit number {circuit}; expected CKT1 or CKT2.')
+            raise RuntimeError(f'{handoff_point.name} has unexpected circuit number {circuit}; expected CKT1 or CKT2.')
         pdu = pdu_by_side[side]
         input_port = PowerPort.objects.get(device=pdu, name=INPUT_PORT_NAME)
-        delivery_point.rack = None
-        delivery_point.device = None
-        delivery_point.power_port = input_port
-        delivery_point.full_clean()
-        delivery_point.save()
-        counters['delivery_points_bound_to_pdu_inputs'] += 1
+        handoff_point.power_port = input_port
+        handoff_point.full_clean()
+        handoff_point.save()
+        counters['handoff_points_bound_to_pdu_inputs'] += 1
 
 
 def main():
@@ -396,7 +398,7 @@ def main():
                     upsert_power_outlet(device, outlet_template, input_port, counters)
                 upsert_interface(device, interface_template, counters)
                 pdu_by_side[side] = device
-            bind_delivery_points(rack, pdu_by_side, counters)
+            bind_handoff_points(rack, pdu_by_side, counters)
 
     print('Madison APDU11450ME rack PDU seeding complete.')
     print(f'conventional_non_nvl72_racks={racks.count()}')
@@ -407,8 +409,8 @@ def main():
     print(f'apdu11450me_power_ports={PowerPort.objects.filter(device__site__slug=MAD_SITE_SLUG, device__device_type__slug=DEVICE_TYPE_SLUG).count()}')
     print(f'apdu11450me_power_outlets={PowerOutlet.objects.filter(device__site__slug=MAD_SITE_SLUG, device__device_type__slug=DEVICE_TYPE_SLUG).count()}')
     print(f'apdu11450me_interfaces={Interface.objects.filter(device__site__slug=MAD_SITE_SLUG, device__device_type__slug=DEVICE_TYPE_SLUG).count()}')
-    print(f'non_nvl72_rack_target_delivery_points={RackDeliveryPoint.objects.filter(power_system__site__slug=MAD_SITE_SLUG, rack__isnull=False).exclude(rack__role__slug=NVL72_RACK_ROLE_SLUG).count()}')
-    print(f'non_nvl72_pdu_input_delivery_points={RackDeliveryPoint.objects.filter(power_system__site__slug=MAD_SITE_SLUG, power_port__device__device_type__slug=DEVICE_TYPE_SLUG).count()}')
+    print(f'non_nvl72_rack_derived_handoff_points={PowerHandoffPoint.objects.filter(power_system__site__slug=MAD_SITE_SLUG, power_port__device__rack__isnull=False).exclude(power_port__device__rack__role__slug=NVL72_RACK_ROLE_SLUG).count()}')
+    print(f'non_nvl72_pdu_input_handoff_points={PowerHandoffPoint.objects.filter(power_system__site__slug=MAD_SITE_SLUG, power_port__device__device_type__slug=DEVICE_TYPE_SLUG).count()}')
 
 
 main()

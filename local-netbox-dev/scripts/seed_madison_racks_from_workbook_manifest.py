@@ -13,7 +13,8 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
+MAD_SITE_NAME = 'GS001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -59,9 +60,9 @@ def get_site() -> Site:
     site, _ = Site.objects.update_or_create(
         slug=MAD_SITE_SLUG,
         defaults={
-            'name': 'Madison, NC',
+            'name': MAD_SITE_NAME,
             'status': 'active',
-            'description': 'Madison, NC data center staging site.',
+            'description': 'GS001 Madison, NC data center staging site.',
         },
     )
     site.full_clean()

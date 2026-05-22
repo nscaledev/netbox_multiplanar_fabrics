@@ -6,8 +6,8 @@ from dcim.models import Interface
 from netbox_plant_graph.models import Endpoint, OpticalLane, TransportChannel, TransportChannelPositionMap
 
 
-FABRIC_SLUG = 'mad-1-roce-fabric'
-MAD_SITE_SLUG = 'mad-1'
+FABRIC_SLUG = 'gs001-roce-fabric'
+MAD_SITE_SLUG = 'gs001'
 
 
 def main() -> None:

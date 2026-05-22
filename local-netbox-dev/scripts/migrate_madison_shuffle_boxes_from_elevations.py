@@ -27,14 +27,14 @@ from tenancy.models import Tenant
 from netbox_plant_graph.models import PlantNode
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 
-BOX_ROLE_SLUG = 'shuffle-box'
+BOX_ROLE_SLUG = 'sb'
 TRAY_ROLE_SLUG = 'shuffle-tray'
 CASSETTE_ROLE_SLUG = 'shuffle-cassette'
-BOX_TYPE_SLUG = 'shuffle-box-3tray-18cassette'
+BOX_TYPE_SLUG = 'sb'
 TRAY_TYPE_SLUG = 'shuffle-tray-6cassette'
 CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
@@ -61,7 +61,7 @@ def old_cassette_name(row: dict[str, str]) -> str:
     ru_top = int(row['ru_top'])
     ru_bottom = int(row['ru_bottom'])
     ru = f'u{ru_top:02d}' if ru_top == ru_bottom else f'u{ru_bottom:02d}-{ru_top:02d}'
-    return f'mad1-{slot}-{ru}-{CASSETTE_TYPE_SLUG}'
+    return f'gs001-{slot}-{ru}-{CASSETTE_TYPE_SLUG}'
 
 
 def read_manifest() -> list[dict[str, str]]:
@@ -350,7 +350,7 @@ def prepare_legacy_devices(rows: list[dict[str, str]], box_type: DeviceType, cou
     old_names = [old_cassette_name(row) for row in rows]
     new_names = [row['box_name'] for row in rows]
     name_to_device = {device.name: device for device in Device.objects.filter(site__slug=MAD_SITE_SLUG, name__in=[*old_names, *new_names])}
-    missing = [name for name in old_names if name not in name_to_device and name.replace(CASSETTE_TYPE_SLUG, 'shuffle-box') not in name_to_device]
+    missing = [name for name in old_names if name not in name_to_device and name.replace(CASSETTE_TYPE_SLUG, 'sb') not in name_to_device]
     if missing:
         raise RuntimeError(f'Missing {len(missing)} legacy shuffle placement devices; first missing: {missing[0]}')
 
@@ -379,7 +379,7 @@ def prepare_legacy_devices(rows: list[dict[str, str]], box_type: DeviceType, cou
 
 def delete_stale_containers(rows: list[dict[str, str]], counters: Counter) -> None:
     slots = sorted({row['physical_slot'] for row in rows})
-    stale_box_names = [f'mad1-{slot.lower()}-shuffle-box-01' for slot in slots]
+    stale_box_names = [f'gs001-{slot.lower()}-sb-01' for slot in slots]
     stale_tray_names = [f'{box_name}-tray-{index:02d}' for box_name in stale_box_names for index in range(1, 4)]
     stale_trays = Device.objects.filter(site__slug=MAD_SITE_SLUG, name__in=stale_tray_names)
     stale_boxes = Device.objects.filter(site__slug=MAD_SITE_SLUG, name__in=stale_box_names)
@@ -417,7 +417,7 @@ def main() -> None:
             slot = row['physical_slot']
             rack = racks.get(slot)
             if rack is None:
-                raise RuntimeError(f'No MAD-1 rack found for shuffle box slot {slot}.')
+                raise RuntimeError(f'No GS001 rack found for shuffle box slot {slot}.')
 
             box = box_devices[row['box_name']]
             update_device(
@@ -435,7 +435,7 @@ def main() -> None:
                 face='front',
                 status=PLANNED_STATUS,
                 description=f'1RU shuffle box; {row["populated_cassettes"]} populated cassettes from row-elevation label.',
-                comments=marker_comments(row, 'shuffle-box'),
+                comments=marker_comments(row, 'sb'),
                 local_context_data={
                     SOURCE_MARKER: {
                         'physical_slot': slot,

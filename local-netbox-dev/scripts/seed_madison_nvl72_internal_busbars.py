@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 from django.db import transaction
@@ -15,15 +16,22 @@ from netbox_power_plant.choices import (
 from netbox_power_plant.models import InternalPowerBus, InternalPowerBusAttachment, PowerSystem
 
 
-MAD_SITE_SLUG = 'mad-1'
-POWER_SYSTEM_NAME = 'MAD-1 Electrical Plant'
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
+POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'MAD-1 Electrical Plant')
+ALLOW_PARTIAL = os.environ.get('MADISON_NVL72_BUSBAR_ALLOW_PARTIAL') == '1'
 NVL72_RACK_ROLE_SLUG = 'nvl72_poweredgexe9712'
-POWER_SHELF_DEVICE_TYPE_SLUG = 'ps33-33kw-power-shelf'
+POWER_SHELF_DEVICE_TYPE_SLUGS = ('gb300ps', 'ps33-33kw-power-shelf')
 POWER_SHELF_PORT_NAME = 'busbar-output-1'
-LOAD_DEVICE_TYPE_SLUGS = ('poweredge-xe9712-gb300-compute-tray', 'gb300-nvl72-nvlink-switch-tray')
-LOAD_POWER_PORT_NAME = 'nvl72-busbar'
+LOAD_DEVICE_TYPE_SLUGS = (
+    'gb300ct',
+    'poweredge-xe9712-gb300-compute-tray',
+    'gb300st',
+    'gb300-nvl72-nvlink-switch-tray',
+    'sn2201_m',
+)
+LOAD_POWER_PORT_NAMES = ('nvl72-busbar', 'busbar-input-1')
 EXPECTED_SOURCE_PORTS_PER_RACK = 8
-EXPECTED_LOAD_PORTS_PER_RACK = 27
+EXPECTED_LOAD_PORTS_PER_RACK = 29
 def bus_name(rack):
     return f'NVL72 Busbar {rack.name}'
 
@@ -32,14 +40,14 @@ def attachment_name(bus, power_port, role):
     return f'{bus.name} {role} {power_port.device.name} {power_port.name}'[:100]
 
 
-def power_ports_for_rack(rack, *, device_type_slugs, port_name):
+def power_ports_for_rack(rack, *, device_type_slugs, port_names):
     return list(
         PowerPort.objects.select_related('device', 'device__device_type', 'device__rack')
         .filter(
             device__site__slug=MAD_SITE_SLUG,
             device__rack=rack,
             device__device_type__slug__in=device_type_slugs,
-            name=port_name,
+            name__in=port_names,
         )
         .order_by('device__position', 'device__name', 'name')
     )
@@ -61,7 +69,7 @@ def upsert_bus(power_system, rack, counters):
         'rack': rack,
         'bus_role': InternalPowerBusRoleChoices.ROLE_BUSBAR,
         'supply_type': SupplyTypeChoices.SUPPLY_DC,
-        'nominal_voltage': None,
+        'nominal_voltage': 50,
         'design_state': DesignStateChoices.STATE_PLANNED,
         'description': 'NVL72 rack-internal shared busbar distribution.',
     }
@@ -119,13 +127,13 @@ def main():
         for rack in racks:
             source_ports = power_ports_for_rack(
                 rack,
-                device_type_slugs=(POWER_SHELF_DEVICE_TYPE_SLUG,),
-                port_name=POWER_SHELF_PORT_NAME,
+                device_type_slugs=POWER_SHELF_DEVICE_TYPE_SLUGS,
+                port_names=(POWER_SHELF_PORT_NAME,),
             )
             load_ports = power_ports_for_rack(
                 rack,
                 device_type_slugs=LOAD_DEVICE_TYPE_SLUGS,
-                port_name=LOAD_POWER_PORT_NAME,
+                port_names=LOAD_POWER_PORT_NAMES,
             )
             if len(source_ports) != EXPECTED_SOURCE_PORTS_PER_RACK or len(load_ports) != EXPECTED_LOAD_PORTS_PER_RACK:
                 skipped.append((rack.name, len(source_ports), len(load_ports)))
@@ -152,7 +160,8 @@ def main():
     if skipped:
         for rack_name, source_count, load_count in skipped:
             print(f'skipped_rack={rack_name} source_ports={source_count} load_ports={load_count}')
-        raise RuntimeError('Refusing to complete NVL72 busbar seeding because one or more racks are not 8:27.')
+        if not ALLOW_PARTIAL:
+            raise RuntimeError('Refusing to complete NVL72 busbar seeding because one or more racks are not 8:29.')
 
     print('Madison NVL72 internal busbar seeding complete.')
     print(f'nvl72_racks={racks.count()}')

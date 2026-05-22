@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 from django.db import transaction
@@ -7,10 +8,15 @@ from django.db import transaction
 from dcim.models import Device, PowerPort, PowerPortTemplate
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
+POWER_SHELF_DEVICE_TYPE_SLUGS = ('gb300ps', 'ps33-33kw-power-shelf')
+POWER_SHELF_FACILITY_INPUT_NAME = 'facility-input'
+POWER_SHELF_FACILITY_INPUT_TYPE = 'iec-60309-560p6'
+POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW = 33000
 
 # Passive plant objects intentionally have no power ports.
 PASSIVE_DEVICE_TYPE_SLUGS = {
+    'shuffle-box-3tray-18cassette',
     'shuffle-cassette-2x2-mpo',
 }
 
@@ -45,6 +51,34 @@ def sync_power_port(device, template, counters):
     counters['power_ports_created' if created else 'power_ports_updated' if changed else 'power_ports_unchanged'] += 1
 
 
+def ensure_power_shelf_facility_input(device, counters):
+    port, created = PowerPort.objects.get_or_create(
+        device=device,
+        name=POWER_SHELF_FACILITY_INPUT_NAME,
+        defaults={
+            'type': POWER_SHELF_FACILITY_INPUT_TYPE,
+            'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+            'maximum_draw': POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW,
+            'allocated_draw': None,
+        },
+    )
+    desired = {
+        'type': POWER_SHELF_FACILITY_INPUT_TYPE,
+        'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+        'maximum_draw': POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW,
+        'allocated_draw': None,
+    }
+    changed = False
+    for field, value in desired.items():
+        if getattr(port, field) != value:
+            setattr(port, field, value)
+            changed = True
+    if created or changed:
+        port.full_clean()
+        port.save()
+    counters['power_shelf_facility_inputs_created' if created else 'power_shelf_facility_inputs_updated' if changed else 'power_shelf_facility_inputs_unchanged'] += 1
+
+
 def main():
     devices = (
         Device.objects.filter(site__slug=MAD_SITE_SLUG)
@@ -64,6 +98,9 @@ def main():
             counters[f'device_type_{device.device_type.slug}_devices'] += 1
 
             if not templates:
+                if device.device_type.slug in POWER_SHELF_DEVICE_TYPE_SLUGS:
+                    ensure_power_shelf_facility_input(device, counters)
+                    continue
                 if device.device_type.slug in PASSIVE_DEVICE_TYPE_SLUGS:
                     counters[f'device_type_{device.device_type.slug}_passive_no_power_ports'] += 1
                     continue
@@ -74,9 +111,12 @@ def main():
             for template in templates:
                 sync_power_port(device, template, counters)
 
+            if device.device_type.slug in POWER_SHELF_DEVICE_TYPE_SLUGS:
+                ensure_power_shelf_facility_input(device, counters)
+
     if active_types_without_templates:
         raise RuntimeError(
-            f'MAD-1 active device types without power port templates: {sorted(active_types_without_templates)}'
+            f'{MAD_SITE_SLUG} active device types without power port templates: {sorted(active_types_without_templates)}'
         )
 
     print('Madison power-port template sync complete.')

@@ -9,7 +9,7 @@ from dcim.models import Device, DeviceBay, FrontPort, RearPort
 from netbox_plant_graph.models import AttachmentUnit, CoarseEdge, FineEdge, PlantNode, TerminationPoint
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 CAPACITY_MARKER = 'madison_shuffle_full_cassette_capacity_v1'
 PATH_MARKER = 'madison_fiber_path_resolution_v1'
 

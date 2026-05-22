@@ -8,7 +8,7 @@ from pathlib import Path
 from dcim.models import Device, Rack
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 EXPECTED_NVL72_RACKS_PER_SU = 7
 EXPECTED_GB300_TRAYS_PER_RACK = 18
 EXPECTED_PATTERN_ROWS_PER_SU = 8
@@ -97,7 +97,7 @@ def gb300_trays_by_rack(racks_by_su: dict[int, list[Rack]]) -> dict[int, list[De
         Device.objects.filter(
             site__slug=MAD_SITE_SLUG,
             rack_id__in=rack_ids,
-            device_type__slug='poweredge-xe9712-gb300-compute-tray',
+            device_type__slug='gb300ct',
         )
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
@@ -162,7 +162,7 @@ def status_for_su(
     for row in ok_pattern_rows:
         for box_field, expected_count in (('shuffle_18_box', 18), ('shuffle_14_box', 14)):
             box_name = row[box_field]
-            box = Device.objects.filter(site__slug=MAD_SITE_SLUG, name=box_name, device_type__slug='shuffle-box-3tray-18cassette').first()
+            box = Device.objects.filter(site__slug=MAD_SITE_SLUG, name=box_name, device_type__slug='sb').first()
             if box is None:
                 missing_boxes.append(box_name)
                 continue

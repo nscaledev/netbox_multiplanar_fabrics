@@ -5,7 +5,7 @@ FROM ${NETBOX_IMAGE}
 USER root
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates postgresql-client \
+    && apt-get install -y --no-install-recommends ca-certificates build-essential postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY plugin_requirements.txt /opt/netbox/plugin_requirements.txt
@@ -22,6 +22,26 @@ RUN /usr/local/bin/uv pip install -r /opt/netbox/plugin_requirements.txt \
        /usr/local/bin/uv pip install --no-deps \
        -e /opt/netbox/local-plugins/netbox_multiplanar_fabrics \
        -e /opt/netbox/local-plugins/netbox_power_plant
+
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+
+unit_config = Path("/etc/unit/nginx-unit.json")
+config = json.loads(unit_config.read_text(encoding="utf-8"))
+config.setdefault("settings", {}).setdefault("http", {})["max_body_size"] = 3 * 1024 * 1024 * 1024
+unit_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+settings_path = Path("/opt/netbox/netbox/netbox/settings.py")
+settings = settings_path.read_text(encoding="utf-8")
+needle = "DATA_UPLOAD_MAX_NUMBER_FIELDS = None\n"
+replacement = (
+    "DATA_UPLOAD_MAX_NUMBER_FIELDS = None\n"
+    "DATA_UPLOAD_MAX_NUMBER_FILES = getattr(configuration, 'DATA_UPLOAD_MAX_NUMBER_FILES', 100)\n"
+)
+if replacement not in settings:
+    settings_path.write_text(settings.replace(needle, replacement), encoding="utf-8")
+PY
 
 RUN DEBUG="false" \
     SECRET_KEY="dummydummydummydummydummydummydummydummydummydummy" \

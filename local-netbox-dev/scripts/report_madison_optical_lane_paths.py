@@ -22,10 +22,10 @@ from madison_v2_graph import (  # noqa: E402
 
 
 SAMPLE_PATHS = [
-    {'plane_number': 1, 'gb300_endpoint': ('mad1-a2-u11-poweredge-xe9712-gb300-compute-tray', 'osfp1', 1), 'leaf_endpoint': ('mad1-a9-u12-13-sn5610', 'swp1', 1), 'label': 'PL1 NIC0A'},
-    {'plane_number': 2, 'gb300_endpoint': ('mad1-a2-u11-poweredge-xe9712-gb300-compute-tray', 'osfp1', 2), 'leaf_endpoint': ('mad1-a9-u14-15-sn5610', 'swp1', 1), 'label': 'PL2 NIC0A'},
-    {'plane_number': 3, 'gb300_endpoint': ('mad1-a2-u11-poweredge-xe9712-gb300-compute-tray', 'osfp2', 1), 'leaf_endpoint': ('mad1-a10-u12-13-sn5610', 'swp1', 1), 'label': 'PL3 NIC0B'},
-    {'plane_number': 4, 'gb300_endpoint': ('mad1-a2-u11-poweredge-xe9712-gb300-compute-tray', 'osfp2', 2), 'leaf_endpoint': ('mad1-a10-u14-15-sn5610', 'swp1', 1), 'label': 'PL4 NIC0B'},
+    {'plane_number': 1, 'gb300_endpoint': ('gs001-a2-u11-gb300ct', 'osfp1', 1), 'leaf_endpoint': ('gs001-a9-u12-13-sn5610', 'swp1', 1), 'label': 'PL1 NIC0A'},
+    {'plane_number': 2, 'gb300_endpoint': ('gs001-a2-u11-gb300ct', 'osfp1', 2), 'leaf_endpoint': ('gs001-a9-u14-15-sn5610', 'swp1', 1), 'label': 'PL2 NIC0A'},
+    {'plane_number': 3, 'gb300_endpoint': ('gs001-a2-u11-gb300ct', 'osfp2', 1), 'leaf_endpoint': ('gs001-a10-u12-13-sn5610', 'swp1', 1), 'label': 'PL3 NIC0B'},
+    {'plane_number': 4, 'gb300_endpoint': ('gs001-a2-u11-gb300ct', 'osfp2', 2), 'leaf_endpoint': ('gs001-a10-u14-15-sn5610', 'swp1', 1), 'label': 'PL4 NIC0B'},
 ]
 
 

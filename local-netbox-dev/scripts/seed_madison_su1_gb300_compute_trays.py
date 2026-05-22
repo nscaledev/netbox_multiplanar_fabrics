@@ -13,12 +13,12 @@ from extras.models import Tag
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = 'mad-1'
+MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 TARGET_SU_TAG = 'nv_su_1'
 TARGET_SLOTS = {'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'}
-TARGET_DEVICE_TYPE = 'poweredge-xe9712-gb300-compute-tray'
+TARGET_DEVICE_TYPE = 'gb300ct'
 SOURCE_MARKER_BEGIN = '<!-- madison-su1-gb300-compute-trays:start -->'
 SOURCE_MARKER_END = '<!-- madison-su1-gb300-compute-trays:end -->'
 
@@ -60,7 +60,7 @@ def selected_rows() -> list[dict[str, str]]:
 def device_name(row: dict[str, str]) -> str:
     slot = row['physical_slot'].lower()
     ru = int(row['ru_bottom'])
-    return f'mad1-{slot}-u{ru:02d}-{row["device_type_slug"]}'
+    return f'gs001-{slot}-u{ru:02d}-{row["device_type_slug"]}'
 
 
 def staged_comments(row: dict[str, str]) -> str:
@@ -120,7 +120,7 @@ def main() -> None:
         for row in rows:
             rack = racks.get(row['physical_slot'])
             if rack is None:
-                raise RuntimeError(f'No MAD-1 rack found for row-id slot {row["physical_slot"]}.')
+                raise RuntimeError(f'No GS001 rack found for row-id slot {row["physical_slot"]}.')
             row_tag = row_tags.get(row['row_id_tag'].lower())
             if row_tag is None:
                 raise RuntimeError(f'Missing row-id tag {row["row_id_tag"]}.')

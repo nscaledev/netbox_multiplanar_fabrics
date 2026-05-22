@@ -16,7 +16,7 @@ MPO12_CHANNEL_MAP_MATRIX = [dict(entry) for entry in CHANNEL_MAP_MATRIX]
 
 DEVICE_ENDPOINTS = [
     {
-        'device_type_slug': 'poweredge-xe9712-gb300-compute-tray',
+        'device_type_slug': 'gb300ct',
         'breakout_slug': 'poweredge-xe9712-gb300-4xosfp-4plane',
         'breakout_name': 'PowerEdge XE9712 GB300 4xOSFP 4-Plane Breakout',
         'ports': [
@@ -36,6 +36,8 @@ DEVICE_ENDPOINTS = [
             'Each OSFP is modeled as two MPO attachment units in the plant graph '
             'and four 200G logical plane channels in breakout specs.'
         ),
+        'channel_subinterface_name_pattern': '{parent_name}/{channel_index}',
+        'child_name_pattern': '{parent}.plane{plane}',
     },
     {
         'device_type_slug': 'sn5610',
@@ -67,6 +69,8 @@ DEVICE_ENDPOINTS = [
             'two 1/10/25G SFP28 cages. The four-plane breakout template applies '
             'only to the 64 OSFP fabric ports.'
         ),
+        'channel_subinterface_name_pattern': '{parent_name}s{channel_index}',
+        'child_name_pattern': '{parent}s{plane}',
     },
     {
         'device_type_slug': 'sn4700',
@@ -88,6 +92,8 @@ DEVICE_ENDPOINTS = [
             'SN4700 OOB/core endpoint model: 32 400G QSFP-DD cages. '
             'This is a reusable template only; role-specific use is resolved at instance staging.'
         ),
+        'channel_subinterface_name_pattern': '{parent_name}s{channel_index}',
+        'child_name_pattern': '{parent}s{plane}',
     },
 ]
 
@@ -175,7 +181,7 @@ def upsert_endpoint_stamp_template(architecture, device_type, definition):
                 'name': port['name'],
                 'interface_type': port['type'],
                 'module_bay': port['module_bay'],
-                'child_name_pattern': '{parent}.plane{plane}',
+                'child_name_pattern': definition.get('child_name_pattern', '{parent}.plane{plane}'),
                 'child_count': port['child_count'],
                 'child_speed_kbps': port['child_speed_kbps'],
                 'fabric_plane_start': 1,
@@ -199,7 +205,7 @@ def upsert_endpoint_stamp_template(architecture, device_type, definition):
         'ports': ports,
         'channel_subinterfaces': {
             'enabled': True,
-            'name_pattern': '{parent_name}/{channel_index}',
+            'name_pattern': definition.get('channel_subinterface_name_pattern', '{parent_name}/{channel_index}'),
             'type': 'virtual',
             'speed_gbps': 200,
             'channel_map_matrix': MPO12_CHANNEL_MAP_MATRIX,

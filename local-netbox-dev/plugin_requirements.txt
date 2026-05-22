@@ -1,2 +1,2 @@
 netbox-plugin-dns==1.2.14
-
+ezdwg[dxf]>=0.9,<1
