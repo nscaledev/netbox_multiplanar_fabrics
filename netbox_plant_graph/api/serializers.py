@@ -50,6 +50,101 @@ class PathQueryResponseSerializer(serializers.Serializer):
     steps = PathQueryStepSerializer(many=True)
 
 
+def _normalize_impact_target_ids(attrs, *, single_field, list_field, label):
+    requested_ids = []
+    single_id = attrs.get(single_field)
+    if single_id is not None:
+        requested_ids.append(single_id)
+    requested_ids.extend(attrs.get(list_field) or ())
+
+    target_ids = []
+    seen_ids = set()
+    for target_id in requested_ids:
+        if target_id in seen_ids:
+            continue
+        target_ids.append(target_id)
+        seen_ids.add(target_id)
+
+    if not target_ids:
+        raise serializers.ValidationError(
+            {
+                list_field: (
+                    f'At least one {label} target is required. '
+                    f'Provide {single_field} or {list_field}.'
+                )
+            }
+        )
+
+    attrs['target_ids'] = target_ids
+    return attrs
+
+
+class OperationalImpactRequestSerializer(serializers.Serializer):
+    fabric = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    max_depth = serializers.IntegerField(required=False, min_value=1, max_value=256, default=64)
+
+
+class CableAssemblyImpactRequestSerializer(OperationalImpactRequestSerializer):
+    cable_assembly_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    cable_assembly_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        return _normalize_impact_target_ids(
+            attrs,
+            single_field='cable_assembly_id',
+            list_field='cable_assembly_ids',
+            label='cable assembly',
+        )
+
+
+class MPOConnectorUnplugImpactRequestSerializer(OperationalImpactRequestSerializer):
+    connector_endpoint_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    connector_endpoint_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        return _normalize_impact_target_ids(
+            attrs,
+            single_field='connector_endpoint_id',
+            list_field='connector_endpoint_ids',
+            label='MPO connector endpoint',
+        )
+
+
+class OSFPTransceiverUnseatImpactRequestSerializer(OperationalImpactRequestSerializer):
+    interface_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    interface_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        return _normalize_impact_target_ids(
+            attrs,
+            single_field='interface_id',
+            list_field='interface_ids',
+            label='Interface',
+        )
+
+
+class OperationalImpactReportResponseSerializer(serializers.Serializer):
+    scenario = serializers.JSONField()
+    scope = serializers.JSONField()
+    summary = serializers.JSONField()
+    simulated_components = serializers.ListField(child=serializers.JSONField())
+    impacted_paths = serializers.ListField(child=serializers.JSONField())
+    impacted_lanes = serializers.ListField(child=serializers.JSONField())
+    impacted_channels = serializers.ListField(child=serializers.JSONField())
+    impacted_endpoints = serializers.ListField(child=serializers.JSONField())
+    impacted_devices = serializers.ListField(child=serializers.JSONField())
+    hierarchy = serializers.ListField(child=serializers.JSONField())
+
+
 class SuppressionSummaryItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     fabric_id = serializers.IntegerField()
@@ -320,6 +415,11 @@ __all__ = (
         'PathQueryRequestSerializer',
         'PathQueryStepSerializer',
         'PathQueryResponseSerializer',
+        'OperationalImpactRequestSerializer',
+        'CableAssemblyImpactRequestSerializer',
+        'MPOConnectorUnplugImpactRequestSerializer',
+        'OSFPTransceiverUnseatImpactRequestSerializer',
+        'OperationalImpactReportResponseSerializer',
         'SuppressionSummaryItemSerializer',
         'AuditTimelineItemSerializer',
         'OperationRunSummaryItemSerializer',

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
+include = ["netbox_plant_graph*"]
 exclude = [".venv*", "tests*", "docs*", ".github*", ".gitignore"]
 
 [tool.black]

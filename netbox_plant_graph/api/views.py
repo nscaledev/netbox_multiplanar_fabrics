@@ -1,9 +1,11 @@
 from collections import Counter
 from datetime import timedelta
 
+from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from dcim.models import Interface
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -14,6 +16,9 @@ from rest_framework.views import APIView
 from netbox_plant_graph.api import serializers as api_serializers
 from netbox_plant_graph.models import (
     AuditEvent,
+    CableAssembly,
+    ConnectorPosition,
+    Endpoint,
     Fabric,
     OperationRun,
     OpticalLane,
@@ -21,6 +26,11 @@ from netbox_plant_graph.models import (
     StampRun,
     StampTemplate,
     SuppressionRule,
+)
+from netbox_plant_graph.services.impact_modeling import (
+    model_cable_assembly_cut_impact,
+    model_mpo_connector_unplug_impact,
+    model_osfp_transceiver_unseat_impact,
 )
 from netbox_plant_graph.services.audit import (
     FINDING_EVENT_TYPE,
@@ -166,6 +176,129 @@ def _suppression_rule_to_record(rule: SuppressionRule) -> dict:
     }
 
 
+def _impact_response(report):
+    serializer = api_serializers.OperationalImpactReportResponseSerializer(report.as_dict())
+    return Response(serializer.data)
+
+
+def _resolve_impact_fabric(fabric_id):
+    if fabric_id is None:
+        return None
+    fabric = Fabric.objects.filter(pk=fabric_id).first()
+    if fabric is None:
+        raise ValidationError({'fabric': f'Fabric {fabric_id!r} was not found.'})
+    return fabric
+
+
+def _missing_target_ids(target_ids, object_by_id):
+    return [
+        target_id
+        for target_id in target_ids
+        if target_id not in object_by_id
+    ]
+
+
+def _ordered_targets(target_ids, object_by_id):
+    return tuple(
+        object_by_id[target_id]
+        for target_id in target_ids
+        if target_id in object_by_id
+    )
+
+
+def _resolve_cable_assembly_targets(target_ids):
+    object_by_id = {
+        cable.pk: cable
+        for cable in CableAssembly.objects.select_related('site').filter(pk__in=target_ids)
+    }
+    missing_ids = _missing_target_ids(target_ids, object_by_id)
+    if missing_ids:
+        raise ValidationError({'cable_assembly_ids': f'Cable assembly IDs were not found: {missing_ids}.'})
+    return _ordered_targets(target_ids, object_by_id)
+
+
+def _resolve_connector_endpoint_targets(target_ids, *, fabric):
+    object_by_id = {
+        endpoint.pk: endpoint
+        for endpoint in Endpoint.objects.select_related('fabric').filter(pk__in=target_ids)
+    }
+    missing_ids = _missing_target_ids(target_ids, object_by_id)
+    if missing_ids:
+        raise ValidationError({'connector_endpoint_ids': f'Endpoint IDs were not found: {missing_ids}.'})
+
+    endpoint_ids_with_positions = set(
+        ConnectorPosition.objects.filter(endpoint_id__in=object_by_id)
+        .values_list('endpoint_id', flat=True)
+        .distinct()
+    )
+    non_connector_ids = [
+        target_id
+        for target_id in target_ids
+        if target_id in object_by_id and target_id not in endpoint_ids_with_positions
+    ]
+    if non_connector_ids:
+        raise ValidationError(
+            {
+                'connector_endpoint_ids': (
+                    'MPO connector endpoints must have connector positions. '
+                    f'Invalid endpoint IDs: {non_connector_ids}.'
+                )
+            }
+        )
+
+    if fabric is not None:
+        wrong_fabric_ids = [
+            target_id
+            for target_id in target_ids
+            if object_by_id[target_id].fabric_id != fabric.pk
+        ]
+        if wrong_fabric_ids:
+            raise ValidationError(
+                {
+                    'connector_endpoint_ids': (
+                        f'Endpoint IDs are not in fabric {fabric.pk}: {wrong_fabric_ids}.'
+                    )
+                }
+            )
+
+    return _ordered_targets(target_ids, object_by_id)
+
+
+def _resolve_interface_targets(target_ids, *, fabric):
+    object_by_id = {
+        interface.pk: interface
+        for interface in Interface.objects.select_related('device').filter(pk__in=target_ids)
+    }
+    missing_ids = _missing_target_ids(target_ids, object_by_id)
+    if missing_ids:
+        raise ValidationError({'interface_ids': f'Interface IDs were not found: {missing_ids}.'})
+
+    source_type = ContentType.objects.get_for_model(Interface, for_concrete_model=False)
+    endpoint_queryset = Endpoint.objects.filter(
+        source_type=source_type,
+        source_id__in=object_by_id,
+    )
+    if fabric is not None:
+        endpoint_queryset = endpoint_queryset.filter(fabric=fabric)
+    modeled_interface_ids = set(endpoint_queryset.values_list('source_id', flat=True).distinct())
+    unmodeled_ids = [
+        target_id
+        for target_id in target_ids
+        if target_id in object_by_id and target_id not in modeled_interface_ids
+    ]
+    if unmodeled_ids:
+        if fabric is None:
+            message = f'Interface IDs are not mapped to modeled OSFP endpoints: {unmodeled_ids}.'
+        else:
+            message = (
+                f'Interface IDs are not mapped to modeled OSFP endpoints in fabric {fabric.pk}: '
+                f'{unmodeled_ids}.'
+            )
+        raise ValidationError({'interface_ids': message})
+
+    return _ordered_targets(target_ids, object_by_id)
+
+
 class PathQueryAPIView(APIView):
     queryset = OpticalLane.objects.all()
 
@@ -201,6 +334,63 @@ class PathQueryAPIView(APIView):
         resolved_path = resolve_optical_lane_path(source=source_lane, destination=destination_lane, actor=request.user)
         serializer = api_serializers.PathQueryResponseSerializer(resolved_path)
         return Response(serializer.data)
+
+
+class CableAssemblyCutImpactAPIView(APIView):
+    queryset = CableAssembly.objects.all()
+
+    def post(self, request):
+        validated = _validated(api_serializers.CableAssemblyImpactRequestSerializer, request.data)
+        fabric = _resolve_impact_fabric(validated.get('fabric'))
+        cable_assemblies = _resolve_cable_assembly_targets(validated['target_ids'])
+        try:
+            report = model_cable_assembly_cut_impact(
+                cable_assemblies=cable_assemblies,
+                selected_fabric=fabric,
+                max_depth=validated.get('max_depth', 64),
+                actor=request.user,
+            )
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return _impact_response(report)
+
+
+class MPOConnectorUnplugImpactAPIView(APIView):
+    queryset = Endpoint.objects.all()
+
+    def post(self, request):
+        validated = _validated(api_serializers.MPOConnectorUnplugImpactRequestSerializer, request.data)
+        fabric = _resolve_impact_fabric(validated.get('fabric'))
+        connector_endpoints = _resolve_connector_endpoint_targets(validated['target_ids'], fabric=fabric)
+        try:
+            report = model_mpo_connector_unplug_impact(
+                connector_endpoints=connector_endpoints,
+                selected_fabric=fabric,
+                max_depth=validated.get('max_depth', 64),
+                actor=request.user,
+            )
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return _impact_response(report)
+
+
+class OSFPTransceiverUnseatImpactAPIView(APIView):
+    queryset = Interface.objects.all()
+
+    def post(self, request):
+        validated = _validated(api_serializers.OSFPTransceiverUnseatImpactRequestSerializer, request.data)
+        fabric = _resolve_impact_fabric(validated.get('fabric'))
+        interfaces = _resolve_interface_targets(validated['target_ids'], fabric=fabric)
+        try:
+            report = model_osfp_transceiver_unseat_impact(
+                interfaces=interfaces,
+                selected_fabric=fabric,
+                max_depth=validated.get('max_depth', 64),
+                actor=request.user,
+            )
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return _impact_response(report)
 
 
 class SuppressionSummaryAPIView(APIView):
@@ -665,6 +855,9 @@ class StampPreviewAPIView(APIView):
 __all__ = (
     'RootView',
     'PathQueryAPIView',
+    'CableAssemblyCutImpactAPIView',
+    'MPOConnectorUnplugImpactAPIView',
+    'OSFPTransceiverUnseatImpactAPIView',
     'SuppressionSummaryAPIView',
     'AuditTimelineAPIView',
     'WorkflowSummaryAPIView',

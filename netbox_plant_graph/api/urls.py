@@ -15,6 +15,21 @@ for spec in V2_OBJECT_SPECS:
 
 urlpatterns = router.urls + [
     path('path-query/', views.PathQueryAPIView.as_view(), name='path-query'),
+    path(
+        'impact/cable-assembly-cut/',
+        views.CableAssemblyCutImpactAPIView.as_view(),
+        name='impact-cable-assembly-cut',
+    ),
+    path(
+        'impact/mpo-connector-unplug/',
+        views.MPOConnectorUnplugImpactAPIView.as_view(),
+        name='impact-mpo-connector-unplug',
+    ),
+    path(
+        'impact/osfp-transceiver-unseat/',
+        views.OSFPTransceiverUnseatImpactAPIView.as_view(),
+        name='impact-osfp-transceiver-unseat',
+    ),
     path('suppression-summary/', views.SuppressionSummaryAPIView.as_view(), name='suppression-summary'),
     path('audit-timeline/', views.AuditTimelineAPIView.as_view(), name='audit-timeline'),
     path('workflow/summary/', views.WorkflowSummaryAPIView.as_view(), name='workflow-summary'),

@@ -9,6 +9,12 @@ from netbox_plant_graph.models import (
     StampTemplate,
     TransferPattern,
 )
+from netbox_plant_graph.services.architecture_schema import (
+    ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
+    ArchitectureSchemaDefinition,
+    ArchitectureSchemaValidationResult,
+    validate_architecture_schema,
+)
 
 
 ARCHITECTURE_SLUG = 'roce-4-plane-gb300-2x2-shuffle'
@@ -318,6 +324,32 @@ STAMP_TEMPLATE = {
 }
 
 
+def build_roce_4plane_shuffle_architecture_schema() -> ArchitectureSchemaDefinition:
+    return ArchitectureSchemaDefinition(
+        slug=ARCHITECTURE_SLUG,
+        version=ARCHITECTURE_VERSION,
+        plane_count=4,
+        roles=ROLE_DEFINITIONS,
+        transfer_patterns=TRANSFER_PATTERN_DEFINITIONS,
+        allocation_rule_sets=ALLOCATION_RULE_DEFINITIONS,
+        channel_map_matrix=CHANNEL_MAP_MATRIX,
+        active_position_groups={
+            'A': ACTIVE_POSITION_GROUP_A,
+            'B': ACTIVE_POSITION_GROUP_B,
+        },
+        dark_positions=MPO_DARK_POSITIONS,
+        mpo_position_count=MPO_POSITION_COUNT,
+        shuffle_mpo_groups=SHUFFLE_MPO_GROUPS,
+        shuffle_pair_provider=shuffle_2x2_transfer_position_pairs,
+        channels_per_subinterface=4,
+        mpo_count_per_osfp=2,
+    )
+
+
+def validate_roce_4plane_shuffle_architecture_fixture() -> ArchitectureSchemaValidationResult:
+    return validate_architecture_schema(build_roce_4plane_shuffle_architecture_schema())
+
+
 @dataclass(frozen=True)
 class ArchitectureFixtureResult:
     architecture: FabricArchitecture
@@ -337,6 +369,7 @@ def ensure_roce_4plane_shuffle_architecture() -> ArchitectureFixtureResult:
             'plane_count': 4,
             'description': 'Executable V2 architecture fixture for the four-plane GB300 shuffle proof.',
             'metadata': {
+                'schema_contract_version': ARCHITECTURE_SCHEMA_CONTRACT_VERSION,
                 'semantics': {
                     'optical_lane_scope': 'transceiver_local',
                     'fiber_path_scope': 'connector_position_graph',

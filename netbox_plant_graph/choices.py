@@ -132,6 +132,8 @@ class OperationProfileChoices(ChoiceSet):
     CHOICES = [
         ('generic_roce', 'Generic RoCE'),
         ('madison_default', 'Madison Default'),
+        ('topology_integrity', 'Topology Integrity Audit'),
+        ('operational_impact', 'Operational Impact Analysis'),
     ]
 
 
