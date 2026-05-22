@@ -410,6 +410,11 @@ operator-authored blueprint variants should flow through `Build & Run ->
 Architecture Workspaces` so provenance, validation runs, plan approval, and
 handoff JSON are retained.
 
+Operators preparing workspace source artifacts should use
+`docs/v2_architecture_workspace_payloads.md` for the bundle/API/manual payload
+formats. This document defines the inner executable architecture schema; the
+workspace-payload guide explains how that schema is wrapped for ingestion.
+
 ## Adding Future Architectures
 
 1. Add architecture constants and fixture definitions in the architecture

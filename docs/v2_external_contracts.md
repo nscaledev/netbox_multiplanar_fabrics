@@ -200,6 +200,10 @@ Source attach accepts the same first-slice fields as the UI form:
 `artifact_type`, `name`, `source_uri`, `raw_payload`, `payload_version`,
 `source_label`, `parser_key`, and `metadata`.
 
+Payload preparation for `blueprint_bundle`, `schema_json`, `stamp_template`,
+`api_payload`, and `manual_entry` artifacts is documented in
+`docs/v2_architecture_workspace_payloads.md`.
+
 Publish plan approval accepts `warning_acknowledgements`, an array of JSON
 objects. Publication applies the exact `publish_payload` persisted on the plan
 through import/reconcile. A stale plan returns HTTP `400`; regenerate before

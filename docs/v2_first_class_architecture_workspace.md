@@ -84,6 +84,10 @@ and manual component item lists. Normalization is idempotent per
 workspace/kind/natural-key and updates existing components instead of creating
 duplicates.
 
+For the operator-facing preparation guide, including the exact meaning of the
+`Blueprint Bundle` artifact type and the `JSON Payload` input field, see
+`docs/v2_architecture_workspace_payloads.md`.
+
 ## Validation And Publish
 
 Validation runs these gates:

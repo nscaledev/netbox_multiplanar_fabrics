@@ -186,6 +186,9 @@ payloads omit `items`; the importer normalizes them into one
 The architecture object in the bundle example is abbreviated in the same way as
 the item example above.
 
+For the architecture-workspace source artifact contract and operator
+preparation workflow, see `docs/v2_architecture_workspace_payloads.md`.
+
 `bundle_version` is echoed as `plan.payload_version`, and `bundle_author` is
 echoed as `plan.source_label`. A bundle with a mismatched
 `schema_contract_version` is rejected before writes with

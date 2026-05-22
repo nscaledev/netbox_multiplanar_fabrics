@@ -16,6 +16,12 @@ active implementation contract.
 - [Architecture schema](v2_architecture_schema.md): executable architecture
   schema contract, built-in blueprint families, validation codes, and transfer
   geometry maturity.
+- [Architecture workspace payloads](v2_architecture_workspace_payloads.md):
+  operator-facing guide for preparing Blueprint Bundle, Schema JSON, Stamp
+  Template, API Payload, and Manual Entry source artifacts.
+- [RoCE 4-plane shuffle architecture walkthrough](v2_roce_4plane_shuffle_architecture_walkthrough.md):
+  screenshot-backed operator walkthrough for publishing a four-plane RoCE
+  architecture with OSFP 4x200Gbps optics and 2x2 fiber shuffles.
 - [Blueprint versioning policy](blueprint_versioning_policy.md): lifecycle,
   immutability, compatibility, and current built-in blueprint support.
 - [V2.5 stamping](v2_stamping_v25.md): registry-backed stamp preview/apply,
