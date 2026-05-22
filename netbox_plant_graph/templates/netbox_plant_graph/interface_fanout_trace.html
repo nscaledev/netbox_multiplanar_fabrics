@@ -5,11 +5,13 @@
 
 {% block head %}
   {{ block.super }}
-  <link rel="stylesheet" href="{% static 'netbox_plant_graph/fanout_trace.css' %}?v=20260521-fanout-zoom-sync">
+  {% include 'netbox_plant_graph/includes/visual_trace_styles.html' %}
 {% endblock %}
 
 {% block content %}
 <h1>Interface Fanout Trace</h1>
+
+{% include 'netbox_plant_graph/includes/integrity_gate_banner.html' %}
 
 <div class="card mb-3">
   <div class="card-body">
@@ -148,49 +150,21 @@
 {% endif %}
 
 {% if trace_requested and trace_rows %}
-  <div class="card mb-3">
-    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
-      <span>Visual Fanout Trace{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}</span>
-      <div class="btn-list">
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-secondary"
-          data-fanout-toggle-visual
-          aria-controls="fanout-visual-trace-body"
-          aria-expanded="true"
-        >
-          Hide
-        </button>
-        <button type="button" class="btn btn-sm btn-outline-primary" data-fanout-export-svg>
-          Export SVG
-        </button>
-      </div>
-    </div>
-    <div class="card-body" id="fanout-visual-trace-body" data-fanout-visual-body>
-      <div
-        class="fanout-schematic mb-3"
-        data-fanout-schematic
-        data-fanout-trace-mode="{{ trace_mode }}"
-        data-fanout-source-title="Source: {{ selected_interface.device.name }}-{{ selected_interface.name }}"
-        data-fanout-source-url="{{ selected_interface.get_absolute_url }}"
-      >
-        <svg
-          class="fanout-schematic__svg"
-          data-fanout-schematic-svg
-          viewBox="0 0 980 280"
-          aria-hidden="false"
-          focusable="true"
-        ></svg>
-        <script type="application/json" data-fanout-schematic-data>{{ aggregate_schematic_paths_json|safe }}</script>
-        <script type="application/json" data-fanout-schematic-stages>{{ aggregate_schematic_stage_connectors_json|safe }}</script>
-      </div>
-      {% if not aggregate_has_shuffle_crossover %}
-        <div class="small text-warning mb-3">
-          Resolved transfer maps for this trace are position-identity mappings, so no shuffle crossover is present in the modeled path data.
-        </div>
-      {% endif %}
-    </div>
-  </div>
+  {% with visual_source_title="Source: "|add:selected_interface.device.name|add:"-"|add:selected_interface.name %}
+  {% if consolidate_requested %}
+    {% if not aggregate_has_shuffle_crossover %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Fanout Trace (Consolidated By 200G Sub-interface)' body_id='fanout-visual-trace-body' trace_mode=trace_mode source_title=visual_source_title source_url=selected_interface.get_absolute_url paths_json=aggregate_schematic_paths_json stages_json=aggregate_schematic_stage_connectors_json fixture_key='interface-fanout' warning_extra_class='mb-3' warning_text='Resolved transfer maps for this trace are position-identity mappings, so no shuffle crossover is present in the modeled path data.' only %}
+    {% else %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Fanout Trace (Consolidated By 200G Sub-interface)' body_id='fanout-visual-trace-body' trace_mode=trace_mode source_title=visual_source_title source_url=selected_interface.get_absolute_url paths_json=aggregate_schematic_paths_json stages_json=aggregate_schematic_stage_connectors_json fixture_key='interface-fanout' only %}
+    {% endif %}
+  {% else %}
+    {% if not aggregate_has_shuffle_crossover %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Fanout Trace' body_id='fanout-visual-trace-body' trace_mode=trace_mode source_title=visual_source_title source_url=selected_interface.get_absolute_url paths_json=aggregate_schematic_paths_json stages_json=aggregate_schematic_stage_connectors_json fixture_key='interface-fanout' warning_extra_class='mb-3' warning_text='Resolved transfer maps for this trace are position-identity mappings, so no shuffle crossover is present in the modeled path data.' only %}
+    {% else %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Fanout Trace' body_id='fanout-visual-trace-body' trace_mode=trace_mode source_title=visual_source_title source_url=selected_interface.get_absolute_url paths_json=aggregate_schematic_paths_json stages_json=aggregate_schematic_stage_connectors_json fixture_key='interface-fanout' only %}
+    {% endif %}
+  {% endif %}
+  {% endwith %}
   <div class="card mb-3" data-fanout-details-section>
     <div class="card-header">
       Per-Strand Trace Details{% if consolidate_requested %} (Consolidated By 200G Sub-interface){% endif %}
@@ -343,5 +317,5 @@
 
 {% block javascript %}
   {{ block.super }}
-  <script src="{% static 'netbox_plant_graph/fanout_trace.js' %}?v=20260521-fanout-zoom-sync"></script>
+  {% include 'netbox_plant_graph/includes/visual_trace_scripts.html' %}
 {% endblock %}

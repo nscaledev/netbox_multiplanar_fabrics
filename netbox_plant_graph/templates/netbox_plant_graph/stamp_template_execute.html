@@ -76,12 +76,243 @@
               {% endfor %}
             </div>
             <div class="btn-list mt-3">
-              <button type="submit" class="btn btn-primary">
+              <button type="submit" class="btn btn-primary" {% if not v25_preview.is_valid %}disabled aria-disabled="true"{% endif %}>
                 <i class="mdi mdi-play" aria-hidden="true"></i> Execute Stamp
               </button>
               <a href="{{ template.get_absolute_url }}" class="btn btn-outline-secondary">Cancel</a>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>V2.5 Operator Preview</strong>
+          {% if v25_preview.is_valid %}
+            <span class="badge text-bg-success">Valid to apply</span>
+          {% else %}
+            <span class="badge text-bg-danger">Apply blocked</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          <div class="text-secondary small mb-2">Action Counts</div>
+          <div class="row g-2 mb-3">
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Validation</div>
+                {% if v25_preview.is_valid %}
+                  <span class="badge text-bg-success">Valid</span>
+                {% else %}
+                  <span class="badge text-bg-danger">Blocked</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Errors</div>
+                <span class="badge {% if v25_summary.error_count %}text-bg-danger{% else %}text-bg-success{% endif %}">{{ v25_summary.error_count }}</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Warnings</div>
+                <span class="badge {% if v25_summary.warning_count %}text-bg-warning{% else %}text-bg-success{% endif %}">{{ v25_summary.warning_count }}</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Create</div>
+                <span class="badge text-bg-primary">{{ v25_summary.create_count }}</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Update</div>
+                <span class="badge text-bg-info">{{ v25_summary.update_count }}</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Skip</div>
+                <span class="badge text-bg-secondary">{{ v25_summary.skip_count }}</span>
+              </div>
+            </div>
+          </div>
+
+          {% if v25_blocking_issues %}
+            <div class="alert alert-danger">
+              <strong>Apply is blocked.</strong>
+              Resolve the following preview errors before executing this stamp.
+              <ul class="mb-0 mt-2">
+                {% for issue in v25_blocking_issues %}
+                  <li><code>{{ issue.code }}</code> at <code>{{ issue.path }}</code>: {{ issue.message }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+
+          <details class="card mb-3" open>
+            <summary class="card-header"><strong>V2.5 Architecture Gate</strong></summary>
+            <div class="table-responsive">
+              <table class="table table-hover mb-0">
+                <tbody>
+                  {% if v25_preview.architecture_gate %}
+                    <tr><th>Fixture Valid</th><td>{{ v25_preview.architecture_gate.fixture_valid }}</td></tr>
+                    <tr><th>Fixture Errors</th><td>{{ v25_preview.architecture_gate.fixture_error_count }}</td></tr>
+                    <tr><th>Template Architecture</th><td>{{ v25_preview.architecture_gate.template_architecture_slug|default:"-" }} {{ v25_preview.architecture_gate.template_architecture_version|default:"" }}</td></tr>
+                    <tr><th>Target Source</th><td>{{ v25_preview.architecture_gate.target_source }}</td></tr>
+                    <tr><th>Target Architecture</th><td>{{ v25_preview.architecture_gate.target_architecture_slug|default:"-" }} {{ v25_preview.architecture_gate.target_architecture_version|default:"" }}</td></tr>
+                    <tr><th>Persisted Schema</th><td>{{ v25_preview.architecture_gate.persisted_schema_valid|default_if_none:"Not checked" }}</td></tr>
+                    <tr><th>Compatibility</th><td>{{ v25_preview.architecture_gate.compatibility_status }} ({{ v25_preview.architecture_gate.compatibility_issue_count }})</td></tr>
+                  {% else %}
+                    <tr><td class="text-secondary">Architecture gate was not evaluated because the template spec did not pass initial validation.</td></tr>
+                  {% endif %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <details class="card mb-3" open>
+            <summary class="card-header d-flex justify-content-between align-items-center">
+              <strong>Validation Issues</strong>
+              <span>
+                <span class="badge {% if v25_summary.error_count %}text-bg-danger{% else %}text-bg-success{% endif %}">{{ v25_summary.error_count }} errors</span>
+                <span class="badge {% if v25_summary.warning_count %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ v25_summary.warning_count }} warnings</span>
+              </span>
+            </summary>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Code</th>
+                    <th>Path</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for issue in v25_preview.issues %}
+                    <tr>
+                      <td><span class="badge {% if issue.severity == 'error' %}text-bg-danger{% elif issue.severity == 'warning' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ issue.severity }}</span></td>
+                      <td><code>{{ issue.code }}</code></td>
+                      <td><code>{{ issue.path }}</code></td>
+                      <td>{{ issue.message }}</td>
+                    </tr>
+                  {% empty %}
+                    <tr><td colspan="4" class="text-success">No validation issues.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <details class="card mb-3" open>
+            <summary class="card-header d-flex justify-content-between align-items-center">
+              <strong>Change Plan</strong>
+              <span>
+                <span class="badge text-bg-primary">{{ v25_summary.create_count }} create</span>
+                <span class="badge text-bg-info">{{ v25_summary.update_count }} update</span>
+                <span class="badge text-bg-secondary">{{ v25_summary.skip_count }} skip</span>
+              </span>
+            </summary>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0">
+                <thead>
+                  <tr>
+                    <th>Action</th>
+                    <th>Object</th>
+                    <th>Identity</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for change in v25_preview.changes|slice:":40" %}
+                    <tr>
+                      <td><span class="badge {% if change.action == 'create' %}text-bg-primary{% elif change.action == 'update' %}text-bg-info{% elif change.action == 'skip' %}text-bg-secondary{% else %}text-bg-light{% endif %}">{{ change.action }}</span></td>
+                      <td>{{ change.object_type }}</td>
+                      <td><code>{{ change.identity }}</code></td>
+                      <td>{{ change.summary }}</td>
+                    </tr>
+                  {% empty %}
+                    <tr><td colspan="4" class="text-secondary">No changes are available for this preview.</td></tr>
+                  {% endfor %}
+                  {% if v25_preview.changes|length > 40 %}
+                    <tr><td colspan="4" class="text-secondary">Showing first 40 of {{ v25_preview.changes|length }} changes.</td></tr>
+                  {% endif %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <div class="row g-3">
+            <div class="col-lg-7">
+              <details class="card mb-0">
+                <summary class="card-header d-flex justify-content-between align-items-center">
+                  <strong>Name Pattern Samples</strong>
+                  <span class="badge text-bg-light">{{ v25_summary.sample_count }} samples</span>
+                </summary>
+                <div class="table-responsive">
+                  <table class="table table-sm table-hover mb-0">
+                    <thead>
+                      <tr>
+                        <th>Object</th>
+                        <th>Address</th>
+                        <th>Name</th>
+                        <th>Exists</th>
+                        <th>Collision</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for sample in v25_preview.name_pattern_samples|slice:":24" %}
+                        <tr>
+                          <td>{{ sample.object_type }}</td>
+                          <td><code>{{ sample.address }}</code></td>
+                          <td>{{ sample.name }}</td>
+                          <td>{{ sample.exists }}</td>
+                          <td>
+                            {% if sample.collision %}
+                              <span class="badge text-bg-danger">Yes</span>
+                            {% else %}
+                              <span class="badge text-bg-success">No</span>
+                            {% endif %}
+                          </td>
+                        </tr>
+                      {% empty %}
+                        <tr><td colspan="5" class="text-secondary">No name pattern samples are available.</td></tr>
+                      {% endfor %}
+                      {% if v25_preview.name_pattern_samples|length > 24 %}
+                        <tr><td colspan="5" class="text-secondary">Showing first 24 of {{ v25_preview.name_pattern_samples|length }} samples.</td></tr>
+                      {% endif %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
+            <div class="col-lg-5">
+              <details class="card mb-0" open>
+                <summary class="card-header"><strong>Recovery Posture</strong></summary>
+                <div class="table-responsive">
+                  <table class="table table-hover mb-0">
+                    <tbody>
+                      <tr><th>Valid To Apply</th><td>{{ v25_preview.is_valid }}</td></tr>
+                      <tr><th>Operation Key</th><td><code>{{ v25_preview.operation_key }}</code></td></tr>
+                      <tr><th>Retry</th><td>{{ v25_preview.retry.classification }} / {{ v25_preview.retry.strategy }}</td></tr>
+                      <tr><th>Retry Supported</th><td>{{ v25_preview.retry.supported }}</td></tr>
+                      <tr><th>Rollback</th><td>{{ v25_preview.rollback.strategy }}</td></tr>
+                      <tr><th>Rollback Supported</th><td>{{ v25_preview.rollback.supported }}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-body">
+                  <p class="mb-0 text-secondary">{{ v25_preview.rollback.message }}</p>
+                </div>
+              </details>
+            </div>
+          </div>
         </div>
       </div>
     </div>

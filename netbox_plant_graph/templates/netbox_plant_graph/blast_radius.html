@@ -2,7 +2,313 @@
 
 {% block content %}
 <h1>Physical Cable Blast Radius</h1>
+{% include 'netbox_plant_graph/includes/integrity_gate_banner.html' %}
 <div class="card mb-3">
+  <div class="card-header">Operator Failure Scenario Selector</div>
+  <div class="card-body">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label" for="operator_failure_mode">Failure Scenario</label>
+        <select class="form-select" id="operator_failure_mode" name="failure_mode">
+          {% for choice in failure_mode_choices %}
+            <option value="{{ choice.value }}"{% if choice.value == query.failure_mode %} selected{% endif %}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="site">Site</label>
+        <select id="site" name="site" class="form-select">
+          <option value="">All sites</option>
+          {% for site in sites %}
+            <option value="{{ site.pk }}"{% if query.site == site.pk|stringformat:"s" %} selected{% endif %}>{{ site.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="device_type">Device Type</label>
+        <select id="device_type" name="device_type" class="form-select">
+          <option value="">Any type</option>
+          {% for device_type in device_types %}
+            <option value="{{ device_type.pk }}"{% if query.device_type == device_type.pk|stringformat:"s" %} selected{% endif %}>
+              {{ device_type.manufacturer.name }} {{ device_type.model }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="device_role">Device Role</label>
+        <select id="device_role" name="device_role" class="form-select">
+          <option value="">Any role</option>
+          {% for role in device_roles %}
+            <option value="{{ role.pk }}"{% if query.device_role == role.pk|stringformat:"s" %} selected{% endif %}>{{ role.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="device_q">Device Name Contains</label>
+        <input id="device_q" name="device_q" type="search" class="form-control" value="{{ query.device_q }}" placeholder="Partial device name">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="rack_label">Rack Label</label>
+        <input id="rack_label" name="rack_label" type="search" class="form-control" value="{{ query.rack_label }}" placeholder="Rack name">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="rack_row">Rack Row</label>
+        <input id="rack_row" name="rack_row" type="search" class="form-control" value="{{ query.rack_row }}" placeholder="Rack location">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="rack_elevation">Rack Elevation</label>
+        <input id="rack_elevation" name="rack_elevation" type="search" class="form-control" value="{{ query.rack_elevation }}" placeholder="Device U position">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="device_id">Matching Device</label>
+        <select id="device_id" name="device_id" class="form-select">
+          <option value="">Select device</option>
+          {% for device in device_candidates %}
+            <option value="{{ device.pk }}"{% if selected_device and device.pk == selected_device.pk %} selected{% endif %}>
+              {{ device.name }}{% if device.rack %} / {{ device.rack.name }}{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {% if selected_device %}
+        <div class="col-12">
+          <div class="border rounded p-3">
+            <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+              <div>
+                <div class="fw-semibold">{{ selected_device.name }}</div>
+                <div class="small text-muted">
+                  {{ selected_device.site.name }}
+                  {% if selected_device.rack %} / {{ selected_device.rack.name }}{% endif %}
+                  {% if selected_device.position %} / U{{ selected_device.position }}{% endif %}
+                </div>
+              </div>
+              <span class="badge text-bg-light">{{ device_cable_rows|length }} attached interface rows</span>
+            </div>
+
+            {% if query.failure_mode == 'cable_cut' %}
+              <div class="border rounded p-3 mb-3">
+                <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+                  <div>
+                    <div class="fw-semibold">Select Cable Assemblies</div>
+                    <div class="small text-muted">Choose one or more physical cable assemblies attached to this device.</div>
+                  </div>
+                  <span class="badge text-bg-light">{{ device_cable_choices|length }} selectable cable assemblies</span>
+                </div>
+                <div class="row g-2">
+                  {% for choice in device_cable_choices %}
+                    {% with cable=choice.cable cable_pk=choice.cable.pk|stringformat:"s" %}
+                      <div class="col-xl-4 col-lg-6">
+                        <div class="border rounded p-2 h-100">
+                          <div class="form-check">
+                            <input
+                              class="form-check-input"
+                              type="checkbox"
+                              name="cable_assembly_ids"
+                              value="{{ cable.pk }}"
+                              id="device-cable-{{ cable.pk }}"
+                              {% if cable_pk in selected_cable_assembly_ids %}checked{% endif %}
+                            >
+                            <label class="form-check-label fw-semibold" for="device-cable-{{ cable.pk }}">
+                              {{ cable.cable_id }}
+                            </label>
+                          </div>
+                          <div class="small text-muted ms-4">
+                            {{ cable.site }}
+                            {% if choice.interfaces %}
+                              / {{ choice.interfaces|join:", " }}
+                            {% endif %}
+                          </div>
+                          {% if cable.model_id or cable.serial_number or choice.endpoint_labels %}
+                            <div class="small text-muted ms-4">
+                              {% if cable.model_id %}{{ cable.model_id }}{% endif %}
+                              {% if cable.serial_number %}{% if cable.model_id %} / {% endif %}SN {{ cable.serial_number }}{% endif %}
+                              {% if choice.endpoint_labels %}
+                                {% if cable.model_id or cable.serial_number %} / {% endif %}
+                                {{ choice.endpoint_labels|join:", " }}
+                              {% endif %}
+                            </div>
+                          {% endif %}
+                          {% if cable.url %}
+                            <div class="ms-4 mt-1">
+                              <a class="small" href="{{ cable.url }}">View cable assembly</a>
+                            </div>
+                          {% endif %}
+                        </div>
+                      </div>
+                    {% endwith %}
+                  {% empty %}
+                    <div class="col-12 text-muted">No selectable cable assemblies were found for this device.</div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% elif query.failure_mode == 'osfp_transceiver_unseat' %}
+              <div class="border rounded p-3 mb-3">
+                <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+                  <div>
+                    <div class="fw-semibold">Select OSFP Transceivers</div>
+                    <div class="small text-muted">Choose one or more physical interfaces to model as unseated transceivers. All MPO12 connectors under each selected interface are disconnected.</div>
+                  </div>
+                  <span class="badge text-bg-light">{{ device_interface_choices|length }} selectable interfaces</span>
+                </div>
+                <div class="row g-2">
+                  {% for choice in device_interface_choices %}
+                    {% with interface_pk=choice.interface.pk|stringformat:"s" %}
+                      <div class="col-xl-4 col-lg-6">
+                        <div class="border rounded p-2 h-100">
+                          <div class="form-check">
+                            <input
+                              class="form-check-input"
+                              type="checkbox"
+                              name="interface_ids"
+                              value="{{ choice.interface.pk }}"
+                              id="device-interface-{{ choice.interface.pk }}"
+                              {% if interface_pk in selected_interface_ids %}checked{% endif %}
+                            >
+                            <label class="form-check-label fw-semibold" for="device-interface-{{ choice.interface.pk }}">
+                              {{ choice.interface.display }}
+                            </label>
+                          </div>
+                          <div class="small text-muted ms-4">
+                            {% if choice.endpoint_labels %}
+                              MPOs: {{ choice.endpoint_labels|join:", " }}
+                            {% else %}
+                              No MPO endpoints found
+                            {% endif %}
+                          </div>
+                          <div class="small text-muted ms-4">{{ choice.cable_total }} attached cable assemblies</div>
+                          {% if choice.interface.url %}
+                            <div class="ms-4 mt-1">
+                              <a class="small" href="{{ choice.interface.url }}">View interface</a>
+                            </div>
+                          {% endif %}
+                        </div>
+                      </div>
+                    {% endwith %}
+                  {% empty %}
+                    <div class="col-12 text-muted">No selectable OSFP interfaces were found for this device.</div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% elif query.failure_mode == 'connector_unplug' %}
+              <div class="border rounded p-3 mb-3">
+                <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+                  <div>
+                    <div class="fw-semibold">Select MPO Connectors</div>
+                    <div class="small text-muted">Choose one or more device-side MPO connectors to model as unplugged.</div>
+                  </div>
+                  <span class="badge text-bg-light">{{ device_connector_choices|length }} selectable connectors</span>
+                </div>
+                <div class="row g-2">
+                  {% for choice in device_connector_choices %}
+                    {% with connector_pk=choice.endpoint.pk|stringformat:"s" %}
+                      <div class="col-xl-4 col-lg-6">
+                        <div class="border rounded p-2 h-100">
+                          <div class="form-check">
+                            <input
+                              class="form-check-input"
+                              type="checkbox"
+                              name="connector_endpoint_ids"
+                              value="{{ choice.endpoint.pk }}"
+                              id="device-connector-{{ choice.endpoint.pk }}"
+                              {% if connector_pk in selected_connector_endpoint_ids %}checked{% endif %}
+                            >
+                            <label class="form-check-label fw-semibold" for="device-connector-{{ choice.endpoint.pk }}">
+                              {{ choice.endpoint.display }}
+                            </label>
+                          </div>
+                          {% if choice.interfaces %}
+                            <div class="small text-muted ms-4">{{ choice.interfaces|join:", " }}</div>
+                          {% endif %}
+                          {% if choice.cables %}
+                            <div class="small text-muted ms-4">{{ choice.cables|join:", " }}</div>
+                          {% endif %}
+                          {% if choice.endpoint.url %}
+                            <div class="ms-4 mt-1">
+                              <a class="small" href="{{ choice.endpoint.url }}">View connector</a>
+                            </div>
+                          {% endif %}
+                        </div>
+                      </div>
+                    {% endwith %}
+                  {% empty %}
+                    <div class="col-12 text-muted">No selectable MPO connectors were found for this device.</div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Interface</th>
+                    <th>Plant-Graph Connectors</th>
+                    <th>Cable Assemblies</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in device_cable_rows %}
+                    <tr>
+                      <td>
+                        {% if row.interface.url %}
+                          <a href="{{ row.interface.url }}">{{ row.interface.display }}</a>
+                        {% else %}
+                          {{ row.interface.display }}
+                        {% endif %}
+                      </td>
+                      <td>
+                        {% for endpoint_label in row.endpoint_labels %}
+                          <div class="small text-muted">{{ endpoint_label }}</div>
+                        {% empty %}
+                          <span class="text-muted">-</span>
+                        {% endfor %}
+                      </td>
+                      <td>
+                        {% for cable in row.cables %}
+                          <div class="mb-1">
+                            {% if cable.url %}
+                              <a href="{{ cable.url }}">{{ cable.display }}</a>
+                            {% else %}
+                              {{ cable.display }}
+                            {% endif %}
+                            {% if cable.model_id or cable.serial_number %}
+                              <span class="small text-muted">
+                                {% if cable.model_id %}{{ cable.model_id }}{% endif %}
+                                {% if cable.serial_number %} / SN {{ cable.serial_number }}{% endif %}
+                              </span>
+                            {% endif %}
+                          </div>
+                        {% empty %}
+                          <span class="text-muted">No cable assemblies found</span>
+                        {% endfor %}
+                      </td>
+                    </tr>
+                  {% empty %}
+                    <tr>
+                      <td colspan="3" class="text-muted">No plant-graph cable assemblies are attached to this device.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-outline-secondary w-100">Update Device List</button>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-primary w-100">Calculate Blast Radius</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<details class="card mb-3">
+  <summary class="card-header fw-semibold">Advanced Component Selector</summary>
   <div class="card-body">
     <form method="get" class="row g-3 align-items-end">
       {% if fabrics %}
@@ -53,7 +359,7 @@
       </div>
     </form>
   </div>
-</div>
+</details>
 
 {% if error %}
   <div class="alert alert-danger">{{ error }}</div>
@@ -61,6 +367,129 @@
 
 {% with blast_radius|default:result as radius %}
 {% if radius and radius.mode == 'scenario' %}
+  <div class="card mb-3">
+    <div class="card-header">Save Impact Report</div>
+    <div class="card-body">
+      <form method="post" class="row g-3 align-items-end">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save_impact_report">
+        <input type="hidden" name="failure_mode" value="{{ query.failure_mode }}">
+        <input type="hidden" name="fabric" value="{% if selected_fabric %}{{ selected_fabric.pk }}{% else %}{{ query.fabric }}{% endif %}">
+        <input type="hidden" name="site" value="{{ query.site }}">
+        <input type="hidden" name="device_type" value="{{ query.device_type }}">
+        <input type="hidden" name="device_role" value="{{ query.device_role }}">
+        <input type="hidden" name="rack_label" value="{{ query.rack_label }}">
+        <input type="hidden" name="rack_row" value="{{ query.rack_row }}">
+        <input type="hidden" name="rack_elevation" value="{{ query.rack_elevation }}">
+        <input type="hidden" name="device_q" value="{{ query.device_q }}">
+        <input type="hidden" name="device_id" value="{{ query.device_id }}">
+        <input type="hidden" name="cable_assembly_id" value="{{ query.cable_assembly_id }}">
+        <input type="hidden" name="connector_endpoint_id" value="{{ query.connector_endpoint_id }}">
+        {% for cable_id in query.cable_assembly_ids %}
+          <input type="hidden" name="cable_assembly_ids" value="{{ cable_id }}">
+        {% endfor %}
+        {% for interface_id in query.interface_ids %}
+          <input type="hidden" name="interface_ids" value="{{ interface_id }}">
+        {% endfor %}
+        {% for endpoint_id in query.connector_endpoint_ids %}
+          <input type="hidden" name="connector_endpoint_ids" value="{{ endpoint_id }}">
+        {% endfor %}
+        <div class="col-lg-9 col-md-8">
+          <label class="form-label" for="report_name">Report Name</label>
+          <input id="report_name" name="report_name" class="form-control" value="{{ radius.failure_mode_label }} - {{ radius.target.display }}">
+        </div>
+        <div class="col-lg-3 col-md-4 d-grid">
+          <button type="submit" class="btn btn-outline-primary">Save Report Snapshot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if radius.impacted_device_hierarchy %}
+    <div class="card mb-3">
+      <div class="card-header">Impacted Device Hierarchy</div>
+      <div class="card-body">
+        {% for site_group in radius.impacted_device_hierarchy %}
+          <div class="mb-3">
+            <div class="fw-semibold">
+              {% if site_group.site.url %}
+                <a href="{{ site_group.site.url }}">{{ site_group.site.display }}</a>
+              {% else %}
+                {{ site_group.site.display }}
+              {% endif %}
+            </div>
+            {% for rack_group in site_group.rack_groups %}
+              <div class="border rounded p-3 mt-2">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <span class="badge text-bg-{{ rack_group.impact_class }}">{{ rack_group.impact_label }}</span>
+                  <span class="fw-semibold">
+                    {% if rack_group.rack.url %}
+                      <a href="{{ rack_group.rack.url }}">{{ rack_group.rack.display }}</a>
+                    {% else %}
+                      {{ rack_group.rack.display }}
+                    {% endif %}
+                  </span>
+                </div>
+                {% for device in rack_group.devices %}
+                  <div class="border-top pt-2 mt-2">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                      <span class="badge text-bg-{{ device.impact_class }}">{{ device.impact_label }}</span>
+                      <span class="fw-semibold">
+                        {% if device.device.url %}
+                          <a href="{{ device.device.url }}">{{ device.device.display }}</a>
+                        {% else %}
+                          {{ device.device.display }}
+                        {% endif %}
+                      </span>
+                      <span class="small text-muted">{{ device.impacted_lane_total }} lanes / {{ device.impacted_path_total }} paths</span>
+                      {% if device.container %}
+                        <span class="small text-muted">Container: {{ device.container.display }} (very low)</span>
+                      {% endif %}
+                    </div>
+                    <div class="table-responsive mt-2">
+                      <table class="table table-sm mb-0">
+                        <thead>
+                          <tr>
+                            <th>Interface / Port</th>
+                            <th>Status</th>
+                            <th>Impacted Lanes</th>
+                            <th>Impacted Paths</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {% for interface in device.interfaces %}
+                            <tr>
+                              <td>
+                                {% if interface.interface.url %}
+                                  <a href="{{ interface.interface.url }}">{{ interface.interface.display }}</a>
+                                {% else %}
+                                  {{ interface.interface.display }}
+                                {% endif %}
+                              </td>
+                              <td><span class="badge text-bg-{{ interface.impact_class }}">{{ interface.impact_label }}</span></td>
+                              <td>{{ interface.impacted_lane_total }}</td>
+                              <td>{{ interface.impacted_path_total }}</td>
+                              <td>
+                                {% if interface.sample_path_url %}
+                                  <a class="btn btn-sm btn-outline-primary" href="{{ interface.sample_path_url }}">Path</a>
+                                {% endif %}
+                              </td>
+                            </tr>
+                          {% endfor %}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
   <div class="row">
     <div class="col-lg-4 mb-3">
       <div class="card h-100">
@@ -308,7 +737,7 @@
       </div>
     </div>
   </div>
-{% elif query.connector_endpoint_id or query.cable_assembly_id %}
+{% elif query.connector_endpoint_id or query.connector_endpoint_ids or query.cable_assembly_id or query.cable_assembly_ids or query.interface_ids %}
   <div class="alert alert-warning">Blast-radius computation returned no data for the selected failure scenario.</div>
 {% elif query.target_id %}
   <div class="alert alert-warning">Blast-radius computation returned no data for the selected target.</div>

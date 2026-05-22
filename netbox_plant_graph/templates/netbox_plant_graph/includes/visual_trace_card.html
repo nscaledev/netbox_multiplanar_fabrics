@@ -1,0 +1,75 @@
+<div class="card mb-3" data-visual-trace-component="mpf-visual-trace">
+  <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <span>{{ title }}</span>
+    <div class="btn-list">
+      <button
+        type="button"
+        class="btn btn-sm btn-outline-secondary"
+        data-fanout-toggle-visual
+        aria-controls="{{ body_id }}"
+        aria-expanded="true"
+      >
+        Hide
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-primary" data-fanout-export-svg>
+        Export SVG
+      </button>
+    </div>
+  </div>
+  <div class="card-body" id="{{ body_id }}" data-fanout-visual-body>
+    <div
+      class="fanout-schematic mb-3"
+      data-fanout-schematic
+      data-fanout-trace-mode="{{ trace_mode }}"
+      data-fanout-source-title="{{ source_title }}"
+      data-fanout-source-url="{{ source_url }}"
+      data-fanout-fixture-key="{{ fixture_key }}"
+    >
+      <svg
+        class="fanout-schematic__svg"
+        data-fanout-schematic-svg
+        viewBox="0 0 980 280"
+        aria-hidden="false"
+        focusable="true"
+      ></svg>
+      <script type="application/json" data-fanout-schematic-data>{{ paths_json|safe }}</script>
+      <script type="application/json" data-fanout-schematic-stages>{{ stages_json|safe }}</script>
+    </div>
+    {% if warning_text %}
+      <div class="small text-warning {{ warning_extra_class }}">
+        {{ warning_text }}
+      </div>
+    {% endif %}
+    <details class="fanout-diagnostics border rounded p-2 mt-3" data-fanout-diagnostics>
+      <summary class="fanout-details-toggle">Visual Trace Diagnostics</summary>
+      <div class="table-responsive mt-2">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr>
+              <th class="text-nowrap">Render Signature</th>
+              <td><code data-fanout-diagnostic-value="render-signature">pending render</code></td>
+            </tr>
+            <tr>
+              <th class="text-nowrap">Path Count</th>
+              <td data-fanout-diagnostic-value="path-count">pending</td>
+            </tr>
+            <tr>
+              <th class="text-nowrap">Stage Count</th>
+              <td data-fanout-diagnostic-value="stage-count">pending</td>
+            </tr>
+            <tr>
+              <th class="text-nowrap">Cable Span Count</th>
+              <td data-fanout-diagnostic-value="cable-span-count">pending</td>
+            </tr>
+            <tr>
+              <th class="text-nowrap">Golden Harness</th>
+              <td data-fanout-diagnostic-value="golden-harness-status">
+                Browser diagnostic hooks available; CI golden regression harness pending.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+</div>

@@ -1,0 +1,54 @@
+{% if readiness %}
+  <div class="card mb-3" data-fabric-readiness-summary>
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <strong>Fabric Readiness</strong>
+      <span class="badge {{ readiness.badge_class }}">{{ readiness.label }}</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="border rounded p-2 h-100">
+            <div class="small text-secondary">Topology Integrity</div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <span class="badge {{ readiness.topology.badge_class }}">{{ readiness.topology.label }}</span>
+              <span class="small text-secondary">{{ readiness.topology.finding_count }} findings</span>
+              <span class="small text-secondary">{{ readiness.topology.path_blocking_count }} path-blocking</span>
+            </div>
+            {% if readiness.topology.message %}
+              <div class="small text-muted mt-1">{{ readiness.topology.message }}</div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-2 h-100">
+            <div class="small text-secondary">Architecture Contract</div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <span class="badge {{ readiness.architecture.badge_class }}">{{ readiness.architecture.schema_status }}</span>
+              <span class="small text-secondary">{{ readiness.architecture.compatibility_status }}</span>
+            </div>
+            <div class="small text-muted mt-1">
+              {{ readiness.architecture.schema_error_count }} schema errors,
+              {{ readiness.architecture.compatibility_issue_count }} compatibility issues
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-2 h-100">
+            <div class="small text-secondary">Drilldowns</div>
+            <div class="d-flex flex-wrap gap-2 mt-1">
+              <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.topology.audit_url }}">Audit Dashboard</a>
+              {% if readiness.topology.run_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.topology.run_url }}">Latest Run</a>
+              {% endif %}
+              {% if readiness.architecture.url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.architecture.url }}">Architecture</a>
+              {% endif %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.operations_url }}">Operations</a>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.path_query_url }}">Path Query</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}

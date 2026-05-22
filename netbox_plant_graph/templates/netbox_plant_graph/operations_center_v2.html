@@ -5,6 +5,62 @@
 {% block content %}
   <h1>Operations Center</h1>
 
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:import_preview' %}">Import Preview</a>
+    <a class="btn btn-outline-primary" href="{% url 'plugins:netbox_plant_graph:impact_reports' %}">Impact Reports</a>
+  </div>
+
+  <div class="card mb-3" data-operations-readiness-summary>
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <strong>Fabric Readiness</strong>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'plugins:netbox_plant_graph:audit_dashboard' %}">Audit Dashboard</a>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Fabric</th>
+            <th>Overall</th>
+            <th>Topology Integrity</th>
+            <th>Architecture Contract</th>
+            <th>Drilldowns</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for readiness in readiness_rows %}
+            <tr>
+              <td><a href="{{ readiness.fabric.get_absolute_url }}">{{ readiness.fabric }}</a></td>
+              <td><span class="badge {{ readiness.badge_class }}">{{ readiness.label }}</span></td>
+              <td>
+                <span class="badge {{ readiness.topology.badge_class }}">{{ readiness.topology.label }}</span>
+                <span class="small text-secondary ms-1">{{ readiness.topology.finding_count }} findings / {{ readiness.topology.path_blocking_count }} path-blocking</span>
+              </td>
+              <td>
+                {% if readiness.architecture.url %}
+                  <a href="{{ readiness.architecture.url }}">{{ readiness.architecture.label }}</a>
+                {% else %}
+                  {{ readiness.architecture.label }}
+                {% endif %}
+                <div class="small text-secondary">
+                  {{ readiness.architecture.schema_status }} / {{ readiness.architecture.compatibility_status }}
+                </div>
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-2">
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.topology.audit_url }}">Audit</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.operations_url }}">Ops</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ readiness.path_query_url }}">Path Query</a>
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-secondary">No fabrics available for readiness checks.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="card mb-3">
     <div class="card-header"><strong>Execute Profile</strong></div>
     <div class="card-body">
@@ -42,6 +98,36 @@
             </tr>
           {% empty %}
             <tr><td colspan="6" class="text-secondary">No operation runs yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mt-3">
+    <div class="card-header"><strong>Recent Impact Reports</strong></div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Scenario</th>
+            <th>Fabric</th>
+            <th>Impacted Devices</th>
+            <th>Impacted Paths</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in impact_report_runs %}
+            <tr>
+              <td><a href="{{ run.get_absolute_url }}">#{{ run.pk }}</a></td>
+              <td>{{ run.result.scenario_type|default:"-" }}</td>
+              <td>{% if run.fabric %}<a href="{{ run.fabric.get_absolute_url }}">{{ run.fabric }}</a>{% else %}-{% endif %}</td>
+              <td>{{ run.metadata.impacted_device_count|default:run.result.summary.impacted_device_count|default:"0" }}</td>
+              <td>{{ run.metadata.impacted_path_count|default:run.result.summary.impacted_path_count|default:"0" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-secondary">No saved impact reports yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

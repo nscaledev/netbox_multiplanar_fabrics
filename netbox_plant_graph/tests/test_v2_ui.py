@@ -10,6 +10,7 @@ from netbox_plant_graph.models import (
     CableAssembly,
     Endpoint,
     Fabric,
+    FabricArchitecture,
     FabricNode,
     OperationRun,
     OpticalLane,
@@ -19,7 +20,7 @@ from netbox_plant_graph.models import (
     SuppressionRule,
 )
 from netbox_plant_graph.navigation import menu
-from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
+from netbox_plant_graph.services.architecture import ARCHITECTURE_SLUG, ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.resolver import resolve_optical_lane_path
 from netbox_plant_graph.services.stamping import execute_stamp_template, stamp_roce_4plane_mini_fabric
 from netbox_plant_graph.v2_registry import V2_OBJECT_SPECS
@@ -76,7 +77,7 @@ class V2UITestCase(TestCase):
         self.assertEqual(menu.label, 'Multi-planar v2')
 
         group_labels = [group.label for group in menu.groups]
-        self.assertIn('Multi-planar v2', group_labels)
+        self.assertEqual(group_labels, ['Operate', 'Build & Run', 'Audit', 'Model Inventory'])
 
         item_labels = [
             item.link_text
@@ -84,18 +85,42 @@ class V2UITestCase(TestCase):
             for item in group.items
         ]
         for expected_item in (
-            'Overview',
+            'Fabric Overview',
+            'Interface Fanout Trace',
+            'Path Query',
+            'Physical Cable Blast Radius',
+            'Onboard Fabric',
+            'Operations Center',
+            'Import Preview',
+            'Impact Reports',
+            'Audit Dashboard',
+            'Audit Triage',
+            'Exception Requests',
             'Fabrics',
             'Architectures',
             'Cable Assemblies',
-            'Interface Fanout Trace',
-            'Lane Workspace',
-            'Policy Dashboard',
-            'Coordinate Layout',
-            'Operations Center',
+            'Lane Inventory',
+            'Model Catalog',
         ):
             with self.subTest(expected_item=expected_item):
                 self.assertIn(expected_item, item_labels)
+        for removed_item in (
+            'Graph Overview',
+            'Health',
+            'Path Resolver',
+            'Lane Workspace',
+            'Lane Drilldown',
+            'Lane Compare',
+            'Policy Review',
+            'Plane Audit',
+            'Exception Request',
+            'Policy Dashboard',
+            'Overview',
+            'Coordinate Layout',
+        ):
+            with self.subTest(removed_item=removed_item):
+                self.assertNotIn(removed_item, item_labels)
+        self.assertEqual(len(item_labels), len(set(item_labels)))
 
     def test_v2_ui_routes_render(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -123,6 +148,8 @@ class V2UITestCase(TestCase):
             ('policy_dashboard', None),
             ('coordinate_layout', None),
             ('operations_center', None),
+            ('import_preview', None),
+            ('impact_reports', None),
             ('fabric_operations', {'pk': stamp_run.fabric.pk}),
             ('fabric_assign_planes', {'pk': stamp_run.fabric.pk}),
             ('assembly_stamp_wizard', {'pk': fixture.stamp_template.pk}),
@@ -324,11 +351,127 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Stamping & Path Intent Semantics')
         self.assertContains(response, 'Architecture Semantic Metadata')
         self.assertContains(response, 'shuffle_2x2')
-        self.assertContains(response, 'Ingress MPO Position')
-        self.assertContains(response, 'Egress MPO Position')
         self.assertContains(response, 'End-to-End Path Tuples')
         self.assertContains(response, 'Front MPO Position')
         self.assertContains(response, 'Rear MPO Position')
+        self.assertContains(response, 'Schema Validation & Compatibility')
+        self.assertContains(response, 'Built-in Compatibility')
+        self.assertContains(response, 'Channel Map Rows')
+
+    def test_architecture_detail_page_renders_malformed_schema_errors(self):
+        architecture = FabricArchitecture.objects.create(
+            name='Malformed Architecture',
+            slug='malformed-architecture',
+            version='v9',
+            status='active',
+            plane_count=4,
+            metadata={},
+        )
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:fabricarchitecture', kwargs={'pk': architecture.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Schema Validation & Compatibility')
+        self.assertContains(response, 'Invalid')
+        self.assertContains(response, 'persisted_architecture')
+
+    def test_audit_dashboard_can_persist_topology_integrity_run(self):
+        stamped = stamp_roce_4plane_mini_fabric()
+
+        response = self.client.post(
+            reverse('plugins:netbox_plant_graph:audit_dashboard'),
+            {'fabric_id': stamped.fabric.pk},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Topology Integrity Status By Fabric')
+        self.assertContains(response, 'Latest Topology Integrity Drilldown')
+        self.assertTrue(OperationRun.objects.filter(fabric=stamped.fabric, profile='topology_integrity').exists())
+
+    def test_import_preview_dry_run_renders_row_level_conflict(self):
+        response = self.client.post(
+            reverse('plugins:netbox_plant_graph:import_preview'),
+            {
+                'payload_json': json.dumps({'items': [{'kind': 'unsupported_kind', 'name': 'bad'}]}),
+                'action': 'preview',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Plan Summary')
+        self.assertContains(response, 'Row Diffs & Conflicts')
+        self.assertContains(response, 'unsupported kind')
+
+    def test_import_preview_renders_architecture_preflight_gate(self):
+        response = self.client.post(
+            reverse('plugins:netbox_plant_graph:import_preview'),
+            {
+                'payload_json': json.dumps(
+                    {
+                        'architecture_slug': ARCHITECTURE_SLUG,
+                        'architecture_version': 'v9',
+                        'items': [{'kind': 'cable_assembly', 'site': 'missing-site', 'cable_id': 'IGNORED'}],
+                    }
+                ),
+                'action': 'preview',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Architecture Preflight Gate')
+        self.assertContains(response, 'incompatible')
+        self.assertContains(response, 'architecture_version_mismatch')
+        self.assertContains(response, 'architecture preflight failed')
+        self.assertContains(response, 'Preflight Conflict')
+        self.assertContains(response, 'separate from row-level conflicts')
+        self.assertContains(response, 'No row-level diffs were found in the payload.')
+
+    def test_import_preview_renders_provenance_dependencies_and_apply_order(self):
+        site = Site.objects.create(name='Import Test Site', slug='import-test-site')
+        response = self.client.post(
+            reverse('plugins:netbox_plant_graph:import_preview'),
+            {
+                'payload_json': json.dumps(
+                    {
+                        'payload_version': 'v2-test',
+                        'source_label': 'ui-test-import',
+                        'items': [
+                            {
+                                'kind': 'cable_assembly',
+                                'site': site.slug,
+                                'cable_id': 'TRUNK-001',
+                                'source_document': 'worksheet-a',
+                                'source_row': 10,
+                            },
+                            {
+                                'kind': 'cable_assembly',
+                                'site': site.slug,
+                                'cable_id': 'JUMPER-001',
+                                'parent_cable': 'TRUNK-001',
+                                'source_document': 'worksheet-a',
+                                'source_row': 11,
+                            },
+                        ],
+                    }
+                ),
+                'action': 'preview',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Payload Provenance')
+        self.assertContains(response, 'v2-test')
+        self.assertContains(response, 'ui-test-import')
+        self.assertContains(response, 'Dependency Summary')
+        self.assertContains(response, 'Apply Order')
+        self.assertContains(response, 'Row Provenance')
+        self.assertContains(response, 'source_document')
+        self.assertContains(response, 'worksheet-a')
+        self.assertContains(response, 'Dependency / Apply-Order Detail')
+        self.assertContains(response, 'planned')
 
     def test_stamp_template_execute_workflow_previews_and_stamps_fabric(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -339,6 +482,18 @@ class V2UITestCase(TestCase):
         self.assertEqual(get_response.status_code, 200)
         self.assertContains(get_response, 'roce_4plane_mini_proof')
         self.assertContains(get_response, 'optical_lane')
+        self.assertContains(get_response, 'V2.5 Operator Preview')
+        self.assertContains(get_response, 'Valid to apply')
+        self.assertContains(get_response, 'Errors')
+        self.assertContains(get_response, 'Warnings')
+        self.assertContains(get_response, 'V2.5 Architecture Gate')
+        self.assertContains(get_response, 'Action Counts')
+        self.assertContains(get_response, 'Recovery Posture')
+        self.assertContains(get_response, 'Validation Issues')
+        self.assertContains(get_response, 'Change Plan')
+        self.assertContains(get_response, 'Name Pattern Samples')
+        self.assertContains(get_response, 'compatible')
+        self.assertContains(get_response, 'No validation issues.')
 
         post_response = self.client.post(
             url,
@@ -358,6 +513,25 @@ class V2UITestCase(TestCase):
         self.assertContains(post_response, f'>#{stamp_run.pk}<')
         self.assertContains(post_response, stamp_run.get_absolute_url())
         self.assertContains(post_response, fabric.get_absolute_url())
+
+    def test_stamp_template_execute_blocks_invalid_v25_preview(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        url = reverse('plugins:netbox_plant_graph:stamptemplate_execute', kwargs={'pk': fixture.stamp_template.pk})
+        Fabric.objects.create(name='Already claimed', slug='blocked-stamp')
+
+        response = self.client.post(
+            url,
+            {
+                'fabric_name': 'Blocked Stamp',
+                'fabric_slug': 'blocked-stamp',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Stamp apply is blocked until V2.5 preview errors are resolved.')
+        self.assertContains(response, 'Apply is blocked.')
+        self.assertContains(response, 'name_collision_risk')
+        self.assertFalse(StampRun.objects.filter(fabric__slug='blocked-stamp').exists())
 
     def test_stamp_template_execute_workflow_accepts_netbox_source_anchors(self):
         fixture = ensure_roce_4plane_shuffle_architecture()
@@ -480,6 +654,39 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'This field is required when active device creation is enabled.')
         self.assertFalse(Fabric.objects.filter(slug='workflow-invalid-create-proof').exists())
 
+    def test_fabric_readiness_surfaces_render_existing_gate_and_architecture_state(self):
+        result = stamp_roce_4plane_mini_fabric()
+
+        operations_response = self.client.get(reverse('plugins:netbox_plant_graph:operations_center'))
+
+        self.assertEqual(operations_response.status_code, 200)
+        self.assertContains(operations_response, 'data-operations-readiness-summary')
+        self.assertContains(operations_response, 'Fabric Readiness')
+        self.assertContains(operations_response, result.fabric.name)
+        self.assertContains(operations_response, 'Topology Integrity')
+        self.assertContains(operations_response, 'Architecture Contract')
+        self.assertContains(operations_response, 'Not run')
+        self.assertContains(operations_response, 'compatible')
+        self.assertContains(operations_response, reverse('plugins:netbox_plant_graph:audit_dashboard'))
+
+        fabric_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:fabric', kwargs={'pk': result.fabric.pk})
+        )
+
+        self.assertEqual(fabric_response.status_code, 200)
+        self.assertContains(fabric_response, 'data-fabric-readiness-summary')
+        self.assertContains(fabric_response, 'No persisted topology integrity run yet.')
+        self.assertContains(fabric_response, 'Path Query')
+        self.assertContains(fabric_response, result.fabric.architecture.get_absolute_url())
+
+        fabric_operations_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:fabric_operations', kwargs={'pk': result.fabric.pk})
+        )
+
+        self.assertEqual(fabric_operations_response.status_code, 200)
+        self.assertContains(fabric_operations_response, 'data-fabric-readiness-summary')
+        self.assertContains(fabric_operations_response, 'Architecture Contract')
+
     def test_path_query_resolves_selected_lanes(self):
         result = stamp_roce_4plane_mini_fabric()
         source = result.source_lanes[0]
@@ -497,6 +704,25 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Path found')
         self.assertContains(response, 'transfer_map')
         self.assertContains(response, 'Cable Assembly')
+        self.assertContains(response, 'Visual Path Trace')
+        self.assertContains(response, 'data-visual-trace-component="mpf-visual-trace"')
+        self.assertContains(response, 'data-fanout-schematic')
+        self.assertContains(response, 'data-fanout-schematic-data')
+        self.assertContains(response, 'data-fanout-schematic-stages')
+        self.assertContains(response, 'data-fanout-fixture-key="path-query"')
+        self.assertContains(response, 'data-fanout-toggle-visual')
+        self.assertContains(response, 'data-fanout-export-svg')
+        self.assertContains(response, 'Visual Trace Diagnostics')
+        self.assertContains(response, 'data-fanout-diagnostics')
+        self.assertContains(response, 'data-fanout-diagnostic-value="render-signature"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="path-count"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="stage-count"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="cable-span-count"')
+        self.assertContains(response, 'CI golden regression harness pending')
+        self.assertContains(response, 'fanout_trace.css?v=20260522-visual-trace-component')
+        self.assertContains(response, 'fanout_trace.js?v=20260522-visual-trace-component')
+        self.assertContains(response, f'"source_lane_id": {source.pk}')
+        self.assertContains(response, f'"destination_lane_id": {destination.pk}')
         self.assertEqual(OpticalLane.objects.filter(fabric=result.fabric).count(), 8)
 
     def test_path_query_can_filter_by_fabric(self):
@@ -560,6 +786,7 @@ class V2UITestCase(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Visual Fanout Trace')
+        self.assertContains(response, 'data-visual-trace-component="mpf-visual-trace"')
         self.assertContains(response, 'OSFP-1/1')
         self.assertContains(response, 'Path found')
         self.assertContains(response, 'shuffle_2x2')
@@ -567,6 +794,7 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'LEAF-1-OSFP-1')
         self.assertContains(response, 'Consolidated (per 200G)')
         self.assertContains(response, 'data-fanout-schematic-stages')
+        self.assertContains(response, 'data-fanout-fixture-key="interface-fanout"')
         self.assertContains(response, 'data-fanout-trace-mode="expanded"')
         self.assertContains(response, 'data-fanout-source-title="Source: GPU-FANOUT-1-OSFP-1"')
         self.assertContains(response, 'aria-controls="fanout-child-subinterfaces-body"')
@@ -577,10 +805,16 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'data-fanout-visual-body')
         self.assertContains(response, 'data-fanout-export-svg')
         self.assertContains(response, 'Export SVG')
+        self.assertContains(response, 'Visual Trace Diagnostics')
+        self.assertContains(response, 'data-fanout-diagnostics')
+        self.assertContains(response, 'data-fanout-diagnostic-value="render-signature"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="path-count"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="stage-count"')
+        self.assertContains(response, 'data-fanout-diagnostic-value="cable-span-count"')
         self.assertContains(response, 'data-fanout-details-section')
         self.assertContains(response, 'Per-Strand Trace Details')
-        self.assertContains(response, 'fanout_trace.css?v=20260521-fanout-zoom-sync')
-        self.assertContains(response, 'fanout_trace.js?v=20260521-fanout-zoom-sync')
+        self.assertContains(response, 'fanout_trace.css?v=20260522-visual-trace-component')
+        self.assertContains(response, 'fanout_trace.js?v=20260522-visual-trace-component')
         response_html = response.content.decode()
         self.assertLess(
             response_html.index('data-fanout-details-section'),
@@ -785,6 +1019,175 @@ class V2UITestCase(TestCase):
         self.assertContains(response, 'Impacted Endpoints')
         self.assertContains(response, 'Impacted End-To-End Paths')
         self.assertContains(response, cable_assembly.cable_id)
+
+    def test_blast_radius_supports_operator_device_cable_workflow(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia-blast-operator')
+        gpu_device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='GB300 Tray',
+            slug='gb300-tray-blast-operator',
+        )
+        leaf_device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='Leaf Switch',
+            slug='leaf-switch-blast-operator',
+        )
+        gpu_role = DeviceRole.objects.create(name='GPU Tray Blast', slug='gpu-tray-blast', color='ff0000')
+        leaf_role = DeviceRole.objects.create(name='Leaf Switch Blast', slug='leaf-role-blast', color='00ff00')
+        site = Site.objects.create(name='Blast Site', slug='blast-site', status='active')
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Blast Operator Fabric',
+            fabric_slug='blast-operator-fabric',
+            creation_options={
+                'enabled': True,
+                'site': site,
+                'gpu_device_type': gpu_device_type,
+                'gpu_role': gpu_role,
+                'leaf_device_type': leaf_device_type,
+                'leaf_role': leaf_role,
+                'name_prefix': 'blast-operator',
+            },
+        )
+        source_lane = result.source_lanes[0]
+        source_interface = source_lane.endpoint.source
+        self.assertIsInstance(source_interface, Interface)
+        device = source_interface.device
+        termination = source_lane.local_mpo_position.strand_terminations.select_related('strand').first()
+        cable_assembly = CableAssembly.objects.get(
+            site_id=termination.strand.cable_site_id,
+            cable_id=termination.strand.cable_id,
+        )
+
+        selector_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:blast_radius'),
+            {
+                'site': site.pk,
+                'device_type': gpu_device_type.pk,
+                'device_role': gpu_role.pk,
+                'device_q': device.name.split('-')[0],
+                'device_id': device.pk,
+            },
+        )
+
+        self.assertEqual(selector_response.status_code, 200)
+        self.assertContains(selector_response, 'Operator Failure Scenario Selector')
+        self.assertContains(selector_response, 'Cable Assembly Disconnected/Cut')
+        self.assertContains(selector_response, 'Select Cable Assemblies')
+        self.assertContains(selector_response, device.name)
+        self.assertContains(selector_response, source_interface.name)
+        self.assertContains(selector_response, cable_assembly.cable_id)
+        self.assertContains(selector_response, f'device-cable-{cable_assembly.pk}')
+        self.assertContains(selector_response, 'Calculate Blast Radius')
+
+        blast_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:blast_radius'),
+            {
+                'site': site.pk,
+                'device_id': device.pk,
+                'cable_assembly_ids': [str(cable_assembly.pk)],
+            },
+        )
+
+        self.assertEqual(blast_response.status_code, 200)
+        self.assertContains(blast_response, 'Impacted Device Hierarchy')
+        self.assertContains(blast_response, device.name)
+        self.assertContains(blast_response, 'FAILED')
+        self.assertContains(blast_response, cable_assembly.cable_id)
+        self.assertContains(blast_response, 'Save Report Snapshot')
+
+        save_response = self.client.post(
+            reverse('plugins:netbox_plant_graph:blast_radius'),
+            {
+                'action': 'save_impact_report',
+                'failure_mode': 'cable_cut',
+                'site': site.pk,
+                'device_id': device.pk,
+                'cable_assembly_ids': [str(cable_assembly.pk)],
+                'report_name': 'Operator cable save proof',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(save_response.status_code, 200)
+        self.assertContains(save_response, 'Impact Reports')
+        self.assertContains(save_response, 'Operator cable save proof')
+        self.assertTrue(
+            OperationRun.objects.filter(
+                profile='operational_impact',
+                result__report_name='Operator cable save proof',
+            ).exists()
+        )
+
+    def test_blast_radius_supports_operator_osfp_unseat_workflow(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia-blast-osfp')
+        gpu_device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='GB300 Tray',
+            slug='gb300-tray-blast-osfp',
+        )
+        leaf_device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='Leaf Switch',
+            slug='leaf-switch-blast-osfp',
+        )
+        gpu_role = DeviceRole.objects.create(name='GPU Tray OSFP Blast', slug='gpu-tray-osfp-blast', color='ff0000')
+        leaf_role = DeviceRole.objects.create(name='Leaf Switch OSFP Blast', slug='leaf-role-osfp-blast', color='00ff00')
+        site = Site.objects.create(name='Blast OSFP Site', slug='blast-osfp-site', status='active')
+
+        result = execute_stamp_template(
+            template=fixture.stamp_template,
+            fabric_name='Blast OSFP Fabric',
+            fabric_slug='blast-osfp-fabric',
+            creation_options={
+                'enabled': True,
+                'site': site,
+                'gpu_device_type': gpu_device_type,
+                'gpu_role': gpu_role,
+                'leaf_device_type': leaf_device_type,
+                'leaf_role': leaf_role,
+                'name_prefix': 'blast-osfp',
+            },
+        )
+        source_lane = result.source_lanes[0]
+        source_interface = source_lane.endpoint.source
+        self.assertIsInstance(source_interface, Interface)
+        device = source_interface.device
+
+        selector_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:blast_radius'),
+            {
+                'failure_mode': 'osfp_transceiver_unseat',
+                'site': site.pk,
+                'device_id': device.pk,
+            },
+        )
+
+        self.assertEqual(selector_response.status_code, 200)
+        self.assertContains(selector_response, 'Unseated OSFP Transceiver')
+        self.assertContains(selector_response, 'Select OSFP Transceivers')
+        self.assertContains(selector_response, f'device-interface-{source_interface.pk}')
+        self.assertContains(selector_response, source_interface.name)
+        self.assertContains(selector_response, source_lane.local_mpo_endpoint.address)
+
+        blast_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:blast_radius'),
+            {
+                'failure_mode': 'osfp_transceiver_unseat',
+                'site': site.pk,
+                'device_id': device.pk,
+                'interface_ids': [str(source_interface.pk)],
+            },
+        )
+
+        self.assertEqual(blast_response.status_code, 200)
+        self.assertContains(blast_response, 'Impacted Device Hierarchy')
+        self.assertContains(blast_response, 'Unseated OSFP Transceiver')
+        self.assertContains(blast_response, source_interface.name)
+        self.assertContains(blast_response, 'FAILED')
 
     def test_acceptance_gate_mini_fabric_workflow(self):
         fixture = ensure_roce_4plane_shuffle_architecture()

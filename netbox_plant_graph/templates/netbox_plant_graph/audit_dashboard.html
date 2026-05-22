@@ -37,12 +37,127 @@
         {% endif %}
       </div>
     </form>
+    {% if selected_fabric %}
+      <form method="post" class="mt-3">
+        {% csrf_token %}
+        <input type="hidden" name="fabric_id" value="{{ selected_fabric.pk }}">
+        <button type="submit" class="btn btn-outline-primary">Run Topology Integrity Audit</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 
 {% if not fabrics %}
   <div class="alert alert-info">No fabrics are available yet.</div>
 {% else %}
+  <div class="card mb-3">
+    <div class="card-header">Topology Integrity Status By Fabric</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Fabric</th>
+            <th>Latest Run</th>
+            <th>Status</th>
+            <th>Findings</th>
+            <th>Errors</th>
+            <th>Warnings</th>
+            <th>Path Blocking</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in integrity_status_rows %}
+            <tr>
+              <td><a href="?fabric_id={{ row.fabric.pk }}">{{ row.fabric.name }}</a></td>
+              <td>{% if row.run %}<a href="{{ row.run.get_absolute_url }}">#{{ row.run.pk }}</a>{% else %}-{% endif %}</td>
+              <td>{{ row.status }}</td>
+              <td>{{ row.finding_count }}</td>
+              <td>{{ row.error_count }}</td>
+              <td>{{ row.warning_count }}</td>
+              <td>{{ row.path_blocking_count }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="text-secondary">No fabrics are available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Latest Topology Integrity Drilldown</div>
+    <div class="card-body">
+      {% if selected_integrity_run %}
+        <div class="d-flex flex-wrap gap-3 mb-3">
+          <span>Run <a href="{{ selected_integrity_run.get_absolute_url }}">#{{ selected_integrity_run.pk }}</a></span>
+          <span>Status: {% if selected_integrity_report.ok %}pass{% else %}fail{% endif %}</span>
+          <span>Path blocking: {{ selected_integrity_report.path_blocking_count }}</span>
+        </div>
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-bordered mb-0">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Total</th>
+                <th>Critical</th>
+                <th>Error</th>
+                <th>Warning</th>
+                <th>Path Blocking</th>
+                <th>Workflows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for group in selected_integrity_groups %}
+                <tr>
+                  <td>{{ group.object_family_label }}</td>
+                  <td>{{ group.summary.total }}</td>
+                  <td>{{ group.summary.critical }}</td>
+                  <td>{{ group.summary.error }}</td>
+                  <td>{{ group.summary.warning }}</td>
+                  <td>{{ group.path_blocking_count }}</td>
+                  <td>{{ group.affected_workflows|join:", " }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="7" class="text-success">No grouped findings.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <details>
+          <summary>Finding Rows</summary>
+          <div class="table-responsive mt-2">
+            <table class="table table-sm table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Code</th>
+                  <th>Object</th>
+                  <th>Path Blocking</th>
+                  <th>Remediation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for finding in selected_integrity_findings %}
+                  <tr>
+                    <td>{{ finding.severity }}</td>
+                    <td><code>{{ finding.code }}</code></td>
+                    <td>{{ finding.object.label|default:finding.object }}</td>
+                    <td>{{ finding.path_blocking }}</td>
+                    <td>{{ finding.remediation }}</td>
+                  </tr>
+                {% empty %}
+                  <tr><td colspan="5" class="text-success">No findings in the latest report.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% else %}
+        <div class="text-secondary">No persisted topology integrity run exists for the selected fabric.</div>
+      {% endif %}
+    </div>
+  </div>
+
   <div class="row">
     <div class="col-lg-4 mb-3">
       <div class="card h-100">

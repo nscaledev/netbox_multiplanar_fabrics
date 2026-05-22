@@ -35,6 +35,8 @@
   {% endfor %}
 {% endif %}
 
+{% include 'netbox_plant_graph/includes/fabric_readiness_summary.html' with readiness=fabric_readiness only %}
+
 {% if fabric %}
   <div class="card mb-3">
     <div class="card-header"><strong>Fabric Info</strong></div>

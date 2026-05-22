@@ -28,3 +28,7 @@
   cursor: pointer;
   font-weight: 600;
 }
+
+.fanout-diagnostics {
+  background: color-mix(in srgb, var(--bs-body-bg) 96%, var(--bs-info-bg-subtle) 4%);
+}

@@ -104,6 +104,90 @@
     }
   }
 
+  function schematicRenderSignature(container, paths, stages) {
+    var counts = schematicPayloadCounts(paths, stages);
+    return [
+      container.getAttribute('data-fanout-fixture-key') || 'visual-trace',
+      (container.getAttribute('data-fanout-trace-mode') || 'expanded').toLowerCase(),
+      'paths:' + counts.pathCount,
+      'stages:' + counts.stageCount,
+      'cables:' + counts.cableSpanCount,
+    ].join('|');
+  }
+
+  function schematicPayloadCounts(paths, stages) {
+    return {
+      pathCount: (paths || []).length,
+      stageCount: (stages || []).length,
+      cableSpanCount: (paths || []).reduce(function (total, path) {
+        return total + (path && path.cable_spans ? path.cable_spans.length : 0);
+      }, 0),
+    };
+  }
+
+  function queryCount(root, selector) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+    return root.querySelectorAll(selector).length;
+  }
+
+  function renderedSvgCounts(root) {
+    return {
+      sectionCount: queryCount(root, '[data-fanout-visual-section]'),
+      connectorCount: queryCount(root, '[data-fanout-connector-frame]'),
+      cableCylinderCount: queryCount(root, '.fanout-cable-assembly-cylinder'),
+      objectLinkCount: queryCount(root, 'a.fanout-object-link'),
+    };
+  }
+
+  function exportSanity(svg) {
+    var markup = exportedSvgMarkup(svg);
+    return {
+      hasXmlDeclaration: markup.indexOf('<?xml version="1.0" encoding="UTF-8"?>') === 0,
+      hasSvgNamespace: markup.indexOf('xmlns="' + SVG_NS + '"') !== -1,
+      hasXlinkNamespace: markup.indexOf('xmlns:xlink="' + XLINK_NS + '"') !== -1,
+      hasDimensions: /\swidth="\d+(\.\d+)?"[\s>]/.test(markup) && /\sheight="\d+(\.\d+)?"[\s>]/.test(markup),
+      hasObjectLinks: markup.indexOf('fanout-object-link') !== -1,
+      hasTooltips: markup.indexOf('data-fanout-tooltip=') !== -1,
+      hasVisibleContentHooks: markup.indexOf('data-fanout-visual-section=') !== -1 ||
+        markup.indexOf('data-fanout-connector-frame=') !== -1,
+      markupLength: markup.length,
+    };
+  }
+
+  function goldenSnapshot(container) {
+    var svg = container.querySelector('[data-fanout-schematic-svg]');
+    if (!svg) {
+      var missingPaths = parsePayload(container);
+      var missingStages = parseStagePayload(container);
+      return {
+        signature: schematicRenderSignature(container, missingPaths, missingStages),
+        payload: schematicPayloadCounts(missingPaths, missingStages),
+        rendered: renderedSvgCounts(null),
+        export: null,
+        viewBox: '',
+        width: 0,
+        height: 0,
+      };
+    }
+    if (container.getAttribute('data-fanout-rendered') !== 'true') {
+      renderSchematic(container);
+    }
+    var viewBox = svg.getAttribute('viewBox') || '';
+    var parts = viewBox.split(/\s+/).map(Number);
+    return {
+      signature: container.getAttribute('data-fanout-render-signature') ||
+        schematicRenderSignature(container, parsePayload(container), parseStagePayload(container)),
+      payload: schematicPayloadCounts(parsePayload(container), parseStagePayload(container)),
+      rendered: renderedSvgCounts(svg),
+      export: exportSanity(svg),
+      viewBox: viewBox,
+      width: Number.isFinite(parts[2]) ? parts[2] : Number(svg.getAttribute('width') || 0),
+      height: Number.isFinite(parts[3]) ? parts[3] : Number(svg.getAttribute('height') || 0),
+    };
+  }
+
   function sourceStageTitle(container) {
     return container.getAttribute('data-fanout-source-title') || 'Source Endpoint';
   }
@@ -1354,6 +1438,7 @@
         'stroke-width': 1,
         'data-fanout-stage-role': stage.role || '',
         'data-fanout-stage-title': title || '',
+        'data-fanout-visual-section': 'true',
         }),
         shellUrl,
         title
@@ -1593,6 +1678,7 @@
               opacity: 0.62,
               stroke: '#253447',
               'stroke-width': 1,
+              'data-fanout-connector-frame': 'true',
                 }),
                 group.label
               ),
@@ -1646,6 +1732,7 @@
                   fill: '#080d14',
                   stroke: '#3c4450',
                   'stroke-width': 1.1,
+                  'data-fanout-connector-frame': 'true',
                     }),
                     connector.label
                   ),
@@ -2448,31 +2535,81 @@
     });
   }
 
+  function buildVisualLayoutPlan(paths, visualStages) {
+    var width = schematicWidthForStages(visualStages);
+    var gap = pathsHaveCableAssemblySpans(paths) ? CABLE_ASSEMBLY_STAGE_GAP : DEFAULT_STAGE_GAP;
+    var stagePreviews = [];
+    var top = 18;
+
+    visualStages.forEach(function (stage) {
+      var previewHeight = stageHeight(stage);
+      stagePreviews.push({ top: top, height: previewHeight, anchors: {} });
+      top += previewHeight + gap;
+    });
+
+    return {
+      width: width,
+      gap: gap,
+      stagePreviews: stagePreviews,
+      legendTop: top + 12,
+    };
+  }
+
+  function diagnosticValueNode(card, name) {
+    if (!card) {
+      return null;
+    }
+    return Array.from(card.querySelectorAll('[data-fanout-diagnostic-value]')).find(function (node) {
+      return node.getAttribute('data-fanout-diagnostic-value') === name;
+    }) || null;
+  }
+
+  function setDiagnosticValue(card, name, value) {
+    var node = diagnosticValueNode(card, name);
+    if (node) {
+      node.textContent = String(value);
+    }
+  }
+
+  function updateDiagnostics(container, rawPaths, stagePayload) {
+    var card = container.closest('[data-visual-trace-component]');
+    var diagnostics = card && card.querySelector('[data-fanout-diagnostics]');
+    if (!diagnostics) {
+      return;
+    }
+    var counts = schematicPayloadCounts(rawPaths, stagePayload);
+    setDiagnosticValue(card, 'render-signature', schematicRenderSignature(container, rawPaths, stagePayload));
+    setDiagnosticValue(card, 'path-count', counts.pathCount);
+    setDiagnosticValue(card, 'stage-count', counts.stageCount);
+    setDiagnosticValue(card, 'cable-span-count', counts.cableSpanCount);
+    setDiagnosticValue(
+      card,
+      'golden-harness-status',
+      'Browser diagnostic hooks available; CI golden regression harness pending.'
+    );
+  }
+
   function renderSchematic(container) {
     var svg = container.querySelector('[data-fanout-schematic-svg]');
     if (!svg) {
       return;
     }
-    var paths = parsePayload(container).filter(function (path) {
+    var rawPaths = parsePayload(container);
+    var stagePayload = parseStagePayload(container);
+    var paths = rawPaths.filter(function (path) {
       return path && path.path_found;
     });
     var interfaceLayers = hasExpandedInterfaceLayers(container, paths);
     var renderPaths = interfaceLayers ? withInterfaceLayerHops(paths) : paths;
-    var stages = buildStages(renderPaths, parseStagePayload(container), { interfaceLayers: interfaceLayers });
+    var stages = buildStages(renderPaths, stagePayload, { interfaceLayers: interfaceLayers });
     var plan = visualStagePlan(stages, { sourceTitle: sourceStageTitle(container), sourceUrl: sourceStageUrl(container) });
     var visualStages = plan.stages;
-    var width = schematicWidthForStages(visualStages);
-    var top = 18;
-    var gap = pathsHaveCableAssemblySpans(renderPaths) ? CABLE_ASSEMBLY_STAGE_GAP : DEFAULT_STAGE_GAP;
-    var stageLayouts = [];
-
-    visualStages.forEach(function (stage) {
-      var previewHeight = stageHeight(stage);
-      stageLayouts.push({ top: top, height: previewHeight, anchors: {} });
-      top += previewHeight + gap;
-    });
+    var layoutPlan = buildVisualLayoutPlan(renderPaths, visualStages);
+    var width = layoutPlan.width;
+    var gap = layoutPlan.gap;
+    var stageLayouts = layoutPlan.stagePreviews;
     var legendRows = Math.max(1, Math.ceil(paths.length / 8));
-    var legendTop = top + 12;
+    var legendTop = layoutPlan.legendTop;
     var height = Math.max(320, legendTop + legendRows * 24 + 18);
 
     svg.replaceChildren();
@@ -2491,6 +2628,9 @@
         rx: 4,
       })
     );
+    container.setAttribute('data-fanout-rendered', 'true');
+    container.setAttribute('data-fanout-render-signature', schematicRenderSignature(container, rawPaths, stagePayload));
+    updateDiagnostics(container, rawPaths, stagePayload);
 
     if (!renderPaths.length || !visualStages.length) {
       drawText(svg, 'No resolved lane paths available for this trace.', {
@@ -2505,7 +2645,7 @@
 
     stageLayouts = [];
     var stageLayoutsByDepth = [];
-    top = 18;
+    var top = 18;
     visualStages.forEach(function (stage, visualIndex) {
       var layout = drawStage(svg, stage, top, width);
       stageLayouts.push(layout);
@@ -2554,6 +2694,21 @@
       }
     });
   }
+
+  window.NetBoxPlantGraphVisualTrace = {
+    initialize: initializeFanoutTracePage,
+    render: renderSchematic,
+    goldenSnapshot: goldenSnapshot,
+    exportedSvgMarkup: exportedSvgMarkup,
+    renderedSvgCounts: renderedSvgCounts,
+    exportSanity: exportSanity,
+    payloadCounts: function (container) {
+      return schematicPayloadCounts(parsePayload(container), parseStagePayload(container));
+    },
+    renderSignature: function (container) {
+      return schematicRenderSignature(container, parsePayload(container), parseStagePayload(container));
+    },
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeFanoutTracePage);

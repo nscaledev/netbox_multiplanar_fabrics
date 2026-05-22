@@ -1,9 +1,17 @@
 {% extends 'base/layout.html' %}
+{% load static %}
 
 {% block title %}Path Query{% endblock %}
 
+{% block head %}
+  {{ block.super }}
+  {% include 'netbox_plant_graph/includes/visual_trace_styles.html' %}
+{% endblock %}
+
 {% block content %}
 <h1>Path Query</h1>
+
+{% include 'netbox_plant_graph/includes/integrity_gate_banner.html' %}
 
 {% with selected_source|default:source_lane as selected_source_lane %}
 {% with selected_destination|default:destination_lane as selected_destination_lane %}
@@ -133,7 +141,7 @@
     <div class="alert alert-warning">{{ resolved_path.error }}</div>
   {% endif %}
 
-  <div class="card">
+  <div class="card mb-3">
     <div class="card-header">Path Steps</div>
     <div class="card-body">
       <div class="table-responsive">
@@ -239,9 +247,22 @@
       </div>
     </div>
   </div>
+
+  {% if visual_path_trace %}
+    {% if resolved_path.path_found and not visual_path_trace_has_shuffle_crossover %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Path Trace' body_id='path-query-visual-trace-body' trace_mode='expanded' source_title=visual_path_trace_source_title source_url=visual_path_trace_source_url paths_json=visual_path_trace_json stages_json=visual_path_trace_stages_json fixture_key='path-query' warning_extra_class='' warning_text='Resolved transfer maps for this path are position-identity mappings, so no shuffle crossover is present in the modeled path data.' only %}
+    {% else %}
+      {% include 'netbox_plant_graph/includes/visual_trace_card.html' with title='Visual Path Trace' body_id='path-query-visual-trace-body' trace_mode='expanded' source_title=visual_path_trace_source_title source_url=visual_path_trace_source_url paths_json=visual_path_trace_json stages_json=visual_path_trace_stages_json fixture_key='path-query' only %}
+    {% endif %}
+  {% endif %}
 {% else %}
   <div class="alert alert-info">Choose source and destination lanes to resolve an optical path.</div>
 {% endif %}
 {% endwith %}
 {% endwith %}
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  {% include 'netbox_plant_graph/includes/visual_trace_scripts.html' %}
 {% endblock %}

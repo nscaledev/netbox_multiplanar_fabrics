@@ -9,7 +9,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -18,7 +18,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.views import View
 from django.views.generic import TemplateView
-from dcim.models import Device, FrontPort, Interface, RearPort
+from dcim.models import Device, DeviceRole, DeviceType, FrontPort, Interface, RearPort, Site
 from netbox.views import generic
 
 from . import filtersets, forms, tables
@@ -43,11 +43,35 @@ from .models import (
     TransportChannel,
 )
 from .services.audit import record_audit_event
+from .services.architecture import build_roce_4plane_shuffle_architecture_schema
+from .services.architecture_schema import (
+    compare_persisted_architecture_compatibility,
+    validate_persisted_architecture_schema,
+)
+from .services.impact_modeling import (
+    OPERATIONAL_IMPACT_OPERATION_KIND,
+    OPERATIONAL_IMPACT_OPERATION_PROFILE,
+    SCENARIO_CABLE_ASSEMBLY_CUT,
+    SCENARIO_MPO_CONNECTOR_UNPLUG,
+    SCENARIO_OSFP_TRANSCEIVER_UNSEAT,
+    compare_operational_impact_reports,
+    model_operational_impact,
+    persist_operational_impact_report,
+)
+from .services.imports import reconcile_import_payload
 from .services.operations import execute_operation_profile
 from .services import resolver as resolver_service
 from .services.resolver import resolve_optical_lane_path
 from .services.stamp_preview import build_v2_stamp_template_preview
 from .services.stamping import execute_stamp_template, stamp_roce_4plane_mini_fabric
+from .services.stamping_v25 import preview_stamp_template_v25
+from .services.topology_integrity import (
+    TOPOLOGY_INTEGRITY_OPERATION_KIND,
+    TOPOLOGY_INTEGRITY_OPERATION_PROFILE,
+    audit_topology_integrity,
+    integrity_gate_for_fabric,
+    persist_topology_integrity_report,
+)
 from .v2_registry import V2_OBJECT_SPECS, get_v2_object_spec_for_model
 
 
@@ -84,8 +108,46 @@ def _build_architecture_semantics_context(architecture: FabricArchitecture):
             'template_json': json.dumps(template_spec, indent=2, sort_keys=True),
         })
 
+    validation = validate_persisted_architecture_schema(architecture)
+    expected_schema = build_roce_4plane_shuffle_architecture_schema()
+    compatibility = compare_persisted_architecture_compatibility(architecture, expected_schema)
+    channel_map_rows = []
+    for item in allocation_rule_sets:
+        rule = item['rule_set'].rule or {}
+        if rule.get('type') == 'channel_subinterface_mapping':
+            for row in rule.get('channel_map_matrix') or ():
+                if not isinstance(row, dict):
+                    continue
+                channel_map_rows.append(
+                    {
+                        'subinterface': row.get('subinterface_index'),
+                        'positions': tuple(row.get('positions') or ()),
+                        'mpo_indexes': tuple(
+                            sorted(
+                                {
+                                    position.get('mpo_index')
+                                    for position in row.get('positions') or ()
+                                    if isinstance(position, dict)
+                                }
+                            )
+                        ),
+                    }
+                )
+
     return {
         'architecture_metadata_json': json.dumps(architecture.metadata or {}, indent=2, sort_keys=True),
+        'schema_contract_version': (architecture.metadata or {}).get('schema_contract_version', 'not declared'),
+        'schema_validation': validation,
+        'schema_errors': validation.errors,
+        'schema_error_count': len(validation.errors),
+        'compatibility': compatibility,
+        'compatibility_issues': compatibility.issues,
+        'channel_map_rows': tuple(channel_map_rows),
+        'channel_map_summary': SimpleNamespace(
+            row_count=len(channel_map_rows),
+            position_count=sum(len(row['positions']) for row in channel_map_rows),
+            mpo_indexes=tuple(sorted({mpo for row in channel_map_rows for mpo in row['mpo_indexes']})),
+        ),
         'roles': roles,
         'transfer_patterns': tuple(transfer_patterns),
         'allocation_rule_sets': tuple(allocation_rule_sets),
@@ -127,6 +189,8 @@ class V2RegisteredObjectView(generic.ObjectView):
         }
         if isinstance(instance, FabricArchitecture):
             extra_context['architecture_semantics'] = _build_architecture_semantics_context(instance)
+        if isinstance(instance, Fabric):
+            extra_context['fabric_readiness'] = _fabric_readiness_summary(instance)
         return extra_context
 
 
@@ -500,6 +564,7 @@ class FabricOperationsView(View):
                 'fabrics': Fabric.objects.order_by('name', 'pk'),
                 'recent_builds': recent_builds,
                 'recent_audits': recent_audits,
+                'fabric_readiness': _fabric_readiness_summary(fabric),
             },
         )
 
@@ -566,21 +631,48 @@ class StampTemplateExecuteView(TemplateView):
             'fabric_name': form.initial.get('fabric_name'),
             'fabric_slug': form.initial.get('fabric_slug'),
         }
+        source_bindings = {}
+        creation_options = {}
         if form.is_bound and form.is_valid():
             preview_parameters = {
                 'fabric_name': form.cleaned_data['fabric_name'],
                 'fabric_slug': form.cleaned_data['fabric_slug'],
             }
+            source_bindings = form.source_bindings()
+            creation_options = form.creation_options()
+        v25_preview = preview_stamp_template_v25(
+            template=self.template,
+            fabric_name=preview_parameters['fabric_name'],
+            fabric_slug=preview_parameters['fabric_slug'],
+            source_bindings=source_bindings,
+            creation_options=creation_options,
+        )
         context.update({
             'template': self.template,
             'form': form,
             'preview': build_v2_stamp_template_preview(self.template, preview_parameters),
+            'v25_preview': v25_preview,
+            'v25_action_counts': sorted(v25_preview.action_counts.items()),
+            'v25_summary': _stamp_v25_operator_summary(v25_preview),
+            'v25_blocking_issues': _stamp_v25_issues_by_severity(v25_preview, 'error'),
+            'v25_warning_issues': _stamp_v25_issues_by_severity(v25_preview, 'warning'),
         })
         return context
 
     def post(self, request, *args, **kwargs):
         form = self._form(data=request.POST)
         if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        preview = preview_stamp_template_v25(
+            template=self.template,
+            fabric_name=form.cleaned_data['fabric_name'],
+            fabric_slug=form.cleaned_data['fabric_slug'],
+            source_bindings=form.source_bindings(),
+            creation_options=form.creation_options(),
+        )
+        if not preview.is_valid:
+            messages.error(request, 'Stamp apply is blocked until V2.5 preview errors are resolved.')
             return self.render_to_response(self.get_context_data(form=form))
 
         result = execute_stamp_template(
@@ -618,6 +710,28 @@ class StampTemplateExecuteView(TemplateView):
             ),
         )
         return redirect(result.fabric.get_absolute_url())
+
+
+def _stamp_v25_issues_by_severity(preview, severity):
+    return tuple(issue for issue in preview.issues if issue.severity == severity)
+
+
+def _stamp_v25_operator_summary(preview):
+    action_counts = preview.action_counts
+    error_count = len(_stamp_v25_issues_by_severity(preview, 'error'))
+    warning_count = len(_stamp_v25_issues_by_severity(preview, 'warning'))
+    return {
+        'valid': preview.is_valid,
+        'error_count': error_count,
+        'warning_count': warning_count,
+        'change_count': len(preview.changes),
+        'sample_count': len(preview.name_pattern_samples),
+        'create_count': action_counts.get('create', 0),
+        'update_count': action_counts.get('update', 0),
+        'skip_count': action_counts.get('skip', 0),
+        'retry_supported': preview.retry.supported,
+        'rollback_supported': preview.rollback.supported,
+    }
 
 
 _BUILDER_NODE_TYPE_CHOICES = (
@@ -1973,6 +2087,13 @@ class PathQueryView(TemplateView):
         selected_source = None
         selected_destination = None
         resolved_path = None
+        visual_destination_lane = None
+        visual_path_trace = None
+        visual_path_trace_json = '[]'
+        visual_path_trace_stages_json = '[]'
+        visual_path_trace_has_shuffle_crossover = False
+        visual_path_trace_source_title = ''
+        visual_path_trace_source_url = ''
         source_id = self.request.GET.get('source_lane')
         destination_id = self.request.GET.get('destination_lane')
 
@@ -1992,6 +2113,36 @@ class PathQueryView(TemplateView):
                     actor=self.request.user,
                 )
                 resolved_path = _normalize_resolved_path_payload(resolved_path)
+                if resolved_path is not None and resolved_path.destination_lane_id:
+                    visual_destination_lane = (
+                        OpticalLane.objects.select_related(
+                            'fabric',
+                            'endpoint',
+                            'endpoint__node',
+                            'channel',
+                            'channel__source_subinterface',
+                            'local_mpo_endpoint',
+                            'local_mpo_position',
+                            'plane',
+                        )
+                        .filter(pk=resolved_path.destination_lane_id)
+                        .first()
+                    )
+                else:
+                    visual_destination_lane = selected_destination
+                visual_path_trace = _extract_schematic_path(
+                    source_lane=selected_source,
+                    destination_lane=visual_destination_lane,
+                    resolved_path=resolved_path,
+                )
+                visual_path_trace_has_shuffle_crossover = not visual_path_trace.get('shuffle_is_identity', True)
+                visual_path_trace_json = json.dumps([visual_path_trace], sort_keys=True)
+                visual_path_trace_stages_json = json.dumps(
+                    list(_expanded_schematic_stage_connectors((visual_path_trace,))),
+                    sort_keys=True,
+                )
+                visual_path_trace_source_title = _path_query_source_title(selected_source)
+                visual_path_trace_source_url = _path_query_source_url(selected_source)
                 destination_lanes = destination_queryset
 
         context.update({
@@ -2004,6 +2155,16 @@ class PathQueryView(TemplateView):
             'source_lane': selected_source,
             'destination_lane': selected_destination,
             'resolved_path': resolved_path,
+            'visual_destination_lane': visual_destination_lane,
+            'visual_path_trace': visual_path_trace,
+            'visual_path_trace_json': visual_path_trace_json,
+            'visual_path_trace_stages_json': visual_path_trace_stages_json,
+            'visual_path_trace_has_shuffle_crossover': visual_path_trace_has_shuffle_crossover,
+            'visual_path_trace_source_title': visual_path_trace_source_title,
+            'visual_path_trace_source_url': visual_path_trace_source_url,
+            'integrity_gate_banner': _latest_integrity_gate_banner(
+                selected_source.fabric if selected_source is not None else selected_fabric
+            ),
         })
         return context
 
@@ -2075,6 +2236,32 @@ def _remote_attachment_label(destination_lane: OpticalLane | None) -> str:
     if remote_device_name:
         return remote_device_name
     return 'Unresolved destination'
+
+
+def _path_query_source_title(source_lane: OpticalLane | None) -> str:
+    if source_lane is None:
+        return 'Source Endpoint'
+    endpoint = source_lane.endpoint
+    source = getattr(endpoint, 'source', None)
+    if isinstance(source, Interface) and getattr(source, 'device', None):
+        return f'Source: {source.device.name}-{source.name}'
+    node_source = getattr(getattr(endpoint, 'node', None), 'source', None)
+    if isinstance(node_source, Interface) and getattr(node_source, 'device', None):
+        return f'Source: {node_source.device.name}-{node_source.name}'
+    return f'Source: {endpoint.address}'
+
+
+def _path_query_source_url(source_lane: OpticalLane | None) -> str:
+    if source_lane is None:
+        return ''
+    endpoint = source_lane.endpoint
+    source = getattr(endpoint, 'source', None)
+    if isinstance(source, Interface):
+        return _object_absolute_url(source)
+    node_source = getattr(getattr(endpoint, 'node', None), 'source', None)
+    if isinstance(node_source, Interface):
+        return _object_absolute_url(node_source)
+    return _object_absolute_url(endpoint)
 
 
 def _subinterface_name_for_lane(lane: OpticalLane | None) -> str:
@@ -2762,6 +2949,7 @@ class InterfaceFanoutTraceView(TemplateView):
                     sort_keys=True,
                 ),
                 'aggregate_has_shuffle_crossover': aggregate_has_shuffle_crossover,
+                'integrity_gate_banner': _latest_integrity_gate_banner(_single_fabric_for_endpoints(source_endpoints)),
             }
         )
         return context
@@ -2819,8 +3007,9 @@ _BLAST_RADIUS_RESOLUTION_CHOICES = (
 )
 
 _BLAST_FAILURE_MODE_CHOICES = (
+    {'value': 'cable_cut', 'label': 'Cable Assembly Disconnected/Cut'},
+    {'value': 'osfp_transceiver_unseat', 'label': 'Unseated OSFP Transceiver'},
     {'value': 'connector_unplug', 'label': 'Connector Unplugged'},
-    {'value': 'cable_cut', 'label': 'Cable Assembly Cut'},
 )
 
 
@@ -3490,6 +3679,357 @@ def _blast_cable_candidates(*, fabric=None):
     )
 
 
+def _interface_content_type():
+    return ContentType.objects.get_for_model(Interface, for_concrete_model=False)
+
+
+def _endpoint_interface_map_for_interfaces(interface_ids):
+    normalized_interface_ids = {
+        int(interface_id)
+        for interface_id in interface_ids
+        if interface_id not in (None, '')
+    }
+    if not normalized_interface_ids:
+        return {}
+
+    endpoint_to_interface = {}
+    frontier = []
+    roots = Endpoint.objects.filter(
+        source_type=_interface_content_type(),
+        source_id__in=normalized_interface_ids,
+    ).values('pk', 'source_id')
+    for root in roots:
+        endpoint_to_interface[root['pk']] = root['source_id']
+        frontier.append(root['pk'])
+
+    while frontier:
+        children = list(
+            Endpoint.objects.filter(parent_id__in=frontier).values('pk', 'parent_id')
+        )
+        frontier = []
+        for child in children:
+            interface_id = endpoint_to_interface.get(child['parent_id'])
+            if interface_id is None or child['pk'] in endpoint_to_interface:
+                continue
+            endpoint_to_interface[child['pk']] = interface_id
+            frontier.append(child['pk'])
+
+    return endpoint_to_interface
+
+
+def _device_ids_with_plant_graph_cables():
+    interface_type = _interface_content_type()
+    interface_ids = (
+        OpticalLane.objects.filter(
+            endpoint__source_type=interface_type,
+            local_mpo_position__strand_terminations__strand__cable_site_id__isnull=False,
+        )
+        .exclude(local_mpo_position__strand_terminations__strand__cable_id='')
+        .values_list('endpoint__source_id', flat=True)
+        .distinct()
+    )
+    return Device.objects.filter(interfaces__pk__in=interface_ids).values_list('pk', flat=True).distinct()
+
+
+def _blast_operator_device_queryset(query):
+    queryset = (
+        Device.objects.select_related('site', 'device_type', 'role', 'rack')
+        .filter(pk__in=_device_ids_with_plant_graph_cables())
+        .order_by('site__name', 'rack__name', 'name', 'pk')
+    )
+    if query.get('site'):
+        queryset = queryset.filter(site_id=query['site'])
+    if query.get('device_type'):
+        queryset = queryset.filter(device_type_id=query['device_type'])
+    if query.get('device_role'):
+        queryset = queryset.filter(role_id=query['device_role'])
+    if query.get('rack_label'):
+        queryset = queryset.filter(rack__name__icontains=query['rack_label'])
+    if query.get('rack_row'):
+        queryset = queryset.filter(rack__location__name__icontains=query['rack_row'])
+    if query.get('rack_elevation'):
+        try:
+            queryset = queryset.filter(position=query['rack_elevation'])
+        except (TypeError, ValueError):
+            queryset = queryset.none()
+    if query.get('device_q'):
+        queryset = queryset.filter(name__icontains=query['device_q'])
+    return queryset
+
+
+def _endpoint_source_interface(endpoint):
+    current = endpoint
+    visited = set()
+    while current is not None and getattr(current, 'pk', None) not in visited:
+        visited.add(current.pk)
+        source = getattr(current, 'source', None)
+        if isinstance(source, Interface):
+            return source
+        current = getattr(current, 'parent', None)
+
+    node_source = getattr(getattr(endpoint, 'node', None), 'source', None)
+    if isinstance(node_source, Interface):
+        return node_source
+    return None
+
+
+def _endpoint_source_device(endpoint):
+    interface = _endpoint_source_interface(endpoint)
+    if interface is not None:
+        return interface.device
+    node_source = getattr(getattr(endpoint, 'node', None), 'source', None)
+    if isinstance(node_source, Device):
+        return node_source
+    return None
+
+
+def _device_parent_container(device):
+    parent_bay = getattr(device, 'parent_bay', None)
+    parent_device = getattr(parent_bay, 'device', None)
+    if isinstance(parent_device, Device):
+        return parent_device
+    return None
+
+
+def _object_link_reference(obj):
+    if obj is None:
+        return None
+    return SimpleNamespace(
+        pk=getattr(obj, 'pk', None),
+        display=str(obj),
+        url=obj.get_absolute_url() if hasattr(obj, 'get_absolute_url') else None,
+    )
+
+
+def _device_attached_cable_rows(device):
+    if device is None:
+        return ()
+
+    interfaces = list(
+        Interface.objects.filter(device=device)
+        .select_related('device')
+        .order_by('name', 'pk')
+    )
+    interface_by_id = {interface.pk: interface for interface in interfaces}
+    endpoint_to_interface = _endpoint_interface_map_for_interfaces(interface_by_id)
+    if not endpoint_to_interface:
+        return ()
+
+    terminations = list(
+        StrandTermination.objects.select_related('strand', 'mpo_endpoint', 'mpo_position')
+        .filter(mpo_endpoint_id__in=endpoint_to_interface)
+        .order_by('mpo_endpoint__address', 'mpo_position__position_number', 'strand__strand_index', 'pk')
+    )
+
+    pairs = {
+        (termination.strand.cable_site_id, termination.strand.cable_id)
+        for termination in terminations
+        if termination.strand.cable_site_id and termination.strand.cable_id
+    }
+    cable_by_pair = _cable_assembly_map_for_pairs(pairs)
+    rows_by_interface = {}
+    seen_by_interface = {}
+    for termination in terminations:
+        strand = termination.strand
+        pair = (strand.cable_site_id, strand.cable_id)
+        if not pair[0] or not pair[1]:
+            continue
+        interface_id = endpoint_to_interface.get(termination.mpo_endpoint_id)
+        interface = interface_by_id.get(interface_id)
+        if interface is None:
+            continue
+        cable = cable_by_pair.get(pair)
+        cable_reference = _cable_assembly_reference(
+            cable,
+            fallback_site_id=pair[0],
+            fallback_cable_id=pair[1],
+        )
+        row = rows_by_interface.setdefault(
+            interface_id,
+            SimpleNamespace(
+                interface=_object_link_reference(interface),
+                endpoint_labels=set(),
+                endpoints={},
+                cables=[],
+            ),
+        )
+        row.endpoint_labels.add(termination.mpo_endpoint.address)
+        row.endpoints[termination.mpo_endpoint_id] = _lane_analysis_object_reference(termination.mpo_endpoint)
+        seen = seen_by_interface.setdefault(interface_id, set())
+        key = (cable_reference.site_id, cable_reference.cable_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        row.cables.append(cable_reference)
+
+    rows = []
+    for row in rows_by_interface.values():
+        row.endpoint_labels = tuple(sorted(row.endpoint_labels))
+        row.endpoints = tuple(sorted(row.endpoints.values(), key=lambda endpoint: endpoint.display))
+        row.cables = tuple(sorted(row.cables, key=lambda cable: (cable.site, cable.cable_id)))
+        rows.append(row)
+    return tuple(sorted(rows, key=lambda row: row.interface.display))
+
+
+def _device_attached_cable_choices(device_cable_rows):
+    choices_by_key = {}
+    for row in device_cable_rows:
+        for cable in row.cables:
+            key = cable.pk or f'{cable.site_id}:{cable.cable_id}'
+            choice = choices_by_key.setdefault(
+                key,
+                SimpleNamespace(
+                    cable=cable,
+                    interfaces=set(),
+                    endpoint_labels=set(),
+                ),
+            )
+            choice.interfaces.add(row.interface.display)
+            choice.endpoint_labels.update(row.endpoint_labels)
+
+    choices = []
+    for choice in choices_by_key.values():
+        choice.interfaces = tuple(sorted(choice.interfaces))
+        choice.endpoint_labels = tuple(sorted(choice.endpoint_labels))
+        choices.append(choice)
+    return tuple(
+        sorted(
+            choices,
+            key=lambda choice: (
+                choice.cable.site,
+                choice.cable.cable_id,
+                choice.cable.pk or 0,
+            ),
+        )
+    )
+
+
+def _device_attached_interface_choices(device_cable_rows):
+    choices = []
+    for row in device_cable_rows:
+        choices.append(
+            SimpleNamespace(
+                interface=row.interface,
+                endpoint_labels=row.endpoint_labels,
+                cables=row.cables,
+                cable_total=len(row.cables),
+            )
+        )
+    return tuple(sorted(choices, key=lambda choice: choice.interface.display))
+
+
+def _device_attached_connector_choices(device_cable_rows):
+    choices_by_key = {}
+    for row in device_cable_rows:
+        for endpoint in row.endpoints:
+            choice = choices_by_key.setdefault(
+                endpoint.pk,
+                SimpleNamespace(
+                    endpoint=endpoint,
+                    interfaces=set(),
+                    cables=set(),
+                ),
+            )
+            choice.interfaces.add(row.interface.display)
+            choice.cables.update(cable.display for cable in row.cables)
+
+    choices = []
+    for choice in choices_by_key.values():
+        choice.interfaces = tuple(sorted(choice.interfaces))
+        choice.cables = tuple(sorted(choice.cables))
+        choices.append(choice)
+    return tuple(sorted(choices, key=lambda choice: choice.endpoint.display))
+
+
+def _cable_assemblies_for_ids(cable_ids):
+    normalized_ids = {
+        int(cable_id)
+        for cable_id in cable_ids
+        if cable_id not in (None, '')
+    }
+    if not normalized_ids:
+        return ()
+    cable_by_id = {
+        cable.pk: cable
+        for cable in CableAssembly.objects.select_related('site').filter(pk__in=normalized_ids)
+    }
+    return tuple(
+        cable_by_id[cable_id]
+        for cable_id in sorted(normalized_ids)
+        if cable_id in cable_by_id
+    )
+
+
+def _connector_endpoints_for_ids(connector_endpoint_ids):
+    normalized_ids = {
+        int(connector_endpoint_id)
+        for connector_endpoint_id in connector_endpoint_ids
+        if connector_endpoint_id not in (None, '')
+    }
+    if not normalized_ids:
+        return ()
+    endpoint_by_id = {
+        endpoint.pk: endpoint
+        for endpoint in Endpoint.objects.annotate(position_total=Count('positions'))
+        .filter(pk__in=normalized_ids, position_total__gt=0)
+        .select_related('fabric')
+    }
+    return tuple(
+        endpoint_by_id[endpoint_id]
+        for endpoint_id in sorted(normalized_ids)
+        if endpoint_id in endpoint_by_id
+    )
+
+
+def _interfaces_for_ids(interface_ids):
+    normalized_ids = {
+        int(interface_id)
+        for interface_id in interface_ids
+        if interface_id not in (None, '')
+    }
+    if not normalized_ids:
+        return ()
+    interface_by_id = {
+        interface.pk: interface
+        for interface in Interface.objects.select_related('device').filter(pk__in=normalized_ids)
+    }
+    return tuple(
+        interface_by_id[interface_id]
+        for interface_id in sorted(normalized_ids)
+        if interface_id in interface_by_id
+    )
+
+
+def _connector_endpoints_for_interfaces(interfaces):
+    interface_ids = {interface.pk for interface in interfaces if interface.pk is not None}
+    if not interface_ids:
+        return ()
+
+    root_ids = set(
+        Endpoint.objects.filter(
+            source_type=_interface_content_type(),
+            source_id__in=interface_ids,
+        ).values_list('pk', flat=True)
+    )
+    endpoint_ids = set(root_ids)
+    frontier = set(root_ids)
+    while frontier:
+        child_ids = set(
+            Endpoint.objects.filter(parent_id__in=frontier).values_list('pk', flat=True)
+        )
+        child_ids -= endpoint_ids
+        endpoint_ids.update(child_ids)
+        frontier = child_ids
+
+    return tuple(
+        Endpoint.objects.filter(pk__in=endpoint_ids)
+        .annotate(position_total=Count('positions'))
+        .filter(position_total__gt=0)
+        .select_related('fabric')
+        .order_by('address', 'pk')
+    )
+
+
 def _blast_unavailable_reference(unavailable):
     if isinstance(unavailable, ConnectorPosition):
         return SimpleNamespace(
@@ -3584,11 +4124,209 @@ def _blast_match_step(*, step, connector_position_ids, fiber_strand_ids):
     return None
 
 
+def _failed_interface_ids_for_unavailable_objects(unavailable_objects):
+    connector_endpoint_ids = set()
+    strand_ids = set()
+    for unavailable in unavailable_objects:
+        if isinstance(unavailable, ConnectorPosition):
+            connector_endpoint_ids.add(unavailable.endpoint_id)
+        elif isinstance(unavailable, FiberStrand):
+            strand_ids.add(unavailable.pk)
+
+    if strand_ids:
+        connector_endpoint_ids.update(
+            StrandTermination.objects.filter(strand_id__in=strand_ids).values_list(
+                'mpo_endpoint_id',
+                flat=True,
+            )
+        )
+
+    failed_interface_ids = set()
+    endpoints = Endpoint.objects.select_related('node', 'parent').filter(pk__in=connector_endpoint_ids)
+    for endpoint in endpoints:
+        interface = _endpoint_source_interface(endpoint)
+        if interface is not None:
+            failed_interface_ids.add(interface.pk)
+    return failed_interface_ids
+
+
+def _impact_badge_for_rank(rank):
+    if rank >= 3:
+        return ('FAILED', 'danger')
+    if rank == 2:
+        return ('Impacted', 'warning')
+    return ('Very Low', 'secondary')
+
+
+def _blast_impacted_device_hierarchy(*, endpoint_stats, endpoint_by_id, failed_interface_ids):
+    site_groups = {}
+    for endpoint_id, stat in endpoint_stats.items():
+        endpoint = endpoint_by_id.get(endpoint_id)
+        if endpoint is None:
+            continue
+
+        interface = _endpoint_source_interface(endpoint)
+        device = _endpoint_source_device(endpoint)
+        site = getattr(device, 'site', None)
+        rack = getattr(device, 'rack', None)
+        site_key = getattr(site, 'pk', None) or 'unknown-site'
+        rack_key = getattr(rack, 'pk', None) or f'{site_key}:unknown-rack'
+        device_key = getattr(device, 'pk', None) or f'endpoint:{endpoint.pk}'
+        interface_key = getattr(interface, 'pk', None) or f'endpoint:{endpoint.pk}'
+
+        site_group = site_groups.setdefault(
+            site_key,
+            {
+                'site': _object_link_reference(site) if site is not None else SimpleNamespace(display='No site', url=None),
+                'rack_groups': {},
+            },
+        )
+        rack_group = site_group['rack_groups'].setdefault(
+            rack_key,
+            {
+                'rack': _object_link_reference(rack) if rack is not None else SimpleNamespace(display='No rack', url=None),
+                'impact_label': 'Very Low' if rack is not None else 'Impacted',
+                'impact_class': 'secondary' if rack is not None else 'warning',
+                'devices': {},
+            },
+        )
+
+        parent_container = _device_parent_container(device) if device is not None else None
+        device_entry = rack_group['devices'].setdefault(
+            device_key,
+            {
+                'device': _object_link_reference(device)
+                if device is not None
+                else SimpleNamespace(display=endpoint.address, url=endpoint.get_absolute_url()),
+                'container': _object_link_reference(parent_container),
+                'rank': 1,
+                'lane_ids': set(),
+                'path_count': 0,
+                'endpoint_count': 0,
+                'interfaces': {},
+            },
+        )
+        device_entry['lane_ids'].update(stat['lane_ids'])
+        device_entry['path_count'] += stat['path_count']
+        device_entry['endpoint_count'] += 1
+
+        interface_rank = 3 if interface is not None and interface.pk in failed_interface_ids else 2
+        device_entry['rank'] = max(device_entry['rank'], interface_rank)
+        interface_entry = device_entry['interfaces'].setdefault(
+            interface_key,
+            {
+                'interface': _object_link_reference(interface)
+                if interface is not None
+                else SimpleNamespace(display=endpoint.address, url=endpoint.get_absolute_url()),
+                'rank': interface_rank,
+                'lane_ids': set(),
+                'path_count': 0,
+                'sample_path_url': None,
+            },
+        )
+        interface_entry['rank'] = max(interface_entry['rank'], interface_rank)
+        interface_entry['lane_ids'].update(stat['lane_ids'])
+        interface_entry['path_count'] += stat['path_count']
+        if interface_entry['sample_path_url'] is None:
+            interface_entry['sample_path_url'] = stat['sample_path_url']
+
+    rendered_site_groups = []
+    for site_group in site_groups.values():
+        rendered_rack_groups = []
+        for rack_group in site_group['rack_groups'].values():
+            rendered_devices = []
+            for device_entry in rack_group['devices'].values():
+                impact_label, impact_class = _impact_badge_for_rank(device_entry['rank'])
+                rendered_interfaces = []
+                for interface_entry in device_entry['interfaces'].values():
+                    interface_label, interface_class = _impact_badge_for_rank(interface_entry['rank'])
+                    rendered_interfaces.append(
+                        SimpleNamespace(
+                            interface=interface_entry['interface'],
+                            impact_label=interface_label,
+                            impact_class=interface_class,
+                            impacted_lane_total=len(interface_entry['lane_ids']),
+                            impacted_path_total=interface_entry['path_count'],
+                            sample_path_url=interface_entry['sample_path_url'],
+                        )
+                    )
+                rendered_devices.append(
+                    SimpleNamespace(
+                        device=device_entry['device'],
+                        container=device_entry['container'],
+                        impact_label=impact_label,
+                        impact_class=impact_class,
+                        impacted_lane_total=len(device_entry['lane_ids']),
+                        impacted_path_total=device_entry['path_count'],
+                        impacted_endpoint_total=device_entry['endpoint_count'],
+                        interfaces=tuple(sorted(rendered_interfaces, key=lambda row: row.interface.display)),
+                    )
+                )
+            rendered_rack_groups.append(
+                SimpleNamespace(
+                    rack=rack_group['rack'],
+                    impact_label=rack_group['impact_label'],
+                    impact_class=rack_group['impact_class'],
+                    devices=tuple(sorted(rendered_devices, key=lambda row: row.device.display)),
+                )
+            )
+        rendered_site_groups.append(
+            SimpleNamespace(
+                site=site_group['site'],
+                rack_groups=tuple(sorted(rendered_rack_groups, key=lambda row: row.rack.display)),
+            )
+        )
+    return tuple(sorted(rendered_site_groups, key=lambda row: row.site.display))
+
+
+def _blast_candidate_source_lanes_for_failure(*, fabric_id, connector_position_ids, fiber_strand_ids):
+    seed_position_ids = set(connector_position_ids or ())
+    if fiber_strand_ids:
+        seed_position_ids.update(
+            StrandTermination.objects.filter(strand_id__in=fiber_strand_ids)
+            .values_list('mpo_position_id', flat=True)
+        )
+    if not seed_position_ids:
+        return OpticalLane.objects.none()
+
+    positions_by_id = {
+        position.pk: position
+        for position in ConnectorPosition.objects.filter(
+            endpoint__fabric_id=fabric_id,
+        ).select_related('endpoint')
+    }
+    visited_position_ids = set()
+    frontier = [
+        positions_by_id[position_id]
+        for position_id in seed_position_ids
+        if position_id in positions_by_id
+    ]
+    while frontier:
+        position = frontier.pop()
+        if position.pk in visited_position_ids:
+            continue
+        visited_position_ids.add(position.pk)
+        for neighbor, _step in resolver_service._neighbors(position, fabric_id=fabric_id):
+            if neighbor.pk in visited_position_ids:
+                continue
+            cached_neighbor = positions_by_id.get(neighbor.pk)
+            frontier.append(cached_neighbor or neighbor)
+
+    return OpticalLane.objects.filter(
+        fabric_id=fabric_id,
+        direction='send',
+        local_mpo_position_id__in=visited_position_ids,
+    ).select_related('endpoint', 'local_mpo_endpoint', 'local_mpo_position', 'plane')
+
+
 def _build_v2_failure_scenario_blast_radius(
     *,
     failure_mode,
     connector_endpoint=None,
+    connector_endpoints=None,
     cable_assembly=None,
+    cable_assemblies=None,
+    interfaces=None,
     selected_fabric=None,
     actor=None,
 ):
@@ -3598,30 +4336,94 @@ def _build_v2_failure_scenario_blast_radius(
     scenario_target = None
 
     if failure_mode == 'connector_unplug':
-        if connector_endpoint is None:
+        selected_connector_endpoints = tuple(connector_endpoints or ())
+        if not selected_connector_endpoints and connector_endpoint is not None:
+            selected_connector_endpoints = (connector_endpoint,)
+        if selected_fabric is not None:
+            selected_connector_endpoints = tuple(
+                selected_endpoint
+                for selected_endpoint in selected_connector_endpoints
+                if selected_endpoint.fabric_id == selected_fabric.pk
+            )
+        if not selected_connector_endpoints:
             raise ValueError('Connector selection is required for connector-unplug simulation.')
-        scenario_target = _lane_analysis_object_reference(connector_endpoint)
+        if len(selected_connector_endpoints) == 1:
+            scenario_target = _lane_analysis_object_reference(selected_connector_endpoints[0])
+        else:
+            scenario_target = SimpleNamespace(
+                pk=None,
+                url=None,
+                display=f'{len(selected_connector_endpoints)} connector endpoints',
+                model='endpoint',
+            )
+        connector_endpoint_ids = [selected_endpoint.pk for selected_endpoint in selected_connector_endpoints]
         positions = list(
-            ConnectorPosition.objects.filter(endpoint=connector_endpoint).order_by('position_number', 'pk')
+            ConnectorPosition.objects.filter(endpoint_id__in=connector_endpoint_ids)
+            .select_related('endpoint')
+            .order_by('endpoint__address', 'position_number', 'pk')
         )
         unavailable_objects.extend(positions)
-        if positions:
-            connector_ids_by_fabric[connector_endpoint.fabric_id] = {position.pk for position in positions}
+        for position in positions:
+            connector_ids = connector_ids_by_fabric.setdefault(position.endpoint.fabric_id, set())
+            connector_ids.add(position.pk)
     elif failure_mode == 'cable_cut':
-        if cable_assembly is None:
+        selected_cable_assemblies = tuple(cable_assemblies or ())
+        if not selected_cable_assemblies and cable_assembly is not None:
+            selected_cable_assemblies = (cable_assembly,)
+        if not selected_cable_assemblies:
             raise ValueError('Cable assembly selection is required for cable-cut simulation.')
-        scenario_target = _cable_assembly_reference(cable_assembly)
-        strands = FiberStrand.objects.filter(
-            cable_site_id=cable_assembly.site_id,
-            cable_id=cable_assembly.cable_id,
-        ).select_related('segment')
+        if len(selected_cable_assemblies) == 1:
+            scenario_target = _cable_assembly_reference(selected_cable_assemblies[0])
+        else:
+            scenario_target = SimpleNamespace(
+                pk=None,
+                url=None,
+                display=f'{len(selected_cable_assemblies)} cable assemblies',
+                model='cableassembly',
+            )
+        for selected_cable in selected_cable_assemblies:
+            strands = FiberStrand.objects.filter(
+                cable_site_id=selected_cable.site_id,
+                cable_id=selected_cable.cable_id,
+            ).select_related('segment')
+            if selected_fabric is not None:
+                strands = strands.filter(segment__fabric=selected_fabric)
+            strands = list(strands.order_by('segment__fabric_id', 'segment__name', 'strand_index', 'pk'))
+            unavailable_objects.extend(strands)
+            for strand in strands:
+                strand_ids = strand_ids_by_fabric.setdefault(strand.segment.fabric_id, set())
+                strand_ids.add(strand.pk)
+    elif failure_mode == 'osfp_transceiver_unseat':
+        selected_interfaces = tuple(interfaces or ())
+        if not selected_interfaces:
+            raise ValueError('Interface selection is required for OSFP transceiver unseat simulation.')
+        if len(selected_interfaces) == 1:
+            scenario_target = _object_link_reference(selected_interfaces[0])
+        else:
+            scenario_target = SimpleNamespace(
+                pk=None,
+                url=None,
+                display=f'{len(selected_interfaces)} OSFP transceivers',
+                model='interface',
+            )
+
+        connector_endpoints = _connector_endpoints_for_interfaces(selected_interfaces)
         if selected_fabric is not None:
-            strands = strands.filter(segment__fabric=selected_fabric)
-        strands = list(strands.order_by('segment__fabric_id', 'segment__name', 'strand_index', 'pk'))
-        unavailable_objects.extend(strands)
-        for strand in strands:
-            strand_ids = strand_ids_by_fabric.setdefault(strand.segment.fabric_id, set())
-            strand_ids.add(strand.pk)
+            connector_endpoints = tuple(
+                connector_endpoint
+                for connector_endpoint in connector_endpoints
+                if connector_endpoint.fabric_id == selected_fabric.pk
+            )
+        connector_endpoint_ids = [connector_endpoint.pk for connector_endpoint in connector_endpoints]
+        positions = list(
+            ConnectorPosition.objects.filter(endpoint_id__in=connector_endpoint_ids)
+            .select_related('endpoint')
+            .order_by('endpoint__address', 'position_number', 'pk')
+        )
+        unavailable_objects.extend(positions)
+        for position in positions:
+            connector_ids = connector_ids_by_fabric.setdefault(position.endpoint.fabric_id, set())
+            connector_ids.add(position.pk)
     else:
         raise ValueError(f'Unsupported failure mode: {failure_mode}')
 
@@ -3629,6 +4431,7 @@ def _build_v2_failure_scenario_blast_radius(
     endpoint_stats = {}
     lane_ids = set()
     endpoint_ids = set()
+    failed_interface_ids = _failed_interface_ids_for_unavailable_objects(unavailable_objects)
 
     for fabric_id in sorted(set(connector_ids_by_fabric) | set(strand_ids_by_fabric)):
         connector_position_ids = connector_ids_by_fabric.get(fabric_id, set())
@@ -3636,8 +4439,13 @@ def _build_v2_failure_scenario_blast_radius(
         if not connector_position_ids and not fiber_strand_ids:
             continue
 
-        resolver_rows = resolver_service.build_path_resolver_matrix(
+        source_lanes = _blast_candidate_source_lanes_for_failure(
             fabric_id=fabric_id,
+            connector_position_ids=connector_position_ids,
+            fiber_strand_ids=fiber_strand_ids,
+        )
+        resolver_rows = resolver_service.build_path_resolver_matrix(
+            source_lanes=source_lanes,
             actor=actor,
         )
         for resolver_row in resolver_rows:
@@ -3819,6 +4627,11 @@ def _build_v2_failure_scenario_blast_radius(
             )
         )
     impacted_endpoints.sort(key=lambda row: row.endpoint.display)
+    impacted_device_hierarchy = _blast_impacted_device_hierarchy(
+        endpoint_stats=endpoint_stats,
+        endpoint_by_id=endpoint_by_id,
+        failed_interface_ids=failed_interface_ids,
+    )
 
     return {
         'mode': 'scenario',
@@ -3835,6 +4648,7 @@ def _build_v2_failure_scenario_blast_radius(
         'impacted_path_count': len(impacted_path_rows),
         'impacted_endpoints': tuple(impacted_endpoints),
         'impacted_paths': tuple(impacted_path_rows),
+        'impacted_device_hierarchy': impacted_device_hierarchy,
     }
 
 
@@ -4008,27 +4822,86 @@ class LaneCompareView(TemplateView):
 class BlastRadiusView(TemplateView):
     template_name = 'netbox_plant_graph/blast_radius.html'
 
+    def post(self, request, *args, **kwargs):
+        if request.POST.get('action') != 'save_impact_report':
+            return redirect(_blast_radius_redirect_url(request.POST))
+
+        try:
+            report = _build_operational_impact_report_from_request(request.POST, actor=request.user)
+            report_name = (request.POST.get('report_name') or '').strip()
+            run = persist_operational_impact_report(
+                report,
+                report_name=report_name,
+                actor=request.user if request.user.is_authenticated else None,
+                parameters={'source_view': 'physical_cable_blast_radius'},
+            )
+        except Exception as exc:
+            messages.error(request, f'Unable to save impact report: {exc}')
+            return redirect(_blast_radius_redirect_url(request.POST))
+
+        messages.success(request, f'Saved operational impact report #{run.pk}.')
+        return redirect(reverse('plugins:netbox_plant_graph:impact_reports'))
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         fabrics = Fabric.objects.order_by('name', 'pk')
+        sites = Site.objects.order_by('name', 'pk')
+        device_types = DeviceType.objects.select_related('manufacturer').order_by('manufacturer__name', 'model', 'pk')
+        device_roles = DeviceRole.objects.order_by('name', 'pk')
         selected_fabric = None
         selected_fabric_raw = self.request.GET.get('fabric') or self.request.GET.get('fabric_id') or ''
         if selected_fabric_raw:
             selected_fabric = fabrics.filter(pk=selected_fabric_raw).first()
 
-        failure_mode = (self.request.GET.get('failure_mode') or 'connector_unplug').strip().lower()
+        failure_mode = (self.request.GET.get('failure_mode') or 'cable_cut').strip().lower()
         valid_failure_modes = {choice['value'] for choice in _BLAST_FAILURE_MODE_CHOICES}
         if failure_mode not in valid_failure_modes:
-            failure_mode = 'connector_unplug'
+            failure_mode = 'cable_cut'
 
         query = {
             'fabric': str(selected_fabric.pk) if selected_fabric is not None else selected_fabric_raw,
             'failure_mode': failure_mode,
             'connector_endpoint_id': self.request.GET.get('connector_endpoint_id', ''),
+            'connector_endpoint_ids': tuple(self.request.GET.getlist('connector_endpoint_ids')),
             'cable_assembly_id': self.request.GET.get('cable_assembly_id', ''),
+            'site': self.request.GET.get('site', ''),
+            'device_type': self.request.GET.get('device_type', ''),
+            'device_role': self.request.GET.get('device_role', ''),
+            'rack_label': self.request.GET.get('rack_label', ''),
+            'rack_row': self.request.GET.get('rack_row', ''),
+            'rack_elevation': self.request.GET.get('rack_elevation', ''),
+            'device_q': self.request.GET.get('device_q', ''),
+            'device_id': self.request.GET.get('device_id', ''),
+            'cable_assembly_ids': tuple(self.request.GET.getlist('cable_assembly_ids')),
+            'interface_ids': tuple(self.request.GET.getlist('interface_ids')),
             'target_registry_key': self.request.GET.get('target_registry_key', 'endpoint'),
             'target_id': self.request.GET.get('target_id', ''),
             'resolution': self.request.GET.get('resolution', 'attachment_unit'),
+        }
+        selected_device = Device.objects.select_related('site', 'device_type', 'role', 'rack').filter(
+            pk=_parse_int(query['device_id'])
+        ).first()
+        device_candidates = tuple(_blast_operator_device_queryset(query)[:250])
+        device_cable_rows = _device_attached_cable_rows(selected_device)
+        device_cable_choices = _device_attached_cable_choices(device_cable_rows)
+        device_interface_choices = _device_attached_interface_choices(device_cable_rows)
+        device_connector_choices = _device_attached_connector_choices(device_cable_rows)
+        attached_cable_ids = {
+            cable.pk
+            for row in device_cable_rows
+            for cable in row.cables
+            if cable.pk is not None
+        }
+        attached_interface_ids = {
+            row.interface.pk
+            for row in device_cable_rows
+            if row.interface.pk is not None
+        }
+        attached_connector_endpoint_ids = {
+            endpoint.pk
+            for row in device_cable_rows
+            for endpoint in row.endpoints
+            if endpoint.pk is not None
         }
 
         connector_candidates = _blast_connector_candidates(fabric=selected_fabric)
@@ -4039,11 +4912,6 @@ class BlastRadiusView(TemplateView):
             )
             for connector in connector_candidates
         )
-        connector_by_id = {
-            connector.pk: connector
-            for connector in connector_candidates
-        }
-
         cable_candidates = _blast_cable_candidates(fabric=selected_fabric)
         cable_choices = tuple(
             SimpleNamespace(
@@ -4059,19 +4927,79 @@ class BlastRadiusView(TemplateView):
 
         result = None
         error = None
-        scenario_requested = bool(query['connector_endpoint_id'] or query['cable_assembly_id'])
+        selected_cable_ids = {
+            cable_id
+            for cable_id in query['cable_assembly_ids']
+            if cable_id not in (None, '')
+        } if query['failure_mode'] == 'cable_cut' else set()
+        if query['failure_mode'] == 'cable_cut' and query['cable_assembly_id']:
+            selected_cable_ids.add(query['cable_assembly_id'])
+        selected_cable_assemblies = _cable_assemblies_for_ids(selected_cable_ids)
+        selected_interface_ids = {
+            interface_id
+            for interface_id in query['interface_ids']
+            if interface_id not in (None, '')
+        } if query['failure_mode'] == 'osfp_transceiver_unseat' else set()
+        selected_interfaces = _interfaces_for_ids(selected_interface_ids)
+        selected_connector_endpoint_ids = {
+            connector_endpoint_id
+            for connector_endpoint_id in query['connector_endpoint_ids']
+            if connector_endpoint_id not in (None, '')
+        } if query['failure_mode'] == 'connector_unplug' else set()
+        if query['failure_mode'] == 'connector_unplug' and query['connector_endpoint_id']:
+            selected_connector_endpoint_ids.add(query['connector_endpoint_id'])
+        selected_connector_endpoints = _connector_endpoints_for_ids(selected_connector_endpoint_ids)
+        scenario_requested = bool(
+            (query['failure_mode'] == 'connector_unplug' and selected_connector_endpoint_ids)
+            or (query['failure_mode'] == 'cable_cut' and (query['cable_assembly_id'] or selected_cable_ids))
+            or (query['failure_mode'] == 'osfp_transceiver_unseat' and selected_interface_ids)
+        )
         if scenario_requested:
-            connector_endpoint = connector_by_id.get(_parse_int(query['connector_endpoint_id']))
             cable_assembly = cable_by_id.get(_parse_int(query['cable_assembly_id']))
 
-            if query['failure_mode'] == 'connector_unplug':
-                if connector_endpoint is None:
+            if query['failure_mode'] == 'cable_cut' and selected_cable_ids:
+                selected_ids = {cable.pk for cable in selected_cable_assemblies}
+                if not selected_cable_assemblies:
+                    error = 'Select at least one valid cable assembly attached to the selected device.'
+                elif selected_device is not None and not selected_ids.issubset(attached_cable_ids):
+                    error = 'Select only cable assemblies attached to the selected device.'
+                else:
+                    try:
+                        result = _build_v2_failure_scenario_blast_radius(
+                            failure_mode='cable_cut',
+                            cable_assemblies=selected_cable_assemblies,
+                            selected_fabric=selected_fabric,
+                            actor=self.request.user,
+                        )
+                    except Exception as exc:
+                        error = f'Unable to compute selected-cable blast radius: {exc}'
+            elif query['failure_mode'] == 'osfp_transceiver_unseat':
+                selected_ids = {interface.pk for interface in selected_interfaces}
+                if not selected_interfaces:
+                    error = 'Select at least one valid OSFP interface attached to the selected device.'
+                elif selected_device is not None and not selected_ids.issubset(attached_interface_ids):
+                    error = 'Select only OSFP interfaces attached to the selected device.'
+                else:
+                    try:
+                        result = _build_v2_failure_scenario_blast_radius(
+                            failure_mode='osfp_transceiver_unseat',
+                            interfaces=selected_interfaces,
+                            selected_fabric=selected_fabric,
+                            actor=self.request.user,
+                        )
+                    except Exception as exc:
+                        error = f'Unable to compute OSFP-transceiver blast radius: {exc}'
+            elif query['failure_mode'] == 'connector_unplug':
+                selected_ids = {endpoint.pk for endpoint in selected_connector_endpoints}
+                if not selected_connector_endpoints:
                     error = 'Select a valid connector endpoint to simulate unplugging.'
+                elif selected_device is not None and not selected_ids.issubset(attached_connector_endpoint_ids):
+                    error = 'Select only connector endpoints attached to the selected device.'
                 else:
                     try:
                         result = _build_v2_failure_scenario_blast_radius(
                             failure_mode='connector_unplug',
-                            connector_endpoint=connector_endpoint,
+                            connector_endpoints=selected_connector_endpoints,
                             selected_fabric=selected_fabric,
                             actor=self.request.user,
                         )
@@ -4109,7 +5037,19 @@ class BlastRadiusView(TemplateView):
             {
                 'page_title': 'Physical Cable Blast Radius',
                 'fabrics': fabrics,
+                'sites': sites,
+                'device_types': device_types,
+                'device_roles': device_roles,
                 'selected_fabric': selected_fabric,
+                'selected_device': selected_device,
+                'device_candidates': device_candidates,
+                'device_cable_rows': device_cable_rows,
+                'device_cable_choices': device_cable_choices,
+                'device_interface_choices': device_interface_choices,
+                'device_connector_choices': device_connector_choices,
+                'selected_cable_assembly_ids': {str(cable.pk) for cable in selected_cable_assemblies},
+                'selected_interface_ids': {str(interface.pk) for interface in selected_interfaces},
+                'selected_connector_endpoint_ids': {str(endpoint.pk) for endpoint in selected_connector_endpoints},
                 'failure_mode_choices': _BLAST_FAILURE_MODE_CHOICES,
                 'connector_choices': connector_choices,
                 'cable_choices': cable_choices,
@@ -4118,9 +5058,241 @@ class BlastRadiusView(TemplateView):
                 'query': query,
                 'result': result,
                 'error': error,
+                'integrity_gate_banner': _latest_integrity_gate_banner(selected_fabric),
             }
         )
         return context
+
+
+def _single_fabric_for_endpoints(endpoints):
+    fabric_ids = {endpoint.fabric_id for endpoint in endpoints if getattr(endpoint, 'fabric_id', None)}
+    if len(fabric_ids) != 1:
+        return None
+    return Fabric.objects.filter(pk=next(iter(fabric_ids))).first()
+
+
+def _latest_integrity_gate_banner(fabric):
+    if fabric is None:
+        return None
+    try:
+        gate = integrity_gate_for_fabric(fabric, latest=True, run_audit=False, fail_on='error')
+    except Exception as exc:
+        return SimpleNamespace(
+            status='warn',
+            css_class='alert-warning',
+            title='Topology integrity status unavailable',
+            message=f'Latest topology integrity gate could not be read: {exc}',
+            run_url=reverse('plugins:netbox_plant_graph:audit_dashboard') + f'?{urlencode({"fabric_id": fabric.pk})}',
+        )
+    if gate.source == 'no_report' or gate.status == 'pass':
+        return None
+    return SimpleNamespace(
+        status=gate.status,
+        css_class='alert-danger' if gate.status == 'fail' else 'alert-warning',
+        title='Latest topology integrity gate is not clean',
+        message=(
+            f'{fabric.name}: {gate.status.upper()} from run #{gate.operation_run_id}; '
+            f'{gate.summary.get("total", 0)} findings, {gate.path_blocking_count} path-blocking.'
+        ),
+        run_url=reverse('plugins:netbox_plant_graph:audit_dashboard') + f'?{urlencode({"fabric_id": fabric.pk})}',
+    )
+
+
+def _status_badge_class(status):
+    normalized = (status or '').lower()
+    if normalized in {'pass', 'compatible', 'valid', 'clean'}:
+        return 'text-bg-success'
+    if normalized in {'fail', 'incompatible', 'invalid', 'error'}:
+        return 'text-bg-danger'
+    if normalized in {'warn', 'warning', 'not run', 'missing'}:
+        return 'text-bg-warning'
+    return 'text-bg-secondary'
+
+
+def _architecture_readiness_summary(architecture):
+    if architecture is None:
+        return SimpleNamespace(
+            status='missing',
+            badge_class=_status_badge_class('missing'),
+            label='No architecture',
+            schema_status='missing',
+            schema_error_count=0,
+            compatibility_status='not evaluated',
+            compatibility_issue_count=0,
+            url=None,
+        )
+
+    validation = validate_persisted_architecture_schema(architecture)
+    expected_schema = build_roce_4plane_shuffle_architecture_schema()
+    compatibility = None
+    if architecture.slug == expected_schema.slug:
+        compatibility = compare_persisted_architecture_compatibility(architecture, expected_schema)
+
+    schema_status = 'valid' if validation.is_valid else 'invalid'
+    compatibility_status = compatibility.status if compatibility is not None else 'custom contract'
+    compatibility_issue_count = len(compatibility.issues) if compatibility is not None else 0
+    if not validation.is_valid or compatibility_status == 'incompatible':
+        status = 'fail'
+    elif compatibility_status == 'warning':
+        status = 'warn'
+    else:
+        status = 'pass'
+
+    return SimpleNamespace(
+        status=status,
+        badge_class=_status_badge_class(status),
+        label=architecture,
+        schema_status=schema_status,
+        schema_error_count=len(validation.errors),
+        compatibility_status=compatibility_status,
+        compatibility_issue_count=compatibility_issue_count,
+        url=architecture.get_absolute_url(),
+    )
+
+
+def _topology_readiness_summary(fabric):
+    audit_url = reverse('plugins:netbox_plant_graph:audit_dashboard') + f'?{urlencode({"fabric_id": fabric.pk})}'
+    try:
+        gate = integrity_gate_for_fabric(fabric, latest=True, run_audit=False, fail_on='error')
+    except Exception as exc:
+        return SimpleNamespace(
+            status='warn',
+            badge_class=_status_badge_class('warn'),
+            label='Unavailable',
+            message=str(exc),
+            finding_count=0,
+            path_blocking_count=0,
+            source='error',
+            run_url=None,
+            audit_url=audit_url,
+        )
+
+    if gate.source == 'no_report':
+        status = 'warn'
+        label = 'Not run'
+    else:
+        status = gate.status
+        label = gate.status.upper()
+
+    run_url = None
+    if gate.operation_run_id:
+        run = OperationRun.objects.filter(pk=gate.operation_run_id).first()
+        if run is not None:
+            run_url = run.get_absolute_url()
+
+    return SimpleNamespace(
+        status=status,
+        badge_class=_status_badge_class(status if gate.source != 'no_report' else 'not run'),
+        label=label,
+        message='No persisted topology integrity run yet.' if gate.source == 'no_report' else '',
+        finding_count=gate.summary.get('total', 0),
+        path_blocking_count=gate.path_blocking_count,
+        source=gate.source,
+        run_url=run_url,
+        audit_url=audit_url,
+    )
+
+
+def _fabric_readiness_summary(fabric):
+    architecture = _architecture_readiness_summary(getattr(fabric, 'architecture', None))
+    topology = _topology_readiness_summary(fabric)
+    if architecture.status == 'fail' or topology.status == 'fail':
+        status = 'fail'
+        label = 'Blocked'
+    elif architecture.status == 'warn' or topology.status == 'warn':
+        status = 'warn'
+        label = 'Needs attention'
+    else:
+        status = 'pass'
+        label = 'Ready'
+    return SimpleNamespace(
+        fabric=fabric,
+        status=status,
+        label=label,
+        badge_class=_status_badge_class(status),
+        architecture=architecture,
+        topology=topology,
+        operations_url=reverse('plugins:netbox_plant_graph:fabric_operations', kwargs={'pk': fabric.pk}),
+        path_query_url=reverse('plugins:netbox_plant_graph:path_query') + f'?{urlencode({"fabric": fabric.pk})}',
+    )
+
+
+def _fabric_readiness_rows(limit=12):
+    fabrics = Fabric.objects.select_related('architecture').order_by('name', 'pk')[:limit]
+    return tuple(_fabric_readiness_summary(fabric) for fabric in fabrics)
+
+
+def _request_values(data, key):
+    getter = getattr(data, 'getlist', None)
+    if callable(getter):
+        return tuple(value for value in getter(key) if value not in (None, ''))
+    value = data.get(key)
+    if value in (None, ''):
+        return ()
+    if isinstance(value, (list, tuple, set)):
+        return tuple(item for item in value if item not in (None, ''))
+    return (value,)
+
+
+def _blast_radius_redirect_url(data):
+    ignored = {'csrfmiddlewaretoken', 'action', 'report_name'}
+    params = []
+    keys = data.keys() if hasattr(data, 'keys') else ()
+    for key in keys:
+        if key in ignored:
+            continue
+        for value in _request_values(data, key):
+            params.append((key, value))
+    base = reverse('plugins:netbox_plant_graph:blast_radius')
+    return f'{base}?{urlencode(params)}' if params else base
+
+
+def _build_operational_impact_report_from_request(data, *, actor=None):
+    failure_mode = (data.get('failure_mode') or 'cable_cut').strip().lower()
+    selected_fabric = Fabric.objects.filter(
+        pk=_parse_int(data.get('fabric') or data.get('fabric_id'))
+    ).first()
+
+    if failure_mode == 'cable_cut':
+        cable_ids = set(_request_values(data, 'cable_assembly_ids'))
+        if data.get('cable_assembly_id'):
+            cable_ids.add(data.get('cable_assembly_id'))
+        cables = _cable_assemblies_for_ids(cable_ids)
+        if not cables:
+            raise ValueError('Select at least one cable assembly before saving an impact report.')
+        return model_operational_impact(
+            scenario_type=SCENARIO_CABLE_ASSEMBLY_CUT,
+            cable_assemblies=cables,
+            selected_fabric=selected_fabric,
+            actor=actor,
+        )
+
+    if failure_mode == 'connector_unplug':
+        endpoint_ids = set(_request_values(data, 'connector_endpoint_ids'))
+        if data.get('connector_endpoint_id'):
+            endpoint_ids.add(data.get('connector_endpoint_id'))
+        connector_endpoints = _connector_endpoints_for_ids(endpoint_ids)
+        if not connector_endpoints:
+            raise ValueError('Select at least one MPO connector before saving an impact report.')
+        return model_operational_impact(
+            scenario_type=SCENARIO_MPO_CONNECTOR_UNPLUG,
+            connector_endpoints=connector_endpoints,
+            selected_fabric=selected_fabric,
+            actor=actor,
+        )
+
+    if failure_mode == 'osfp_transceiver_unseat':
+        interfaces = _interfaces_for_ids(_request_values(data, 'interface_ids'))
+        if not interfaces:
+            raise ValueError('Select at least one OSFP interface before saving an impact report.')
+        return model_operational_impact(
+            scenario_type=SCENARIO_OSFP_TRANSCEIVER_UNSEAT,
+            interfaces=interfaces,
+            selected_fabric=selected_fabric,
+            actor=actor,
+        )
+
+    raise ValueError(f'Unsupported failure mode for saved impact reports: {failure_mode}')
 
 
 def _object_reference(obj):
@@ -4454,6 +5626,56 @@ def _is_disjointness_exception_rule(rule: SuppressionRule) -> bool:
     return metadata.get('kind') == 'disjointness_exception' or rule.policy_key == 'disjointness_exception'
 
 
+def _latest_integrity_run(fabric):
+    if fabric is None:
+        return None
+    return (
+        OperationRun.objects.filter(
+            fabric=fabric,
+            profile=TOPOLOGY_INTEGRITY_OPERATION_PROFILE,
+        )
+        .order_by('-created', '-pk')
+        .first()
+    )
+
+
+def _integrity_report_payload(run):
+    if run is None:
+        return {}
+    result = run.result or {}
+    report = result.get('report') if isinstance(result, dict) else {}
+    grouped_summary = result.get('grouped_summary') or (report or {}).get('grouped_summary') or {}
+    return {
+        'ok': result.get('ok', (report or {}).get('ok')),
+        'summary': result.get('summary') or (report or {}).get('summary') or {},
+        'grouped_summary': grouped_summary,
+        'path_blocking_count': result.get('path_blocking_count') or grouped_summary.get('path_blocking_count') or 0,
+        'checked': result.get('checked') or (report or {}).get('checked') or {},
+        'findings': (report or {}).get('findings') or (),
+        'report': report or {},
+    }
+
+
+def _integrity_status_rows(fabrics):
+    rows = []
+    for fabric in fabrics:
+        run = _latest_integrity_run(fabric)
+        payload = _integrity_report_payload(run)
+        summary = payload.get('summary') or {}
+        rows.append(
+            SimpleNamespace(
+                fabric=fabric,
+                run=run,
+                status='not run' if run is None else ('pass' if payload.get('ok') else 'fail'),
+                finding_count=summary.get('total', 0),
+                error_count=summary.get('error', 0) + summary.get('critical', 0),
+                warning_count=summary.get('warning', 0),
+                path_blocking_count=payload.get('path_blocking_count', 0),
+            )
+        )
+    return tuple(rows)
+
+
 class DisjointnessExceptionRequestFallbackForm(django_forms.Form):
     fabric = django_forms.ModelChoiceField(queryset=Fabric.objects.none())
     exception_type = django_forms.ChoiceField(
@@ -4525,14 +5747,37 @@ class HealthView(View):
 class AuditDashboardView(TemplateView):
     template_name = 'netbox_plant_graph/audit_dashboard.html'
 
+    def post(self, request, *args, **kwargs):
+        fabric = Fabric.objects.filter(pk=_parse_int(request.POST.get('fabric_id'))).first()
+        if fabric is None:
+            messages.error(request, 'Select a fabric before running topology integrity.')
+            return redirect(reverse('plugins:netbox_plant_graph:audit_dashboard'))
+        report = audit_topology_integrity(fabric=fabric)
+        run = persist_topology_integrity_report(
+            report,
+            actor=request.user if request.user.is_authenticated else None,
+            parameters={'trigger_mode': 'ui'},
+        )
+        messages.success(
+            request,
+            f'Persisted topology integrity run #{run.pk} for {fabric.name}: {report.summary["total"]} findings.',
+        )
+        return redirect(f'{reverse("plugins:netbox_plant_graph:audit_dashboard")}?{urlencode({"fabric_id": fabric.pk})}')
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         fabrics, selected_fabric = _selected_fabric_from_request(self.request, default_first=True)
+        integrity_status_rows = _integrity_status_rows(fabrics)
         if selected_fabric is None:
             context.update(
                 {
                     'fabrics': fabrics,
                     'selected_fabric': None,
+                    'integrity_status_rows': integrity_status_rows,
+                    'selected_integrity_run': None,
+                    'selected_integrity_report': None,
+                    'selected_integrity_groups': (),
+                    'selected_integrity_findings': (),
                     'workflow_summary': None,
                     'policy_dashboard': None,
                     'unresolved_dashboard': None,
@@ -4552,6 +5797,10 @@ class AuditDashboardView(TemplateView):
             return context
 
         now = timezone.now()
+        selected_integrity_run = _latest_integrity_run(selected_fabric)
+        selected_integrity_report = _integrity_report_payload(selected_integrity_run)
+        selected_integrity_groups = tuple((selected_integrity_report.get('grouped_summary') or {}).get('groups') or ())
+        selected_integrity_findings = tuple((selected_integrity_report.get('report') or {}).get('findings') or selected_integrity_report.get('findings') or ())[:50]
         all_findings = [
             event
             for event in _finding_queryset_for_fabric(selected_fabric)
@@ -4722,6 +5971,11 @@ class AuditDashboardView(TemplateView):
             {
                 'fabrics': fabrics,
                 'selected_fabric': selected_fabric,
+                'integrity_status_rows': integrity_status_rows,
+                'selected_integrity_run': selected_integrity_run,
+                'selected_integrity_report': selected_integrity_report,
+                'selected_integrity_groups': selected_integrity_groups,
+                'selected_integrity_findings': selected_integrity_findings,
                 'workflow_summary': workflow_summary,
                 'policy_dashboard': policy_dashboard,
                 'unresolved_dashboard': None,
@@ -5329,7 +6583,12 @@ class OperationsCenterView(TemplateView):
         context = super().get_context_data(**kwargs)
         form = kwargs.get('form') or forms.OperationExecuteForm()
         recent_runs = OperationRun.objects.select_related('fabric', 'initiated_by').order_by('-created', '-pk')[:25]
-        context.update({'form': form, 'recent_runs': recent_runs})
+        context.update({
+            'form': form,
+            'recent_runs': recent_runs,
+            'impact_report_runs': tuple(_impact_report_runs()[:10]),
+            'readiness_rows': _fabric_readiness_rows(),
+        })
         return context
 
     def post(self, request, *args, **kwargs):
@@ -5347,6 +6606,137 @@ class OperationsCenterView(TemplateView):
         else:
             messages.success(request, f'Completed operation run #{execution.run.pk}.')
         return redirect(execution.run.get_absolute_url())
+
+
+class ImportPreviewView(TemplateView):
+    template_name = 'netbox_plant_graph/import_preview.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        plan = kwargs.get('plan')
+        context.update(
+            {
+                'payload_text': kwargs.get('payload_text', ''),
+                'plan': plan,
+                'parse_error': kwargs.get('parse_error', ''),
+                'apply_requested': kwargs.get('apply_requested', False),
+            }
+        )
+        if plan is not None:
+            context.update(_import_preview_operator_context(plan))
+        return context
+
+    def post(self, request, *args, **kwargs):
+        payload_text = (request.POST.get('payload_json') or '').strip()
+        uploaded_file = request.FILES.get('payload_file')
+        if uploaded_file is not None and not payload_text:
+            payload_text = uploaded_file.read().decode('utf-8')
+        apply_requested = request.POST.get('action') == 'apply'
+        confirm_apply = (request.POST.get('confirm_apply') or '').strip().lower() == 'apply'
+        plan = None
+        parse_error = ''
+        try:
+            payload = json.loads(payload_text or '{}')
+            if apply_requested and not confirm_apply:
+                parse_error = 'Type APPLY before applying this reconciliation plan.'
+                plan = reconcile_import_payload(payload, apply=False)
+            else:
+                plan = reconcile_import_payload(payload, apply=apply_requested)
+                if apply_requested and plan.committed:
+                    messages.success(request, f'Applied import reconciliation plan with {plan.summary.total} rows.')
+                elif apply_requested:
+                    messages.warning(request, 'Import apply was not committed because conflicts remain.')
+        except UnicodeDecodeError:
+            parse_error = 'Uploaded file is not valid UTF-8 JSON.'
+        except json.JSONDecodeError as exc:
+            parse_error = f'Invalid JSON: {exc}'
+        except Exception as exc:
+            parse_error = f'Unable to reconcile import payload: {exc}'
+        return self.render_to_response(
+            self.get_context_data(
+                payload_text=payload_text,
+                plan=plan,
+                parse_error=parse_error,
+                apply_requested=apply_requested,
+            )
+        )
+
+
+def _import_preview_operator_context(plan):
+    architecture_conflicts = tuple(diff for diff in plan.diffs if diff.kind == 'architecture_gate')
+    row_diffs = tuple(diff for diff in plan.diffs if diff.kind != 'architecture_gate')
+    dependency_counts = {'planned': 0, 'existing': 0, 'missing': 0}
+    for edge in plan.dependency_edges:
+        dependency_counts[edge.status] = dependency_counts.get(edge.status, 0) + 1
+    provenance_rows = tuple(
+        {
+            'index': diff.index,
+            'kind': diff.kind,
+            'identity': diff.identity,
+            'provenance': dict(diff.details.get('provenance') or {}),
+        }
+        for diff in row_diffs
+        if diff.details.get('provenance')
+    )
+    return {
+        'import_architecture_conflicts': architecture_conflicts,
+        'import_row_diffs': row_diffs,
+        'import_dependency_summary': {
+            'total': len(plan.dependency_edges),
+            **dependency_counts,
+        },
+        'import_dependency_edges': tuple(plan.dependency_edges),
+        'import_apply_order_preview': tuple(plan.apply_order[:32]),
+        'import_apply_order_truncated': len(plan.apply_order) > 32,
+        'import_provenance_rows': provenance_rows,
+    }
+
+
+def _impact_report_runs():
+    return OperationRun.objects.filter(
+        profile=OPERATIONAL_IMPACT_OPERATION_PROFILE,
+        result__operation_kind=OPERATIONAL_IMPACT_OPERATION_KIND,
+    ).select_related('fabric', 'initiated_by').order_by('-created', '-pk')
+
+
+class ImpactReportsView(TemplateView):
+    template_name = 'netbox_plant_graph/impact_reports.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        runs = tuple(_impact_report_runs()[:50])
+        left_id = _parse_int(self.request.GET.get('left'))
+        right_id = _parse_int(self.request.GET.get('right'))
+        comparison = None
+        comparison_error = ''
+        if left_id and right_id:
+            selected = tuple(_impact_report_runs().filter(pk__in=(left_id, right_id)).order_by('pk'))
+            if len(selected) != 2:
+                comparison_error = 'Select two saved impact reports to compare.'
+            else:
+                try:
+                    comparison = compare_operational_impact_reports(
+                        selected[0].result,
+                        selected[1].result,
+                    ).as_dict()
+                except Exception as exc:
+                    comparison_error = f'Unable to compare selected reports: {exc}'
+        context.update(
+            {
+                'impact_runs': runs,
+                'left_id': left_id,
+                'right_id': right_id,
+                'comparison': comparison,
+                'comparison_error': comparison_error,
+            }
+        )
+        return context
+
+
+class ImpactReportExportView(View):
+    def get(self, request, pk):
+        run = get_object_or_404(_impact_report_runs(), pk=pk)
+        return JsonResponse(run.result or {}, json_dumps_params={'indent': 2})
 
 
 class CoordinateLayoutView(TemplateView):

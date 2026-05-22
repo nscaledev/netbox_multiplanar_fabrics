@@ -43,7 +43,99 @@
     </div>
   </div>
 
+  {% include 'netbox_plant_graph/includes/fabric_readiness_summary.html' with readiness=fabric_readiness only %}
+
   {% if architecture_semantics %}
+    <div class="card mt-3">
+      <div class="card-header">
+        <strong>Schema Validation & Compatibility</strong>
+      </div>
+      <div class="card-body">
+        <div class="row g-3 mb-3">
+          <div class="col-md-3">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Schema Version</div>
+              <div class="fw-semibold">{{ object.version }}</div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Contract Version</div>
+              <div class="fw-semibold">{{ architecture_semantics.schema_contract_version }}</div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Validation</div>
+              <div class="fw-semibold">{% if architecture_semantics.schema_validation.is_valid %}Valid{% else %}Invalid{% endif %}</div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Built-in Compatibility</div>
+              <div class="fw-semibold">{{ architecture_semantics.compatibility.status }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Code</th>
+                <th>Path</th>
+                <th>Message</th>
+                <th>Severity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for error in architecture_semantics.schema_errors %}
+                <tr>
+                  <td>Schema</td>
+                  <td><code>{{ error.code }}</code></td>
+                  <td><code>{{ error.path }}</code></td>
+                  <td>{{ error.message }}</td>
+                  <td>error</td>
+                </tr>
+              {% endfor %}
+              {% for issue in architecture_semantics.compatibility_issues %}
+                <tr>
+                  <td>Compatibility</td>
+                  <td><code>{{ issue.code }}</code></td>
+                  <td><code>{{ issue.path }}</code></td>
+                  <td>{{ issue.message }}</td>
+                  <td>{{ issue.severity }}</td>
+                </tr>
+              {% endfor %}
+              {% if architecture_semantics.schema_validation.is_valid and not architecture_semantics.compatibility_issues %}
+                <tr><td colspan="5" class="text-success">No schema errors or compatibility issues.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0">
+            <thead>
+              <tr>
+                <th>Channel Map Rows</th>
+                <th>Total Positions</th>
+                <th>MPO Indexes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{{ architecture_semantics.channel_map_summary.row_count }}</td>
+                <td>{{ architecture_semantics.channel_map_summary.position_count }}</td>
+                <td>{% if architecture_semantics.channel_map_summary.mpo_indexes %}{{ architecture_semantics.channel_map_summary.mpo_indexes|join:", " }}{% else %}-{% endif %}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="card mt-3">
       <div class="card-header">
         <strong>Role Taxonomy</strong>

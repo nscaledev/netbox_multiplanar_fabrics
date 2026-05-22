@@ -1,0 +1,320 @@
+{% extends 'base/layout.html' %}
+
+{% block title %}Import Preview{% endblock %}
+
+{% block content %}
+  <h1>Import Preview</h1>
+
+  <div class="card mb-3">
+    <div class="card-header">JSON Reconciliation</div>
+    <div class="card-body">
+      {% if parse_error %}
+        <div class="alert alert-warning">{{ parse_error }}</div>
+      {% endif %}
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label" for="payload_json">Payload JSON</label>
+          <textarea id="payload_json" name="payload_json" class="form-control font-monospace" rows="14">{{ payload_text }}</textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="payload_file">Upload JSON</label>
+          <input id="payload_file" name="payload_file" type="file" accept="application/json,.json" class="form-control">
+        </div>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label" for="confirm_apply">Apply Confirmation</label>
+            <input id="confirm_apply" name="confirm_apply" class="form-control" placeholder="Type APPLY before applying">
+          </div>
+          <div class="col-md-8 d-flex flex-wrap gap-2">
+            <button type="submit" name="action" value="preview" class="btn btn-primary">Dry Run</button>
+            <button type="submit" name="action" value="apply" class="btn btn-outline-danger">Apply Confirmed Plan</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if plan %}
+    <div class="card mb-3">
+      <div class="card-header">Plan Summary</div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Total Rows</div>
+              <span class="badge text-bg-light">{{ plan.summary.total }}</span>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Create</div>
+              <span class="badge text-bg-primary">{{ plan.summary.create }}</span>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Update</div>
+              <span class="badge text-bg-info">{{ plan.summary.update }}</span>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Skip</div>
+              <span class="badge text-bg-secondary">{{ plan.summary.skip }}</span>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Conflicts</div>
+              <span class="badge {% if plan.has_conflicts %}text-bg-danger{% else %}text-bg-success{% endif %}">{{ plan.summary.conflict }}</span>
+            </div>
+          </div>
+          <div class="col-md-2">
+            <div class="border rounded p-2 h-100">
+              <div class="text-secondary small">Committed</div>
+              {% if plan.committed %}
+                <span class="badge text-bg-success">Yes</span>
+              {% else %}
+                <span class="badge text-bg-secondary">No</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% if plan.has_conflicts %}
+          <div class="alert alert-warning mt-3 mb-0">
+            This plan is not ready to apply cleanly. Resolve architecture preflight failures and row-level conflicts before committing.
+          </div>
+        {% endif %}
+        {% if plan.payload_version or plan.source_label or import_dependency_summary.total or import_apply_order_preview %}
+          <div class="row g-3 mt-1">
+            <div class="col-lg-4">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Payload Provenance</div>
+                <div><strong>Version:</strong> {{ plan.payload_version|default:"-" }}</div>
+                <div><strong>Source:</strong> {{ plan.source_label|default:"-" }}</div>
+              </div>
+            </div>
+            <div class="col-lg-4">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Dependency Summary</div>
+                <span class="badge text-bg-light">{{ import_dependency_summary.total }} edges</span>
+                <span class="badge text-bg-primary">{{ import_dependency_summary.planned }} planned</span>
+                <span class="badge text-bg-success">{{ import_dependency_summary.existing }} existing</span>
+                <span class="badge {% if import_dependency_summary.missing %}text-bg-danger{% else %}text-bg-secondary{% endif %}">{{ import_dependency_summary.missing }} missing</span>
+              </div>
+            </div>
+            <div class="col-lg-4">
+              <div class="border rounded p-2 h-100">
+                <div class="text-secondary small">Apply Order</div>
+                {% for index in import_apply_order_preview %}
+                  <span class="badge text-bg-light">{{ index }}</span>
+                {% empty %}
+                  <span class="text-secondary">No runnable rows.</span>
+                {% endfor %}
+                {% if import_apply_order_truncated %}
+                  <span class="text-secondary">...</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if import_provenance_rows %}
+      <details class="card mb-3">
+        <summary class="card-header">
+          <strong>Row Provenance</strong>
+          <span class="badge text-bg-light">{{ import_provenance_rows|length }} rows</span>
+        </summary>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Row</th>
+                <th>Kind</th>
+                <th>Identity</th>
+                <th>Provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in import_provenance_rows %}
+                <tr>
+                  <td>{{ row.index }}</td>
+                  <td>{{ row.kind }}</td>
+                  <td>{{ row.identity }}</td>
+                  <td>
+                    {% for key, value in row.provenance.items %}
+                      <div><code>{{ key }}</code>: {{ value }}</div>
+                    {% endfor %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    {% endif %}
+
+    {% if plan.architecture_gate.hint_present %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Architecture Preflight Gate</strong>
+          <span class="badge {% if plan.architecture_gate.has_errors %}text-bg-danger{% elif plan.architecture_gate.issues %}text-bg-warning{% else %}text-bg-success{% endif %}">{{ plan.architecture_gate.status }}</span>
+        </div>
+        {% if plan.architecture_gate.has_errors %}
+          <div class="card-body">
+            <div class="alert alert-danger mb-0">
+              <strong>Architecture preflight failed.</strong>
+              These conflicts are evaluated before row reconciliation and are separate from row-level conflicts.
+            </div>
+          </div>
+        {% endif %}
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <tbody>
+              <tr>
+                <th>Status</th>
+                <td>{{ plan.architecture_gate.status }}</td>
+              </tr>
+              <tr>
+                <th>Target</th>
+                <td>
+                  {{ plan.architecture_gate.target_architecture_slug|default:"-" }}
+                  {{ plan.architecture_gate.target_architecture_version|default:"" }}
+                  <span class="text-secondary">({{ plan.architecture_gate.target_source }})</span>
+                </td>
+              </tr>
+              <tr>
+                <th>Schema Contract</th>
+                <td>{{ plan.architecture_gate.schema_contract_version|default:"Not provided" }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {% if import_architecture_conflicts %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Preflight Conflict</th>
+                  <th>Identity</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for diff in import_architecture_conflicts %}
+                  <tr class="table-danger">
+                    <td>{{ diff.kind }}</td>
+                    <td>{{ diff.identity }}</td>
+                    <td>{{ diff.message }}{% if diff.error %}<div class="text-danger">{{ diff.error }}</div>{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Code</th>
+                <th>Path</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for issue in plan.architecture_gate.issues %}
+                <tr>
+                  <td>{{ issue.severity }}</td>
+                  <td><code>{{ issue.code }}</code></td>
+                  <td><code>{{ issue.path }}</code></td>
+                  <td>{{ issue.message }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="4" class="text-success">No architecture compatibility issues.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if import_dependency_edges %}
+      <details class="card mb-3">
+        <summary class="card-header">
+          <strong>Dependency / Apply-Order Detail</strong>
+          <span class="badge text-bg-light">{{ import_dependency_summary.total }} edges</span>
+        </summary>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Dependent Row</th>
+                <th>Prerequisite Row</th>
+                <th>Field</th>
+                <th>Status</th>
+                <th>Reference</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for edge in import_dependency_edges %}
+                <tr>
+                  <td>{{ edge.dependent_index }}</td>
+                  <td>{{ edge.prerequisite_index|default:"-" }}</td>
+                  <td><code>{{ edge.field }}</code></td>
+                  <td>
+                    <span class="badge {% if edge.status == 'missing' %}text-bg-danger{% elif edge.status == 'planned' %}text-bg-primary{% else %}text-bg-success{% endif %}">{{ edge.status }}</span>
+                  </td>
+                  <td>{{ edge.reference.model }} {{ edge.reference.identity }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header">Row Diffs & Conflicts</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Row</th>
+              <th>Kind</th>
+              <th>Identity</th>
+              <th>Outcome</th>
+              <th>Message</th>
+              <th>Changes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for diff in import_row_diffs %}
+              <tr class="{% if diff.is_conflict %}table-warning{% endif %}">
+                <td>{{ diff.index }}</td>
+                <td>{{ diff.kind }}</td>
+                <td>{{ diff.identity }}</td>
+                <td>
+                  <span class="badge {% if diff.outcome == 'conflict' %}text-bg-danger{% elif diff.outcome == 'create' %}text-bg-primary{% elif diff.outcome == 'update' %}text-bg-info{% elif diff.outcome == 'skip' %}text-bg-secondary{% else %}text-bg-light{% endif %}">{{ diff.outcome }}</span>
+                </td>
+                <td>{{ diff.message }}{% if diff.error %}<div class="text-danger">{{ diff.error }}</div>{% endif %}</td>
+                <td>
+                  {% for change in diff.changes %}
+                    <div><code>{{ change.field }}</code>: {{ change.current|default:"-" }} -> {{ change.desired|default:"-" }}</div>
+                  {% empty %}
+                    <span class="text-secondary">None</span>
+                  {% endfor %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6" class="text-secondary">No row-level diffs were found in the payload.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+{% if integrity_gate_banner %}
+  <div class="alert {{ integrity_gate_banner.css_class }} d-flex flex-wrap justify-content-between align-items-center gap-2" role="alert">
+    <div>
+      <strong>{{ integrity_gate_banner.title }}</strong>
+      <div>{{ integrity_gate_banner.message }}</div>
+    </div>
+    {% if integrity_gate_banner.run_url %}
+      <a class="btn btn-sm btn-outline-dark" href="{{ integrity_gate_banner.run_url }}">View Integrity Status</a>
+    {% endif %}
+  </div>
+{% endif %}

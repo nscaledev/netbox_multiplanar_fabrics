@@ -5,52 +5,19 @@ menu = PluginMenu(
     label='Multi-planar v2',
     groups=(
         (
-            'Fabric Visibility',
+            'Operate',
             (
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:graph_overview',
-                    link_text='Graph Overview',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:health',
-                    link_text='Health',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:fabric_onboard',
-                    link_text='Onboard Fabric',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:coordinate_layout',
-                    link_text='Coordinate Layout',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:operations_center',
-                    link_text='Operations Center',
-                ),
-            ),
-        ),
-        (
-            'Lane Analysis',
-            (
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:path_resolver',
-                    link_text='Path Resolver',
+                    link_text='Fabric Overview',
                 ),
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:interface_fanout_trace',
                     link_text='Interface Fanout Trace',
                 ),
                 PluginMenuItem(
-                    link='plugins:netbox_plant_graph:lane_workspace',
-                    link_text='Lane Workspace',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:lane_drilldown',
-                    link_text='Lane Drilldown',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:lane_compare',
-                    link_text='Lane Compare',
+                    link='plugins:netbox_plant_graph:path_query',
+                    link_text='Path Query',
                 ),
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:blast_radius',
@@ -59,16 +26,29 @@ menu = PluginMenu(
             ),
         ),
         (
-            'Policy & Audit',
+            'Build & Run',
             (
                 PluginMenuItem(
-                    link='plugins:netbox_plant_graph:policy_review',
-                    link_text='Policy Review',
+                    link='plugins:netbox_plant_graph:fabric_onboard',
+                    link_text='Onboard Fabric',
                 ),
                 PluginMenuItem(
-                    link='plugins:netbox_plant_graph:plane_audit',
-                    link_text='Plane Audit',
+                    link='plugins:netbox_plant_graph:operations_center',
+                    link_text='Operations Center',
                 ),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:import_preview',
+                    link_text='Import Preview',
+                ),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:impact_reports',
+                    link_text='Impact Reports',
+                ),
+            ),
+        ),
+        (
+            'Audit',
+            (
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:audit_dashboard',
                     link_text='Audit Dashboard',
@@ -79,21 +59,13 @@ menu = PluginMenu(
                 ),
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:disjointness_exception_request',
-                    link_text='Exception Request',
-                ),
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:policy_dashboard',
-                    link_text='Policy Dashboard',
+                    link_text='Exception Requests',
                 ),
             ),
         ),
         (
-            'Multi-planar v2',
+            'Model Inventory',
             (
-                PluginMenuItem(
-                    link='plugins:netbox_plant_graph:home',
-                    link_text='Overview',
-                ),
                 PluginMenuItem(
                     link='plugins:netbox_plant_graph:fabric_list',
                     link_text='Fabrics',
@@ -127,12 +99,14 @@ menu = PluginMenu(
                         ),
                     ),
                 ),
-                PluginMenuItem(link='plugins:netbox_plant_graph:path_query', link_text='Path Query'),
-                PluginMenuItem(link='plugins:netbox_plant_graph:interface_fanout_trace', link_text='Interface Fanout Trace'),
-                PluginMenuItem(link='plugins:netbox_plant_graph:lane_workspace', link_text='Lane Workspace'),
-                PluginMenuItem(link='plugins:netbox_plant_graph:policy_dashboard', link_text='Policy Dashboard'),
-                PluginMenuItem(link='plugins:netbox_plant_graph:coordinate_layout', link_text='Coordinate Layout'),
-                PluginMenuItem(link='plugins:netbox_plant_graph:operations_center', link_text='Operations Center'),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:lane_workspace',
+                    link_text='Lane Inventory',
+                ),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:home',
+                    link_text='Model Catalog',
+                ),
             ),
         ),
     ),

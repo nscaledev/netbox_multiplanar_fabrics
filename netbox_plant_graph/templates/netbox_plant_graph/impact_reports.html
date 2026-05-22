@@ -1,0 +1,93 @@
+{% extends 'base/layout.html' %}
+
+{% block title %}Impact Reports{% endblock %}
+
+{% block content %}
+  <h1>Impact Reports</h1>
+
+  <div class="card mb-3">
+    <div class="card-header">Compare Saved Reports</div>
+    <div class="card-body">
+      {% if comparison_error %}
+        <div class="alert alert-warning">{{ comparison_error }}</div>
+      {% endif %}
+      <form method="get" class="row g-3 align-items-end">
+        <div class="col-md-5">
+          <label class="form-label" for="left">Baseline</label>
+          <select id="left" name="left" class="form-select">
+            <option value="">Select report</option>
+            {% for run in impact_runs %}
+              <option value="{{ run.pk }}"{% if left_id == run.pk %} selected{% endif %}>#{{ run.pk }} {{ run.result.report_name|default:run.result.scenario_type }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label" for="right">Compare</label>
+          <select id="right" name="right" class="form-select">
+            <option value="">Select report</option>
+            {% for run in impact_runs %}
+              <option value="{{ run.pk }}"{% if right_id == run.pk %} selected{% endif %}>#{{ run.pk }} {{ run.result.report_name|default:run.result.scenario_type }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="submit" class="btn btn-primary">Compare</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if comparison %}
+    <div class="card mb-3">
+      <div class="card-header">Comparison Summary</div>
+      <div class="card-body">
+        <div class="row g-3 mb-3">
+          <div class="col-md-3"><strong>Reports:</strong> {{ comparison.report_count }}</div>
+          <div class="col-md-3"><strong>Common Impacts:</strong> {{ comparison.common_impacts|length }}</div>
+          <div class="col-md-3"><strong>Severity Deltas:</strong> {{ comparison.severity_deltas|length }}</div>
+          <div class="col-md-3"><strong>Device Deltas:</strong> {{ comparison.device_deltas|length }}</div>
+        </div>
+        <details>
+          <summary>Device Deltas</summary>
+          <pre class="mt-2 mb-0"><code>{{ comparison.device_deltas }}</code></pre>
+        </details>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-header">Saved Operational Impact Reports</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Name</th>
+            <th>Scenario</th>
+            <th>Fabric</th>
+            <th>Devices</th>
+            <th>Paths</th>
+            <th>Created</th>
+            <th>Export</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in impact_runs %}
+            <tr>
+              <td><a href="{{ run.get_absolute_url }}">#{{ run.pk }}</a></td>
+              <td>{{ run.result.report_name|default:"-" }}</td>
+              <td>{{ run.result.scenario_type|default:"-" }}</td>
+              <td>{% if run.fabric %}<a href="{{ run.fabric.get_absolute_url }}">{{ run.fabric }}</a>{% else %}-{% endif %}</td>
+              <td>{{ run.metadata.impacted_device_count|default:run.result.summary.impacted_device_count|default:"0" }}</td>
+              <td>{{ run.metadata.impacted_path_count|default:run.result.summary.impacted_path_count|default:"0" }}</td>
+              <td>{{ run.created }}</td>
+              <td><a href="{% url 'plugins:netbox_plant_graph:impact_report_export' pk=run.pk %}">JSON</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8" class="text-secondary">No saved operational impact reports yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}
