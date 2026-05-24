@@ -16,6 +16,7 @@ from dcim.models import (
     FrontPortTemplate,
     InterfaceTemplate,
     Manufacturer,
+    ModuleBayTemplate,
     PowerPortTemplate,
     RackRole,
     RearPortTemplate,
@@ -27,9 +28,9 @@ SOURCE_MARKER_END = '<!-- madison-device-definition-staging:end -->'
 
 SOURCE_SUMMARY = """\
 Madison staged definition source:
-- META US NC Data Hall Layout 18k GB300 v2.0_5.01.2026, Google Drive file 1Fhp2cvSCivnXlCEFrxmA9ZJ7sJBxk5DVVOqV2_bzkkE, modified 2026-05-15.
+- META US NC Data Hall Layout 18k GB300 v2.0_5.01.2026, Google Drive file 1Fhp2cvSCivnXlCEFrxmA9ZJ7sJBxk5DVVOqV2_bzkkE, modified 2026-05-22.
 - ROCE 4-plane Shuffle Cabling Patterns, Notion page 35ecaf6bfadc80c1a77ac54a8e8de19f, last edited 2026-05-15.
-- Nscale NC 18k Fiber BOM v1.2.xlsx, Google Drive file 1W_5uZuxB7r9aYZ2fOfbDZeOa6kbZtofN, modified 2026-04-22.
+- Nscale NC 18k Fiber BOM release 1.2 workbook, Google Drive file 1W_5uZuxB7r9aYZ2fOfbDZeOa6kbZtofN, modified 2026-04-22.
 
 This local-dev seed intentionally creates definition/catalog objects only. It does not create rack-mounted Device instances.
 """
@@ -50,6 +51,7 @@ ROLES = [
     ('gb300ct', 'PowerEdge XE9712 GB300 Compute Tray', '00bcd4', 'GB300 GPU tray endpoint; workbook pattern sys1-gso1-p-phy-gpu#-su# with 126 trays per SU.'),
     ('gb300ps', 'PS33 33kW Power Shelf', 'ffc107', '1RU GB300 power shelf; workbook pattern sys1-gso1-p-phy-pwt(1-56)-su#.'),
     ('gb300st', 'GB300 NVL72 NVLink Switch Tray', '2196f3', 'GB300 NVL72 NVLink switch tray; workbook pattern sys1-gso1-p-phy-nvs(1-63)-su#.'),
+    ('nvl72-appliance', 'NVL72 Rack-Scale Appliance', '00acc1', 'Parent device for one 48RU GB300/NVL72 rack-scale appliance; child trays/shelves/switches install into NetBox DeviceBays.'),
     ('oob-leaf', 'OOB Leaf', '9c27b0', 'Out-of-band leaf switch; includes GPU, row, storage, and management-row OOB leaves.'),
     ('oob-spine', 'OOB Spine', '7b1fa2', 'Out-of-band spine switch; workbook patterns obs1/obs2.'),
     ('oob-core', 'OOB Core', '6a1b9a', 'Out-of-band core switch; workbook pattern obc.'),
@@ -65,6 +67,8 @@ ROLES = [
     ('fe-core-switch', 'FE Core Switch', '00695c', 'Front-end super-spine/core switch; workbook pattern fec and note changing Core to FEC.'),
     ('edge-switch', 'Edge Switch', '795548', 'Customer/Nscale edge switch; workbook patterns esw and edge internet router labels.'),
     ('nscale-firewall', 'Nscale Firewall', 'd32f2f', 'Nscale firewall equipment in MMR/control racks; workbook pattern nfw/efw.'),
+    ('management-server', 'Management Server', '00acc1', 'Management server in Madison MMR/control racks.'),
+    ('passive-breakout', 'Passive Breakout', '90a4ae', 'Passive breakout or demarc assembly in Madison MMR/edge racks.'),
     ('control-spine', 'Control Spine', '5e35b1', 'Control network spine switch in central control racks.'),
     ('control-leaf', 'Control Leaf', '512da8', 'Control network leaf switch in central control racks.'),
     ('openstack-controller', 'OpenStack Controller', '0288d1', 'OpenStack control node; workbook pattern osc.'),
@@ -193,6 +197,18 @@ def osfp_interfaces(count, *, prefix='osfp', description='800G OSFP cage'):
     ]
 
 
+def osfp_module_bays(count, *, prefix='osfp', description='OSFP transceiver cage'):
+    return [
+        {
+            'name': f'{prefix}{index}',
+            'label': f'{prefix.upper()} {index}',
+            'position': str(index),
+            'description': description,
+        }
+        for index in range(1, count + 1)
+    ]
+
+
 def qsfpdd_interfaces(count, *, prefix='swp', description='400G QSFP-DD cage'):
     return [
         {
@@ -275,7 +291,61 @@ def shuffle_box_cassette_bays():
     ]
 
 
+def nvl72_rackscale_device_bays():
+    bays = []
+    for index, label in enumerate(('BMC-01', 'MGMT-01'), start=1):
+        bays.append(
+            {
+                'name': label,
+                'label': label,
+                'description': f'FRSD NVL72 rackscale appliance management switch bay {index}.',
+            }
+        )
+    for index in range(1, 9):
+        label = f'PWR-SHLF-{index:02d}'
+        bays.append(
+            {
+                'name': label,
+                'label': label,
+                'description': f'FRSD NVL72 rackscale appliance PS33 power shelf bay {index}.',
+            }
+        )
+    for index in range(1, 19):
+        label = f'GPU-NODE-{index:02d}'
+        bays.append(
+            {
+                'name': label,
+                'label': label,
+                'description': f'FRSD NVL72 rackscale appliance XE9712 GB300 GPU node bay {index}.',
+            }
+        )
+    for index in range(1, 10):
+        label = f'NVL-SW-{index:02d}'
+        bays.append(
+            {
+                'name': label,
+                'label': label,
+                'description': f'FRSD NVL72 rackscale appliance NVLink switch tray bay {index}.',
+            }
+        )
+    return bays
+
+
 DEVICE_TYPES = [
+    {
+        'slug': 'nvl72-rackscale-appliance',
+        'manufacturer': 'nvidia',
+        'model': 'GB300 NVL72 Rack-Scale Appliance',
+        'u_height': Decimal('48.0'),
+        'description': 'Parent inventory container for one 48RU GB300/NVL72 rack-scale appliance.',
+        'comments': """\
+FRSD authority: one 48RU MGX rack-scale appliance contains 18 XE9712 GB300 GPU/server nodes, 9 NVL72 NVLink switch trays, 8 PS33_1L60 power shelves, and 2 SN2201 management/BMC switches.
+Madison staging uses this device type as the NetBox-native parent container. The rack itself remains the site/space object; this parent device owns child DeviceBays named from the FRSD labels.
+Child devices continue to carry workbook-derived names and local context, but their inventory containment is represented by DeviceBay membership rather than direct rack-unit mounting.
+""",
+        'subdevice_role': 'parent',
+        'device_bays': nvl72_rackscale_device_bays(),
+    },
     {
         'slug': 'gb300ct',
         'manufacturer': 'dell',
@@ -292,6 +362,10 @@ Power model: GPU trays consume rack-internal NVL72 busbar power from the GB300 p
         'interfaces': basic_mgmt_interfaces() + osfp_interfaces(
             4,
             description='800G GPU-facing OSFP; plant graph expands to two MPO attachment units and four 200G plane channels.',
+        ),
+        'module_bays': osfp_module_bays(
+            4,
+            description='Physical OSFP transceiver cage; plugin transceiver profiles own MPO and 4x200G lane semantics.',
         ),
         'power_ports': single_power_port(
             'nvl72-busbar',
@@ -318,7 +392,7 @@ Native NetBox power cables/outlets are intentionally not inserted into the NVL72
                 'name': 'facility-input',
                 'type': 'iec-60309-560p6',
                 'maximum_draw': 33000,
-                'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+                'description': 'Facility-side 415V 60A input from the GS001 electrical plant.',
             },
             {
                 'name': 'busbar-output-1',
@@ -431,6 +505,11 @@ NVIDIA published hardware weight is 26.9 kg. Workbook Power Lookup gives a plann
             start=65,
             description='1/10/25G SFP28 cage; ports 65-66 per NVIDIA SN5610 documentation.',
         ),
+        'module_bays': osfp_module_bays(
+            64,
+            prefix='swp',
+            description='Physical OSFP transceiver cage on SN5610; plugin transceiver profiles own MPO and 4x200G lane semantics.',
+        ),
         'console_ports': basic_console_port(),
         'power_ports': numbered_power_ports(4, 'iec-60320-c20', maximum_draw=2092),
         'weight': Decimal('26.9'),
@@ -465,6 +544,10 @@ The 64 OSFP template below follows the Notion leaf-switch architecture where lea
         'weight_unit': 'kg',
         'interfaces': basic_mgmt_interfaces()
         + osfp_interfaces(64, description='800G OSFP cage; confirm exact SN5750x1200 SKU port count before production import.'),
+        'module_bays': osfp_module_bays(
+            64,
+            description='Physical OSFP transceiver cage; exact SN5750x1200 operating mode remains staged.',
+        ),
         'console_ports': basic_console_port(),
         'power_ports': redundant_power_ports(1500),
     },
@@ -517,6 +600,17 @@ Exact port template is deferred because the workbook identifies the model and de
         'airflow': 'passive',
         'description': 'Nokia breakout assembly referenced in Madison rack elevations.',
         'comments': 'Workbook label: Nokia Breakout (40 > 4x10). Treat as passive/zero-U until the final module/SKU is confirmed.',
+    },
+    {
+        'slug': 'nokia-ixs-a1',
+        'manufacturer': 'nokia',
+        'model': 'IXS-A1',
+        'u_height': Decimal('1.0'),
+        'description': 'Nokia IXS-A1 copper management switch referenced in Madison MMR racks.',
+        'comments': 'Workbook MMR sheet label: Nokia IXS-A1 (copper mgt). Exact port template is deferred.',
+        'interfaces': basic_mgmt_interfaces(),
+        'console_ports': basic_console_port(),
+        'power_ports': redundant_power_ports(),
     },
     {
         'slug': 'arista-7280',
@@ -652,6 +746,16 @@ Model as a definition placeholder only; rack types and individual PDU devices ca
         'description': 'Generic NMX server.',
         'comments': 'Workbook patterns include sys1-gso1-p-phy-nmx1..3-er13/15. Row elevations place these as 2RU devices.',
         'interfaces': basic_mgmt_interfaces() + [{'name': 'eth1', 'type': '10gbase-x-sfpp', 'description': 'Control network placeholder.'}],
+        'power_ports': redundant_power_ports(),
+    },
+    {
+        'slug': 'generic-proxmox-node',
+        'manufacturer': 'generic',
+        'model': 'Proxmox Management Node',
+        'u_height': Decimal('1.0'),
+        'description': 'Generic Proxmox management node from the Madison MMR sheet.',
+        'comments': 'Workbook MMR sheet labels Proxmox Node 1 and Proxmox Node 2. The final server SKU and height are deferred.',
+        'interfaces': basic_mgmt_interfaces() + [{'name': 'eth1', 'type': '10gbase-x-sfpp', 'description': 'Management/service network placeholder.'}],
         'power_ports': redundant_power_ports(),
     },
     {
@@ -921,6 +1025,22 @@ def upsert_device_bays(device_type, bays, counters, *, prune=False):
         counters['device_bays_deleted'] += deleted_count
 
 
+def upsert_module_bays(device_type, bays, counters, *, prune=False):
+    desired_names = {bay['name'] for bay in bays}
+    for bay in bays:
+        defaults = {
+            'label': bay.get('label', ''),
+            'description': bay.get('description', ''),
+            'position': bay.get('position', ''),
+            'module_type': bay.get('module_type'),
+        }
+        upsert_template(ModuleBayTemplate, device_type, bay['name'], defaults, counters, 'module_bays')
+    if prune:
+        stale = ModuleBayTemplate.objects.filter(device_type=device_type).exclude(name__in=desired_names)
+        deleted_count, _ = stale.delete()
+        counters['module_bays_deleted'] += deleted_count
+
+
 def upsert_mpo_pairs(device_type, count, counters, *, prefix=''):
     for index in range(1, count + 1):
         rear_name = f'{prefix}rear-mpo-{index:02d}'
@@ -1063,6 +1183,8 @@ def upsert_device_types(manufacturers, counters):
         upsert_power_ports(device_type, spec.get('power_ports', []), counters)
         if 'device_bays' in spec:
             upsert_device_bays(device_type, spec['device_bays'], counters, prune=True)
+        if 'module_bays' in spec:
+            upsert_module_bays(device_type, spec['module_bays'], counters, prune=True)
         if spec.get('mpo_pairs'):
             upsert_mpo_pairs(device_type, spec['mpo_pairs'], counters)
         if spec.get('shuffle_box_ports'):

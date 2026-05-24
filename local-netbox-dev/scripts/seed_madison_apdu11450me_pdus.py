@@ -24,8 +24,8 @@ from netbox_power_plant.models import PowerHandoffPoint
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
-DEVICE_NAME_PREFIX = os.environ.get('MADISON_DEVICE_NAME_PREFIX', 'mad1')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
+DEVICE_NAME_PREFIX = os.environ.get('MADISON_DEVICE_NAME_PREFIX', 'gs001')
 NSCALE_TENANT_SLUG = 'nscale'
 PLANNED_STATUS = 'planned'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'

@@ -255,6 +255,35 @@ ROLE_DEFINITIONS = (
         'metadata': {'connector_kind': 'mpo-12', 'position_count': 12},
     },
     {
+        'slug': 'spine_switch',
+        'name': 'Backend spine switch',
+        'role_kind': 'active_tier_2_device',
+        'description': 'Spine switch participating in a backend RoCE fabric plane.',
+        'metadata': {'plane_scoped': True, 'fabric_tier': 'spine'},
+    },
+    {
+        'slug': 'spine_osfp',
+        'name': 'Spine OSFP',
+        'role_kind': 'active_tier_2_port',
+        'description': 'Plugin-owned OSFP endpoint anchored to a backend spine switch port.',
+        'metadata': {
+            'connector_kind': 'osfp',
+            'mpo_children': 2,
+            'channels': 4,
+            'channels_per_osfp': 4,
+            'channel_speed_gbps': 200,
+            'speed_gbps': 800,
+            'fabric_tier': 'spine',
+        },
+    },
+    {
+        'slug': 'spine_mpo',
+        'name': 'Spine OSFP MPO',
+        'role_kind': 'active_subconnector',
+        'description': 'MPO child connector on a backend spine OSFP.',
+        'metadata': {'connector_kind': 'mpo-12', 'position_count': 12, 'fabric_tier': 'spine'},
+    },
+    {
         'slug': 'shuffle_cassette',
         'name': 'Shuffle cassette',
         'role_kind': 'passive_assembly',
@@ -274,6 +303,43 @@ ROLE_DEFINITIONS = (
         'role_kind': 'passive_connector',
         'description': 'Rear-side MPO connector on a shuffle cassette.',
         'metadata': {'connector_kind': 'mpo-12', 'position_count': 12},
+    },
+    {
+        'slug': 'spine_shuffle_cassette',
+        'name': 'Spine-side shuffle cassette',
+        'role_kind': 'passive_assembly',
+        'description': 'Passive spine-side cassette that shuffles leaf trunks into spine switch jumpers.',
+        'metadata': {
+            'front_mpo_count': 4,
+            'rear_mpo_count': 4,
+            'shuffle_groups': 2,
+            'placement': 'spine_rack_above_backend_spines',
+            'fabric_segment': 'leaf_to_spine_backend',
+        },
+    },
+    {
+        'slug': 'spine_shuffle_rear_mpo',
+        'name': 'Spine shuffle rear MPO',
+        'role_kind': 'passive_connector',
+        'description': 'Rear-side MPO on a spine-side shuffle cassette receiving direct leaf trunks.',
+        'metadata': {
+            'connector_kind': 'mpo-12',
+            'position_count': 12,
+            'cable_side': 'leaf_trunk',
+            'fabric_segment': 'leaf_to_spine_backend',
+        },
+    },
+    {
+        'slug': 'spine_shuffle_front_mpo',
+        'name': 'Spine shuffle front MPO',
+        'role_kind': 'passive_connector',
+        'description': 'Front-side MPO on a spine-side shuffle cassette patched to backend spine switches.',
+        'metadata': {
+            'connector_kind': 'mpo-12',
+            'position_count': 12,
+            'cable_side': 'spine_jumper',
+            'fabric_segment': 'leaf_to_spine_backend',
+        },
     },
 )
 
@@ -323,6 +389,44 @@ TRANSFER_PATTERN_DEFINITIONS = (
         },
     },
     {
+        'slug': 'leaf_spine_shuffle_2x2',
+        'name': 'Leaf-to-spine 2x2 shuffle',
+        'pattern_kind': 'shuffle_2x2',
+        'rule': {
+            'type': 'position_map',
+            'groups': [
+                {
+                    'front_mpos': [1, 2],
+                    'rear_mpos': [1, 2],
+                    'rear_position_transform': {
+                        'type': 'key_down_roll',
+                        'position_count': MPO_POSITION_COUNT,
+                        'formula': 'dst_position = position_count + 1 - base_dst_position',
+                    },
+                    'active_position_groups': {
+                        'A': [1, 12, 2, 11],
+                        'B': [3, 10, 4, 9],
+                    },
+                    'matrix': [
+                        {'front_mpo': 1, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'A'},
+                        {'front_mpo': 1, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'A'},
+                        {'front_mpo': 2, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'B'},
+                        {'front_mpo': 2, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'B'},
+                    ],
+                },
+            ],
+            'bidirectional': True,
+        },
+        'metadata': {
+            'fabric_segment': 'leaf_to_spine_backend',
+            'description': (
+                'Spine-side cassette transform for folded-Clos leaf-to-spine reach: leaf trunks '
+                'terminate directly on cassette rear MPOs, shuffle internally, then patch from '
+                'front MPOs into backend spine switch OSFPs.'
+            ),
+        },
+    },
+    {
         'slug': 'second_third_mpo_stagger',
         'name': 'Second/third MPO stagger',
         'pattern_kind': 'stagger',
@@ -332,6 +436,110 @@ TRANSFER_PATTERN_DEFINITIONS = (
             'staggered_members': [2, 3],
         },
         'metadata': {'description': 'Captures the Notion shuffle stagger as a named transform.'},
+    },
+)
+
+
+GB300_CABLE_PROFILE_DEFINITIONS = (
+    {
+        'slug': 'trunk-96f-mpo8-sm-apc-unpinned-unpinned',
+        'name': '96f MPO8 SM APC unpinned/unpinned trunk',
+        'assembly_kind': 'trunk',
+        'fiber_count': 96,
+        'connector_family': 'MPO8',
+        'mpo_connector_count': 12,
+        'fibers_per_mpo': 8,
+        'fiber_mode': 'single-mode',
+        'polish': 'APC',
+        'side_a_pinning': 'unpinned',
+        'side_b_pinning': 'unpinned',
+        'metadata': {
+            'source_label': '96f MPO8 SM APC Unpinned/Unpinned',
+            'modeling_target': 'CableAssembly',
+            'strand_resolution': 'FiberStrand.cable_site + FiberStrand.cable_id',
+            'notes': 'Purchased trunk assembly; site design/BOM supplies instance length and cable ID.',
+        },
+    },
+    {
+        'slug': 'trunk-96f-sm-mpo8-unpinned-unpinned',
+        'name': '96f SM MPO8 unpinned/unpinned trunk',
+        'assembly_kind': 'trunk',
+        'fiber_count': 96,
+        'connector_family': 'MPO8',
+        'mpo_connector_count': 12,
+        'fibers_per_mpo': 8,
+        'fiber_mode': 'single-mode',
+        'polish': 'not_specified',
+        'side_a_pinning': 'unpinned',
+        'side_b_pinning': 'unpinned',
+        'metadata': {
+            'source_label': '96f SM MPO8 Unpinned/Unpinned',
+            'modeling_target': 'CableAssembly',
+            'strand_resolution': 'FiberStrand.cable_site + FiberStrand.cable_id',
+            'notes': 'Purchased trunk assembly; polish is not explicit in the observed source label.',
+        },
+    },
+    {
+        'slug': 'trunk-72f-sm-mpo8-unpinned-unpinned',
+        'name': '72f SM MPO8 unpinned/unpinned trunk',
+        'assembly_kind': 'trunk',
+        'fiber_count': 72,
+        'connector_family': 'MPO8',
+        'mpo_connector_count': 9,
+        'fibers_per_mpo': 8,
+        'fiber_mode': 'single-mode',
+        'polish': 'not_specified',
+        'side_a_pinning': 'unpinned',
+        'side_b_pinning': 'unpinned',
+        'metadata': {
+            'source_label': '72f SM MPO8 Unpinned/Unpinned',
+            'modeling_target': 'CableAssembly',
+            'strand_resolution': 'FiberStrand.cable_site + FiberStrand.cable_id',
+            'notes': 'Purchased trunk assembly; site design/BOM selects where this lower-count trunk is used.',
+        },
+    },
+)
+
+
+GB300_CABLE_PROFILE_ASSIGNMENTS = (
+    {
+        'slug': 'gb300-to-leaf-structured-trunk',
+        'topology_segment': 'gb300_to_leaf_shuffle',
+        'segment_kind': 'structured_trunk',
+        'source_role': 'shuffle_rear_mpo',
+        'destination_role': 'leaf_mpo',
+        'profile_slugs': [
+            'trunk-96f-mpo8-sm-apc-unpinned-unpinned',
+            'trunk-96f-sm-mpo8-unpinned-unpinned',
+            'trunk-72f-sm-mpo8-unpinned-unpinned',
+        ],
+        'selection_rule': 'site_design_or_import_resolves_profile_and_length',
+        'metadata': {
+            'description': (
+                'Structured trunk options between the GB300/leaf shuffle cassette rear MPOs '
+                'and backend leaf switch MPO endpoints.'
+            ),
+        },
+    },
+    {
+        'slug': 'leaf-to-spine-structured-trunk',
+        'topology_segment': 'leaf_to_spine_shuffle',
+        'segment_kind': 'structured_trunk',
+        'source_role': 'leaf_mpo',
+        'destination_role': 'spine_shuffle_rear_mpo',
+        'profile_slugs': [
+            'trunk-96f-mpo8-sm-apc-unpinned-unpinned',
+            'trunk-96f-sm-mpo8-unpinned-unpinned',
+            'trunk-72f-sm-mpo8-unpinned-unpinned',
+        ],
+        'selection_rule': 'site_design_or_import_resolves_profile_and_length',
+        'metadata': {
+            'description': (
+                'Structured trunk options from backend leaf switch MPO endpoints directly '
+                'to spine-side shuffle cassette rear MPOs.'
+            ),
+            'assumption': 'trunk_mpos_terminate_directly_on_shuffle_cassette',
+        },
     },
 )
 
@@ -379,6 +587,69 @@ ALLOCATION_RULE_DEFINITIONS = (
         },
         'metadata': {},
     },
+    {
+        'slug': 'backend_leaf_spine_shuffle',
+        'name': 'Backend leaf-spine shuffle topology',
+        'rule': {
+            'plane_count': 4,
+            'fabric_segment': 'leaf_to_spine_backend',
+            'source_device_role': 'leaf_switch',
+            'source_port_role': 'leaf_osfp',
+            'source_mpo_role': 'leaf_mpo',
+            'destination_device_role': 'spine_switch',
+            'destination_port_role': 'spine_osfp',
+            'destination_mpo_role': 'spine_mpo',
+            'shuffle_cassette_role': 'spine_shuffle_cassette',
+            'shuffle_rear_mpo_role': 'spine_shuffle_rear_mpo',
+            'shuffle_front_mpo_role': 'spine_shuffle_front_mpo',
+            'transfer_pattern': 'leaf_spine_shuffle_2x2',
+            'leaf_spine_osfp_cages_per_leaf': 32,
+            'channels_per_osfp': 4,
+            'spine_switches_per_plane': 126,
+            'available_spine_interfaces_per_leaf': 128,
+            'planned_spare_spine_interfaces_per_leaf': 2,
+            'requires_shuffle': True,
+            'cable_path': [
+                {
+                    'order': 1,
+                    'medium': 'structured_trunk',
+                    'source': 'leaf_mpo',
+                    'destination': 'spine_shuffle_rear_mpo',
+                    'cable_profile_assignment': 'leaf-to-spine-structured-trunk',
+                    'cable_profile_candidates': [
+                        'trunk-96f-mpo8-sm-apc-unpinned-unpinned',
+                        'trunk-96f-sm-mpo8-unpinned-unpinned',
+                        'trunk-72f-sm-mpo8-unpinned-unpinned',
+                    ],
+                    'assumption': 'trunk_mpos_terminate_directly_on_shuffle_cassette',
+                },
+                {
+                    'order': 2,
+                    'medium': 'passive_transfer',
+                    'source': 'spine_shuffle_rear_mpo',
+                    'destination': 'spine_shuffle_front_mpo',
+                    'transfer_pattern': 'leaf_spine_shuffle_2x2',
+                },
+                {
+                    'order': 3,
+                    'medium': 'short_jumper',
+                    'source': 'spine_shuffle_front_mpo',
+                    'destination': 'spine_mpo',
+                    'nominal_length_m': 2,
+                },
+            ],
+        },
+        'metadata': {
+            'description': (
+                'Folded-Clos backend uplink rule: each plane-local leaf uses 32 OSFP cages '
+                'in 4x200Gbps mode to reach 126 spines, leaving two child interfaces spare.'
+            ),
+            'evidence': (
+                'Fiber BOM contains leaf-to-shuffle trunks and shuffle-to-spine 2m jumpers, '
+                'with no separate patch-panel or extra jumper population.'
+            ),
+        },
+    },
 )
 
 GB300_PARAMETER_SCHEMA = {
@@ -395,6 +666,8 @@ GB300_PARAMETER_SCHEMA = {
             'properties': {
                 'gpu_tray_count': {'type': 'integer', 'minimum': 1},
                 'leaf_count_per_plane': {'type': 'integer', 'minimum': 1},
+                'spine_count_per_plane': {'type': 'integer', 'minimum': 1, 'default': 126},
+                'leaf_spine_osfp_cages_per_leaf': {'type': 'integer', 'minimum': 1, 'default': 32},
                 'racks_per_pod': {'type': 'integer', 'minimum': 1},
                 'pods_per_fabric': {'type': 'integer', 'minimum': 1},
             },
@@ -416,6 +689,7 @@ GB300_PARAMETER_SCHEMA = {
 GB300_REQUIRED_DEVICE_TYPES = {
     'gpu_tray': ('nvidia-gb300-nvl72-tray',),
     'leaf_switch': ('nvidia-spectrum-x-leaf',),
+    'spine_switch': ('nvidia-spectrum-x-spine', 'roce-spine-200g-plane', 'sn5610'),
 }
 
 H100_MPO_POSITION_COUNT = 8
@@ -794,7 +1068,7 @@ def _gb300_allocation_rule_definitions(*, plane_count: int) -> tuple[dict, ...]:
     definitions = []
     for definition in ALLOCATION_RULE_DEFINITIONS:
         rule = dict(definition['rule'])
-        if definition['slug'] == 'leaf_plane_striping':
+        if definition['slug'] in {'leaf_plane_striping', 'backend_leaf_spine_shuffle'}:
             rule['plane_count'] = plane_count
         if 'channel_map_matrix' in rule:
             rule['channel_map_matrix'] = [dict(entry) for entry in rule['channel_map_matrix']]
@@ -827,6 +1101,8 @@ def build_roce_4plane_shuffle_architecture_schema() -> ArchitectureSchemaDefinit
         fabric_class='roce_backend',
         parameter_schema=GB300_PARAMETER_SCHEMA,
         required_device_types=GB300_REQUIRED_DEVICE_TYPES,
+        cable_profiles=GB300_CABLE_PROFILE_DEFINITIONS,
+        cable_profile_assignments=GB300_CABLE_PROFILE_ASSIGNMENTS,
         status='active',
     )
 
@@ -869,6 +1145,8 @@ def build_roce_8plane_gb300_shuffle_architecture_schema() -> ArchitectureSchemaD
             },
         },
         required_device_types=GB300_REQUIRED_DEVICE_TYPES,
+        cable_profiles=GB300_CABLE_PROFILE_DEFINITIONS,
+        cable_profile_assignments=GB300_CABLE_PROFILE_ASSIGNMENTS,
         status='active',
     )
 
@@ -938,11 +1216,43 @@ def ensure_roce_4plane_shuffle_architecture() -> ArchitectureFixtureResult:
                 },
                 'parameter_schema': GB300_PARAMETER_SCHEMA,
                 'required_device_types': GB300_REQUIRED_DEVICE_TYPES,
+                'cable_profiles': GB300_CABLE_PROFILE_DEFINITIONS,
+                'cable_profile_assignments': GB300_CABLE_PROFILE_ASSIGNMENTS,
                 'semantics': {
                     'optical_lane_scope': 'transceiver_local',
                     'fiber_path_scope': 'connector_position_graph',
                     'netbox_cables': 'forbidden_for_modeled_fabric',
                 },
+                'topology_segments': [
+                    {
+                        'slug': 'gb300_to_leaf_shuffle',
+                        'source_role': 'gpu_osfp',
+                        'destination_role': 'leaf_osfp',
+                        'shuffle_role': 'shuffle_cassette',
+                        'transfer_pattern': 'shuffle_2x2',
+                        'cable_profile_assignments': ['gb300-to-leaf-structured-trunk'],
+                    },
+                    {
+                        'slug': 'leaf_to_spine_shuffle',
+                        'source_role': 'leaf_osfp',
+                        'destination_role': 'spine_osfp',
+                        'shuffle_role': 'spine_shuffle_cassette',
+                        'transfer_pattern': 'leaf_spine_shuffle_2x2',
+                        'cable_profile_assignments': ['leaf-to-spine-structured-trunk'],
+                        'cable_path': [
+                            'leaf_mpo',
+                            'structured_trunk',
+                            'spine_shuffle_rear_mpo',
+                            'spine_shuffle_front_mpo',
+                            'short_spine_jumper',
+                            'spine_mpo',
+                        ],
+                        'assumptions': {
+                            'trunks_terminate_directly_on_shuffle_cassettes': True,
+                            'intermediate_patch_panels': False,
+                        },
+                    },
+                ],
             },
         },
     )

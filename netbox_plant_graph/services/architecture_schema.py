@@ -54,6 +54,7 @@ BLUEPRINT_STATUS_VALUES = frozenset({'draft', 'active', 'deprecated', 'retired'}
 FABRIC_TIER_VALUES = frozenset({'leaf', 'spine', 'super_spine', 'meta_spine'})
 SUPPORTED_MPO_POSITION_COUNTS = frozenset({8, 12, 16, 24})
 ACTIVE_PORT_ROLE_KINDS = frozenset({'active_port', 'active_tier_2_port'})
+CABLE_ASSEMBLY_KIND_VALUES = frozenset({'jumper', 'trunk', 'internal', 'external_plant'})
 
 ARCHITECTURE_SCHEMA_CONTRACT_VERSION = 'v2'
 
@@ -115,6 +116,8 @@ class ArchitectureSchemaDefinition:
     required_device_types: Mapping[str, Sequence[str]] = field(default_factory=dict)
     status: str = 'active'
     lifecycle: Mapping[str, Any] = field(default_factory=dict)
+    cable_profiles: Sequence[Mapping[str, Any]] = ()
+    cable_profile_assignments: Sequence[Mapping[str, Any]] = ()
     transfer_pair_providers: Mapping[str, PositionPairProvider] = field(default_factory=dict)
     custom_validator_entrypoints: Sequence[str] = ()
 
@@ -327,6 +330,12 @@ def validate_architecture_schema(definition: ArchitectureSchemaDefinition) -> Ar
         errors=errors,
     )
     _validate_required_device_types(definition.required_device_types, role_slugs=role_slugs, errors=errors)
+    _validate_cable_profile_catalog(
+        definition.cable_profiles,
+        definition.cable_profile_assignments,
+        role_slugs=role_slugs,
+        errors=errors,
+    )
 
     active_groups: Mapping[str, tuple[int, ...]]
     active_positions: frozenset[int]
@@ -601,6 +610,8 @@ def _build_schema_definition_from_persisted_architecture(
         required_device_types=metadata.get('required_device_types', {}),
         status=getattr(architecture, 'status', 'active'),
         lifecycle=metadata.get('lifecycle', {}),
+        cable_profiles=metadata.get('cable_profiles', ()),
+        cable_profile_assignments=metadata.get('cable_profile_assignments', ()),
     )
     return _PersistedArchitectureSchemaBuildResult(definition=definition)
 
@@ -729,6 +740,10 @@ def _active_position_groups_from_persisted_transfer_patterns(
                 )
                 continue
             group_positions = group.get('active_position_groups')
+            if not isinstance(group_positions, Mapping):
+                group_positions = rule.get('active_position_groups')
+            if not isinstance(group_positions, Mapping):
+                group_positions = rule.get('position_groups')
             if not isinstance(group_positions, Mapping):
                 errors.add(
                     'persisted_architecture.active_position_groups_missing',
@@ -935,7 +950,9 @@ def _shuffle_mpo_groups_from_persisted_transfer_patterns(
                 continue
             front_mpos = group.get('front_mpos')
             if _is_sequence(front_mpos):
-                groups.append(tuple(front_mpos))
+                group_tuple = tuple(front_mpos)
+                if group_tuple not in groups:
+                    groups.append(group_tuple)
     return tuple(groups)
 
 
@@ -1250,6 +1267,121 @@ def _validate_required_device_types(
                     'required_device_types.device_type_slug',
                     f'{path}[{index}]',
                     'DeviceType compatibility entries must be non-empty strings.',
+                )
+
+
+def _validate_cable_profile_catalog(
+    cable_profiles: Any,
+    cable_profile_assignments: Any,
+    *,
+    role_slugs: frozenset[str],
+    errors: _Errors,
+) -> None:
+    profiles = _sequence(cable_profiles, 'cable_profiles', errors)
+    profile_slugs: set[str] = set()
+    if profiles is not None:
+        for index, profile in enumerate(profiles, start=1):
+            path = f'cable_profiles[{index}]'
+            if not isinstance(profile, Mapping):
+                errors.add('cable_profiles.entry_type', path, 'Cable profile definitions must be objects.')
+                continue
+            slug = _require_string(profile.get('slug'), f'{path}.slug', errors)
+            if slug:
+                path = f'cable_profiles[{slug}]'
+                if slug in profile_slugs:
+                    errors.add(
+                        'cable_profiles.duplicate_slug',
+                        f'{path}.slug',
+                        f'Cable profile slug {slug!r} is defined more than once.',
+                    )
+                profile_slugs.add(slug)
+            _require_string(profile.get('name'), f'{path}.name', errors)
+            assembly_kind = _require_string(profile.get('assembly_kind'), f'{path}.assembly_kind', errors)
+            if assembly_kind and assembly_kind not in CABLE_ASSEMBLY_KIND_VALUES:
+                errors.add(
+                    'cable_profiles.unknown_assembly_kind',
+                    f'{path}.assembly_kind',
+                    f'Cable profile assembly_kind {assembly_kind!r} is not supported.',
+                    supported=tuple(sorted(CABLE_ASSEMBLY_KIND_VALUES)),
+                )
+            fiber_count = _require_positive_int(profile.get('fiber_count'), f'{path}.fiber_count', errors)
+            connector_count = _require_positive_int(
+                profile.get('mpo_connector_count'),
+                f'{path}.mpo_connector_count',
+                errors,
+            )
+            fibers_per_mpo = _require_positive_int(profile.get('fibers_per_mpo'), f'{path}.fibers_per_mpo', errors)
+            _require_string(profile.get('connector_family'), f'{path}.connector_family', errors)
+            _require_string(profile.get('fiber_mode'), f'{path}.fiber_mode', errors)
+            _require_string(profile.get('side_a_pinning'), f'{path}.side_a_pinning', errors)
+            _require_string(profile.get('side_b_pinning'), f'{path}.side_b_pinning', errors)
+            metadata = profile.get('metadata', {})
+            if not isinstance(metadata, Mapping):
+                errors.add('cable_profiles.metadata_type', f'{path}.metadata', 'Cable profile metadata must be an object.')
+            if fiber_count and connector_count and fibers_per_mpo and fiber_count != connector_count * fibers_per_mpo:
+                errors.add(
+                    'cable_profiles.fiber_count_mismatch',
+                    f'{path}.fiber_count',
+                    (
+                        f'Cable profile fiber_count={fiber_count} must equal '
+                        f'mpo_connector_count * fibers_per_mpo ({connector_count * fibers_per_mpo}).'
+                    ),
+                    fiber_count=fiber_count,
+                    mpo_connector_count=connector_count,
+                    fibers_per_mpo=fibers_per_mpo,
+                )
+
+    assignments = _sequence(cable_profile_assignments, 'cable_profile_assignments', errors)
+    assignment_slugs: set[str] = set()
+    if assignments is None:
+        return
+    for index, assignment in enumerate(assignments, start=1):
+        path = f'cable_profile_assignments[{index}]'
+        if not isinstance(assignment, Mapping):
+            errors.add('cable_profile_assignments.entry_type', path, 'Cable profile assignments must be objects.')
+            continue
+        slug = _require_string(assignment.get('slug'), f'{path}.slug', errors)
+        if slug:
+            path = f'cable_profile_assignments[{slug}]'
+            if slug in assignment_slugs:
+                errors.add(
+                    'cable_profile_assignments.duplicate_slug',
+                    f'{path}.slug',
+                    f'Cable profile assignment slug {slug!r} is defined more than once.',
+                )
+            assignment_slugs.add(slug)
+        _require_string(assignment.get('topology_segment'), f'{path}.topology_segment', errors)
+        _require_string(assignment.get('segment_kind'), f'{path}.segment_kind', errors)
+        for role_field in ('source_role', 'destination_role'):
+            role_slug = _require_string(assignment.get(role_field), f'{path}.{role_field}', errors)
+            if role_slug and role_slug not in role_slugs:
+                errors.add(
+                    'cable_profile_assignments.unknown_role',
+                    f'{path}.{role_field}',
+                    f'Cable profile assignment references unknown role {role_slug!r}.',
+                )
+        profile_slug_values = _sequence(assignment.get('profile_slugs'), f'{path}.profile_slugs', errors)
+        if profile_slug_values is None:
+            continue
+        if not profile_slug_values:
+            errors.add(
+                'cable_profile_assignments.empty_profile_slugs',
+                f'{path}.profile_slugs',
+                'Cable profile assignments must reference at least one profile.',
+            )
+        for profile_index, profile_slug in enumerate(profile_slug_values, start=1):
+            if not isinstance(profile_slug, str) or not profile_slug.strip():
+                errors.add(
+                    'cable_profile_assignments.profile_slug_type',
+                    f'{path}.profile_slugs[{profile_index}]',
+                    'Cable profile assignment entries must be non-empty profile slugs.',
+                )
+                continue
+            if profile_slug not in profile_slugs:
+                errors.add(
+                    'cable_profile_assignments.unknown_profile',
+                    f'{path}.profile_slugs[{profile_index}]',
+                    f'Cable profile assignment references unknown cable profile {profile_slug!r}.',
                 )
 
 
@@ -1948,13 +2080,18 @@ def _validate_shuffle_rule(
     errors: _Errors,
 ) -> None:
     rule_path = f'{path}.rule'
-    if rule.get('type') != 'position_map':
+    inferred_rule_type = rule.get('type')
+    if inferred_rule_type is None and _is_sequence(rule.get('groups')):
+        inferred_rule_type = 'position_map'
+    if inferred_rule_type == 'cassette_transfer_policy' and _is_sequence(rule.get('groups')):
+        inferred_rule_type = 'position_map'
+    if inferred_rule_type != 'position_map':
         errors.add('shuffle_2x2.rule_type', f'{rule_path}.type', '2x2 shuffle rule.type must be "position_map".')
-    if not isinstance(rule.get('bidirectional'), bool):
+    if rule.get('bidirectional') is not None and not isinstance(rule.get('bidirectional'), bool):
         errors.add(
             'shuffle_2x2.bidirectional_type',
             f'{rule_path}.bidirectional',
-            '2x2 shuffle rule.bidirectional must be a boolean.',
+            '2x2 shuffle rule.bidirectional must be a boolean when declared.',
         )
     groups = _sequence(rule.get('groups'), f'{rule_path}.groups', errors)
     if groups is None:
@@ -1973,6 +2110,8 @@ def _validate_shuffle_rule(
             errors.add('shuffle_2x2.rear_mpo_count', f'{group_path}.rear_mpos', '2x2 shuffle needs two rear MPOs.')
 
         transform = group.get('rear_position_transform')
+        if not isinstance(transform, Mapping):
+            transform = rule.get('rear_position_transform')
         if not isinstance(transform, Mapping):
             errors.add(
                 'shuffle_2x2.transform_type',
@@ -1999,6 +2138,10 @@ def _validate_shuffle_rule(
                 )
 
         group_positions = group.get('active_position_groups')
+        if not isinstance(group_positions, Mapping):
+            group_positions = rule.get('active_position_groups')
+        if not isinstance(group_positions, Mapping):
+            group_positions = rule.get('position_groups')
         if not isinstance(group_positions, Mapping):
             errors.add(
                 'shuffle_2x2.active_groups_type',

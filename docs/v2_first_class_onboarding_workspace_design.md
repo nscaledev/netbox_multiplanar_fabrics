@@ -1,6 +1,6 @@
 # First-Class Onboarding Workspace Design
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 This document records the first-class onboarding workspace design and the
 implemented first slice that makes the desired multi-planar RoCE fabric
@@ -15,6 +15,7 @@ into one guided process:
 - direct UI/API entry for missing design data,
 - staged design inventory,
 - prerequisite resolution,
+- transceiver module/profile assignment,
 - unified plan generation,
 - staged apply,
 - readiness audit,
@@ -66,8 +67,8 @@ The first operational slice is implemented in the plugin:
 
 The remaining gaps are now follow-on polish rather than missing foundation:
 spreadsheet/diagram parsers, planned-graph audit simulation before commit,
-deeper prerequisite creation forms, richer remediation queues, and visual
-handoff/export packaging.
+deeper prerequisite creation forms, richer transceiver assignment UX, richer
+remediation queues, and visual handoff/export packaging.
 
 ## Non-Goals For First Slice
 
@@ -444,6 +445,10 @@ Responsibilities:
 - compare requirements against NetBox/plugin objects,
 - produce explicit bind/create/defer decisions.
 
+Prerequisite discovery should now treat NetBox `ModuleBay`, `ModuleType`, and
+installed `Module` rows as first-class inventory anchors when staged design
+items or selected blueprints include transceiver assignment intent.
+
 Key functions:
 
 - `discover_prerequisites(workspace) -> PrerequisiteResult`
@@ -457,6 +462,8 @@ Responsibilities:
 - compose one plan from current workspace state,
 - call V2.5 stamp preview when a stamp template is selected,
 - call import reconciliation dry-run for staged import items,
+- include `transceiver_assignment` import rows when staged design data binds
+  module types/profiles to OSFP endpoints,
 - include prerequisite plan,
 - include current-state or future planned-state readiness projection,
 - hash the canonical plan.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -12,8 +13,21 @@ from typing import Any
 from openpyxl import load_workbook
 
 
-DEFAULT_WORKBOOK = Path(__file__).resolve().parents[1] / 'data' / 'source' / 'nscale-nc-18k-fiber-bom-v1.4.xlsx'
+DEFAULT_WORKBOOK_GLOB = 'nscale-nc-18k-fiber-bom-*.xlsx'
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'data' / 'generated'
+
+
+def default_workbook_path() -> Path:
+    env_path = os.environ.get('MADISON_FIBER_BOM_WORKBOOK')
+    if env_path:
+        return Path(env_path)
+    source_dir = Path(__file__).resolve().parents[1] / 'data' / 'source'
+    matches = sorted(source_dir.glob(DEFAULT_WORKBOOK_GLOB))
+    if not matches:
+        raise RuntimeError(f'Madison fiber BOM workbook not found with pattern {source_dir / DEFAULT_WORKBOOK_GLOB}')
+    if len(matches) > 1:
+        raise RuntimeError(f'Multiple Madison fiber BOM workbooks match {source_dir / DEFAULT_WORKBOOK_GLOB}: {matches}')
+    return matches[0]
 
 
 @dataclass(frozen=True)
@@ -270,7 +284,10 @@ def parse_ew_patch_rows(wb) -> list[BomRow]:
 
 
 def parse_alignment_rows(wb) -> list[BomRow]:
-    ws = wb['NC 18k Fiber BOM Align v1.4']
+    align_sheets = [name for name in wb.sheetnames if name.startswith('NC 18k Fiber BOM Align')]
+    if len(align_sheets) != 1:
+        raise RuntimeError(f'Expected exactly one fiber BOM alignment sheet, found: {align_sheets}')
+    ws = wb[align_sheets[0]]
     output: list[BomRow] = []
     current_segment = ''
     for row_index, values in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -369,12 +386,12 @@ def print_report(rows: list[BomRow]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Normalize the Madison NC fiber BOM workbook into a generated CSV/JSON manifest.')
-    parser.add_argument('--workbook', type=Path, default=DEFAULT_WORKBOOK)
+    parser.add_argument('--workbook', type=Path, default=None)
     parser.add_argument('--output-dir', type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('--no-write', action='store_true')
     args = parser.parse_args()
 
-    rows = parse_bom(args.workbook)
+    rows = parse_bom(args.workbook or default_workbook_path())
     print_report(rows)
     if not args.no_write:
         json_path, csv_path = write_outputs(rows, args.output_dir)

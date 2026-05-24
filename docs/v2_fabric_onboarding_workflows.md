@@ -1,6 +1,6 @@
 # V2 Fabric Onboarding Workflows
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 This document describes the current and desired workflows for onboarding a
 net-new multi-planar RoCE fabric into NetBox and the
@@ -123,8 +123,8 @@ Current direct-entry mechanisms:
 - NetBox UI/API for core inventory prerequisites such as sites, device roles,
   device types, devices, racks, and interfaces.
 - Plugin generated CRUD/API views for fabrics, architectures, cable assemblies,
-  endpoints, strands, lanes, transfer maps, stamp templates, and operation
-  records.
+  endpoints, strands, lanes, transfer maps, transceiver profiles/connector
+  bindings, stamp templates, and operation records.
 - Import Preview with hand-authored JSON pasted into the browser.
 - `POST /api/plugins/plant-graph/...` registry endpoints for automation that
   already has normalized model data.
@@ -163,6 +163,8 @@ Operators verify:
 - `DeviceType` and `DeviceRole` rows compatible with the selected blueprint,
 - device/interface naming conventions,
 - existing devices/interfaces when stamping should bind instead of create,
+- NetBox module bays, module types, and installed modules when transceiver
+  inventory already exists or should be imported from a BoM,
 - permission to create or update NetBox and plugin objects.
 
 The `mpf_check_blueprint_compatibility` command checks registered blueprints
@@ -270,6 +272,8 @@ Blocking findings can include:
 - invalid strand termination counts,
 - transfer map ownership errors,
 - missing or inconsistent cable references.
+- missing transceiver module/profile/connector bindings where the workflow
+  expects first-class transceiver inventory.
 
 ### C12: Fix topology and rerun audit
 
@@ -288,7 +292,8 @@ like the intended design.
 Current validation surfaces:
 
 - Path Query with visual path trace and SVG export,
-- Interface Fanout Trace with expanded or consolidated optical-path rendering,
+- Interface Fanout Trace with expanded or consolidated optical-path rendering
+  and selected-OSFP transceiver context,
 - Physical Cable Blast Radius for cable cut, MPO unplug, and OSFP unseat
   scenarios,
 - Impact Reports for saved blast-radius snapshots and report comparison.
@@ -442,7 +447,8 @@ For each missing prerequisite, the workspace should offer one of three choices:
    proceed without it.
 
 This applies to sites, racks, device types, device roles, devices, interfaces,
-tenants, locations, and any future inventory anchors.
+NetBox module bays, module types, installed transceiver modules, tenants,
+locations, and any future inventory anchors.
 
 ### I6: Generate unified onboarding plan
 
@@ -453,8 +459,10 @@ Plan sections should include:
 
 - blueprint selection and parameters,
 - NetBox object creation or binding,
+- NetBox transceiver module creation/binding and semantic profile assignment,
 - plugin topology creation/update,
 - cable assembly and strand assignment,
+- plugin `TransceiverConnector` creation/binding,
 - expected audit findings or warnings,
 - expected path/fanout coverage,
 - rollback and retry posture,

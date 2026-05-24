@@ -30,6 +30,10 @@ from madison_v2_graph import (  # noqa: E402
     source_position_plane_numbers_for_shuffle_front,
     stamp_path_segments,
 )
+from madison_nvl72_appliance import (  # noqa: E402
+    device_effective_position_sort_key,
+    device_effective_rack_filter,
+)
 
 
 MAD_SITE_SLUG = 'gs001'
@@ -80,7 +84,8 @@ def read_pattern_rows() -> list[dict[str, str]]:
 
 
 def tray_sort_key(device: Device) -> tuple[int, str]:
-    return (int(device.position or 0), device.name)
+    position, name = device_effective_position_sort_key(device)
+    return (int(position or 0), name)
 
 
 def su1_gb300_racks() -> list[Rack]:
@@ -105,12 +110,12 @@ def su1_gb300_trays(racks: list[Rack]) -> list[Device]:
         trays = list(
             Device.objects.filter(
                 site__slug=MAD_SITE_SLUG,
-                rack=rack,
                 device_type__slug='gb300ct',
                 local_context_data__madison_active_endpoint_test_subset=True,
             )
-            .select_related('rack')
-            .order_by('position', 'name')
+            .filter(device_effective_rack_filter(rack))
+            .select_related('rack', 'parent_bay__device__rack')
+            .order_by('name')
         )
         if len(trays) != 18:
             raise RuntimeError(f'Expected 18 GB300 compute trays in rack {rack.name}; found {len(trays)}.')
@@ -128,12 +133,27 @@ def su1_gb300_trays(racks: list[Rack]) -> list[Device]:
     return rows
 
 
+def normalize_device_name(name: str) -> str:
+    if name.startswith('mad1-'):
+        return f'gs001-{name[len("mad1-"):]}'
+    return name
+
+
+def normalize_shuffle_box_name(name: str) -> str:
+    name = normalize_device_name(name)
+    if name.endswith('-shuffle-box'):
+        return f'{name[:-len("-shuffle-box")]}-sb'
+    return name
+
+
 def cassettes_for_box(box_name: str) -> list[Device]:
-    pattern = re.compile(r'-cassette-(?P<tray>\d+)\.(?P<slot>\d+)$')
+    box_name = normalize_shuffle_box_name(box_name)
+    cassette_prefix = f'{box_name[:-3]}-sbc-' if box_name.endswith('-sb') else f'{box_name}-sbc-'
+    pattern = re.compile(r'-sbc-(?P<tray>\d+)\.(?P<slot>\d+)$')
     cassettes = list(
         Device.objects.filter(
             site__slug=MAD_SITE_SLUG,
-            name__startswith=f'{box_name}-cassette-',
+            name__startswith=cassette_prefix,
             device_type__slug='shuffle-cassette-2x2-mpo',
         ).order_by('name')
     )
@@ -178,7 +198,7 @@ def cassette_mpo_sequence(pattern_row: dict[str, str]) -> list[dict]:
 
 def leaf_endpoint_sequence(pattern_row: dict[str, str]) -> list[dict]:
     planes = [int(value) for value in pattern_row['planes'].split(',')]
-    leaf_names = pattern_row['leaf_devices'].split('|')
+    leaf_names = [normalize_device_name(value) for value in pattern_row['leaf_devices'].split('|')]
     if len(planes) != 2 or len(leaf_names) != 2:
         raise RuntimeError(f'Unexpected plane/leaf pair in pattern row: {pattern_row}')
     rows = []
@@ -197,7 +217,7 @@ def leaf_endpoint_sequence(pattern_row: dict[str, str]) -> list[dict]:
 
 
 def endpoint(device_name: str, termination: str, ordinal: int) -> tuple[str, str, int]:
-    return (device_name, termination, ordinal)
+    return (normalize_device_name(device_name), termination, ordinal)
 
 
 def plane_by_mpo_for_cassette(rows_by_cassette_mpo: dict[tuple[str, int], dict], cassette_name: str, mpo: int) -> int | None:
@@ -234,6 +254,11 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
     for pattern_row in pattern_rows:
         gb_mpo = int(pattern_row['gb300_mpo'])
         osfp_name = pattern_row['gb300_osfp']
+        pattern_row = {
+            **pattern_row,
+            'shuffle_18_box': normalize_shuffle_box_name(pattern_row['shuffle_18_box']),
+            'shuffle_14_box': normalize_shuffle_box_name(pattern_row['shuffle_14_box']),
+        }
         cassette_rows = cassette_mpo_sequence(pattern_row)
         leaf_rows = leaf_endpoint_sequence(pattern_row)
         sequence_rows = [
@@ -265,7 +290,7 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
             common = {
                 'lane_indexes': OPTICAL_LANE_INDEXES,
                 'plane_membership_granularity': 'signal_lane',
-                'cable_profile_name': 'madison-mpo8-smf-patch-optical-lanes',
+                'cable_profile_name': 'madison-mpo8-smf-patch',
             }
             metadata = {
                 SOURCE_MARKER: True,
@@ -303,7 +328,7 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
                         **common,
                         'a': endpoint(gb_row['device'].name, osfp_name, gb_mpo),
                         'b': cassette_row['front'],
-                        'segment_role': 'gb300_to_shuffle_mpo12_active_lanes',
+                        'segment_role': 'gb300_to_shuffle_mpo8_jumper',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'gb300_to_shuffle',
@@ -316,7 +341,7 @@ def path_segments(pattern_rows: list[dict[str, str]], gb_rows: list[dict]) -> li
                         'plane_number': int(leaf_row['plane']),
                         'a': cassette_row['rear'],
                         'b': endpoint(leaf_row['device_name'], leaf_row['interface'], leaf_row['mpo']),
-                        'segment_role': 'shuffle_to_leaf_mpo12_active_lanes',
+                        'segment_role': 'shuffle_to_leaf_mpo8_jumper',
                         'metadata': {
                             **metadata,
                             'segment_kind': 'shuffle_to_leaf',
@@ -334,14 +359,15 @@ def print_dry_run(pattern_rows: list[dict[str, str]], gb_rows: list[dict], segme
     print(f'gb300_racks={len({row["rack"].name for row in gb_rows})}')
     print(f'gb300_trays={len(gb_rows)}')
     print(f'pattern_rows={len(pattern_rows)}')
-    print(f'leaf_devices={len({leaf for row in pattern_rows for leaf in row["leaf_devices"].split("|")})}')
+    print(f'leaf_devices={len({normalize_device_name(leaf) for row in pattern_rows for leaf in row["leaf_devices"].split("|")})}')
     print(f'external_segments={len(segments)}')
-    print(f'expected_signal_lane_fine_edges={sum(len(segment["lane_indexes"]) for segment in segments)}')
+    print(f'expected_fiber_strands={sum(len(segment["lane_indexes"]) for segment in segments)}')
     print('policy:')
     print('  - side A uses GB300 MPO 1 and planes 1/2')
     print('  - side B uses GB300 MPO 2 and planes 3/4')
     print('  - each cassette-pair exposes 128 MPO positions; the first 126 map to the 126 GB300 trays in SU1')
-    print('  - source MPO-12 active positions are assigned per 2x2 shuffle channel group')
+    print('  - every source MPO is modeled as one 8-strand MPO-to-MPO jumper to one cassette front MPO')
+    print('  - source MPO lane groups carry per-position plane assignment; the cassette transfer maps split them internally')
     for segment in segments[:8]:
         plane_label = segment.get('plane_number') or segment['metadata'].get('position_plane_numbers')
         print(

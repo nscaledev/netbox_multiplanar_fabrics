@@ -27,6 +27,7 @@ from netbox_plant_graph.models import (
     Plane,
     StampRun,
     StrandTermination,
+    TransceiverConnector,
     TransferMap,
     TransportChannel,
     TransportChannelPositionMap,
@@ -403,6 +404,7 @@ _ROLLBACK_MODEL_KEYS = (
     ('fiber_segments', FiberSegment),
     ('transport_channel_position_maps', TransportChannelPositionMap),
     ('transport_channels', TransportChannel),
+    ('transceiver_connectors', TransceiverConnector),
     ('connector_positions', ConnectorPosition),
     ('endpoints', Endpoint),
     ('nodes', FabricNode),
@@ -665,6 +667,8 @@ def _rollback_object_phase_numbers(obj) -> frozenset[int]:
         return _rollback_object_phase_numbers(obj.node)
     if isinstance(obj, ConnectorPosition):
         return _rollback_object_phase_numbers(obj.endpoint)
+    if isinstance(obj, TransceiverConnector):
+        return _rollback_object_phase_numbers(obj.endpoint)
     if isinstance(obj, TransportChannel):
         if obj.plane_id and obj.plane:
             return frozenset({obj.plane.plane_number})
@@ -752,6 +756,8 @@ def _natural_key(obj) -> str:
         return f'{obj.fabric.slug}:{obj.address}'
     if isinstance(obj, ConnectorPosition):
         return f'{obj.endpoint.fabric.slug}:{obj.endpoint.address}:position-{obj.position_number}'
+    if isinstance(obj, TransceiverConnector):
+        return f'{obj.endpoint.fabric.slug}:{obj.endpoint.address}:transceiver-connector'
     if isinstance(obj, TransportChannel):
         return f'{obj.fabric.slug}:{obj.endpoint.address}:channel-{obj.channel_index}'
     if isinstance(obj, TransportChannelPositionMap):
@@ -783,12 +789,20 @@ def _rollback_dependency_issues(
         try:
             collector.collect(objects)
         except ProtectedError as exc:
+            protected = tuple(exc.protected_objects)
+            unselected = [
+                obj
+                for obj in protected
+                if (obj._meta.label_lower, obj.pk) not in selected
+            ]
+            if not unselected:
+                continue
             return (
                 StampingValidationIssue(
                     code='rollback_protected_dependency',
                     path='stamp_run.result.managed_objects',
                     message='Rollback is blocked by protected downstream dependencies.',
-                    context={'protected_count': len(exc.protected_objects)},
+                    context={'protected_count': len(unselected)},
                 ),
             )
 

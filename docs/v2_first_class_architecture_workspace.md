@@ -1,6 +1,6 @@
 # First-Class Architecture Workspace
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 The architecture workspace is the persistent operator/API workflow for turning
 architecture design inputs into reusable multiplanar fabric blueprints. It sits
@@ -105,6 +105,14 @@ Publish plans are blocked only by errors. Warnings require explicit approval
 acknowledgement. Applying a plan calls `reconcile_import_payload(...,
 apply=True)`.
 
+Transceiver profile data is currently adjacent to the architecture workspace
+rather than embedded in the architecture schema payload. The workspace can
+publish OSFP/MPO/channel-map/shuffle/cable-profile semantics, and V2.5
+stamping/import then bind NetBox module inventory to plugin transceiver profiles
+seeded by `ensure_builtin_transceiver_profiles()` or direct registry/import
+operations. A first-class architecture-workspace editor for transceiver profile
+catalogs remains follow-on work.
+
 ## UI Surface
 
 The NetBox menu exposes `Build & Run -> Architecture Workspaces`.
@@ -149,6 +157,9 @@ See `docs/v2_external_contracts.md` for the stable top-level response keys.
    separate workspaces for now.
 4. Handoff JSON is intentionally source/plan oriented and does not yet package
    binary source artifacts.
+5. Transceiver profiles can be referenced by downstream stamping/import
+   workflows, but the workspace does not yet publish a dedicated
+   `transceiver_profiles` architecture-schema section.
 
 ## Verification
 

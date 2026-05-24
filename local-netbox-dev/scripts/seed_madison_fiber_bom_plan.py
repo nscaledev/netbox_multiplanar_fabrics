@@ -18,9 +18,10 @@ MAD_SITE_SLUG = 'gs001'
 NSCALE_TENANT_SLUG = 'nscale'
 FABRIC_NAME = 'GS001 RoCE Fabric'
 FABRIC_SLUG = 'gs001-roce-fabric'
-PLAN_NAME = 'GS001 Fiber BOM v1.4'
-PLAN_SLUG = 'gs001-fiber-bom-v1-4'
-SOURCE_MARKER = 'madison_fiber_bom_v1_4'
+PLAN_NAME = 'GS001 Fiber BOM release 1.4'
+PLAN_SLUG = 'gs001-fiber-bom-r1-4'
+SOURCE_MARKER = 'madison_fiber_bom_r1_4'
+SOURCE_WORKBOOK_LABEL = 'Nscale NC 18k Fiber BOM release 1.4 workbook'
 
 MANIFEST_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/generated/madison_fiber_bom_manifest.csv'),
@@ -165,7 +166,7 @@ def ensure_plan_template(fabric: Fabric, rows: list[dict[str, str]], counters: C
                 'kind': 'fiber_bom_plan',
                 'schema_version': 2,
                 'fabric_slug': fabric.slug,
-                'source_file': 'Nscale NC 18k Fiber BOM v1.4.xlsx',
+                'source_file': SOURCE_WORKBOOK_LABEL,
                 'bom_rows': len(rows),
                 'totals': dict(totals),
                 'v2_instantiation_targets': ['FabricNode', 'CableAssembly', 'FiberSegment', 'FiberStrand', 'StrandTermination'],
@@ -183,7 +184,7 @@ def ensure_plan_template(fabric: Fabric, rows: list[dict[str, str]], counters: C
         'kind': 'fiber_bom_plan',
         'schema_version': 2,
         'fabric_slug': fabric.slug,
-        'source_file': 'Nscale NC 18k Fiber BOM v1.4.xlsx',
+        'source_file': SOURCE_WORKBOOK_LABEL,
         'bom_rows': len(rows),
         'totals': dict(totals),
         'v2_instantiation_targets': ['FabricNode', 'CableAssembly', 'FiberSegment', 'FiberStrand', 'StrandTermination'],
@@ -264,7 +265,7 @@ def bom_lot_address(row: dict[str, str]) -> str:
     sheet_code = ''.join(part[0] for part in slugify(row['source_sheet']).split('-') if part)[:5]
     length = as_float_label(row['length_m'])
     dest = slugify(row['dest_rack'])[:36] or 'any'
-    return f"mad1.fiber.v14.{sheet_code}.r{as_int(row['source_row']):03d}.{row['segment']}.{as_int(row['fiber_count'])}f.{length}m.{dest}"[:500]
+    return f"gs001.fiber.r14.{sheet_code}.r{as_int(row['source_row']):03d}.{row['segment']}.{as_int(row['fiber_count'])}f.{length}m.{dest}"[:500]
 
 
 def bom_lot_name(row: dict[str, str]) -> str:
@@ -274,7 +275,7 @@ def bom_lot_name(row: dict[str, str]) -> str:
 def ensure_bom_lot(row: dict[str, str], fabric: Fabric, pattern: TransferPattern, counters: Counter) -> FabricNode:
     metadata = {
         SOURCE_MARKER: True,
-        'source_file': 'Nscale NC 18k Fiber BOM v1.4.xlsx',
+        'source_file': SOURCE_WORKBOOK_LABEL,
         'source_sheet': row['source_sheet'],
         'source_row': as_int(row['source_row']),
         'domain': row['domain'],

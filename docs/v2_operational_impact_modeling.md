@@ -13,10 +13,11 @@ The service supports:
   unavailable. Member `FiberStrand` rows become failed components.
 - `mpo_connector_unplug`: one or more MPO connector endpoints are unplugged.
   All `ConnectorPosition` rows on those endpoints become unavailable.
-- `osfp_transceiver_unseat`: one or more NetBox `Interface` objects representing
-  OSFP/transceiver ports are unseated. Plugin endpoints anchored to those
-  interfaces, their child MPO endpoints, and mapped transport channels become
-  unavailable.
+- `osfp_transceiver_unseat`: one or more OSFP-facing NetBox `Interface`
+  objects are selected as the operator handle for an unseated transceiver. The
+  modeled failure includes the plugin endpoint anchored to that interface, child
+  MPO endpoints, mapped transport channels, and any bound
+  `TransceiverConnector` rows for the installed NetBox module.
 
 Entry points:
 
@@ -43,8 +44,9 @@ single fabric.
 - `scope`: fabric IDs and slugs covered by the simulated components.
 - `summary`: impacted path/lane/channel/endpoint/device counts and counts by
   severity.
-- `simulated_components`: failed physical objects such as cable assemblies,
-  fiber strands, connector positions, endpoints, or interfaces.
+- `simulated_components`: failed physical or modeled-fabric objects such as
+  cable assemblies, fiber strands, connector positions, endpoints, interfaces,
+  or transceiver connector faces.
 - `impacted_paths`: resolved path hooks with `source_lane_id`,
   `destination_lane_id`, `source_channel_id`, `destination_channel_id`, matched
   failed components, and path step references.
@@ -91,7 +93,10 @@ Scenario target fields:
 
 - Cable cut: `cable_assembly_id` or `cable_assembly_ids`.
 - MPO unplug: `connector_endpoint_id` or `connector_endpoint_ids`.
-- OSFP unseat: `interface_id` or `interface_ids`.
+- OSFP unseat: `interface_id` or `interface_ids`. This is currently an
+  interface-based selector for operator ergonomics; when a NetBox `Module` is
+  installed in a matching module bay, the report also includes the installed
+  module's plugin `TransceiverConnector` faces as failed components.
 
 Examples:
 
@@ -122,7 +127,10 @@ curl -sS -X POST \
 Validation failures return HTTP `400` with field-keyed messages. Missing target
 fields, unknown target IDs, endpoints without connector positions, interfaces
 without modeled OSFP endpoints, and unknown fabric IDs are rejected before the
-impact model runs.
+impact model runs. A missing installed module or missing transceiver profile
+does not block the OSFP-unseat preview; it simply means the report will be
+driven by the interface/plugin-endpoint graph rather than richer transceiver
+connector bindings.
 
 ## Saved Snapshots
 
@@ -201,8 +209,9 @@ path:<source_lane_id>:<destination_lane_id-or-unresolved>
 ```
 
 Matched components identify why the path is impacted, such as the failed
-`FiberStrand` for cable cuts or failed `ConnectorPosition` rows for connector
-and transceiver scenarios.
+`FiberStrand` for cable cuts, failed `ConnectorPosition` rows for MPO unplug
+scenarios, or failed `TransceiverConnector`/interface/endpoint objects for OSFP
+unseat scenarios.
 
 ## Intended Use
 
@@ -223,7 +232,10 @@ The `Physical Cable Blast Radius` page is the primary operator workflow. It
 lets operators filter by site, device type, role, rack label, rack row, rack
 elevation, and partial device name; select a modeled device; choose the failure
 scenario; select one or more cable assemblies, connector endpoints, or OSFP
-interfaces; calculate impact; and save the result as an impact report.
+interfaces; calculate impact; and save the result as an impact report. For OSFP
+unseat scenarios, the selector remains the NetBox interface today, but the
+result includes bound transceiver connector faces whenever the selected
+interface has a matching module bay/module/profile binding.
 
 The `Impact Reports` page lists saved operational-impact `OperationRun`
 snapshots, exports each report as JSON, links back to the run detail, and
@@ -238,5 +250,7 @@ presentation depth:
   links,
 - side-by-side scenario comparison affordances directly from Blast Radius after
   multiple calculations,
+- a module-native OSFP unseat selector for operators who want to select the
+  installed transceiver object directly instead of starting from the interface,
 - clearer grouping by fabric tier as additional blueprint families introduce
   spine/super-spine roles.

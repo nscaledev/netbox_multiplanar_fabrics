@@ -9,7 +9,8 @@ on before they become database rows.
 The default blueprint registry exposes three active built-in architecture
 families:
 
-- `roce-4-plane-gb300-2x2-shuffle` `v2`: GB300 four-plane 2x2 shuffle.
+- `roce-4-plane-gb300-2x2-shuffle` `v2`: GB300 four-plane 2x2 shuffle, including both
+  GB300-to-leaf and backend leaf-to-spine shuffle semantics.
 - `roce-4-plane-h100-direct-attach` `v2`: H100 four-plane direct attach.
 - `roce-8-plane-gb300-2x2-shuffle` `v2`: GB300 eight-plane 2x2 shuffle.
 
@@ -24,6 +25,50 @@ Use:
 - `get_default_blueprint_registry()` to resolve the active built-in registry
   entries, their lifecycle metadata, required device types, and bundled stamp
   templates.
+
+The GB300 shuffle architecture exposes two backend RoCE topology segments:
+
+- `gb300_to_leaf_shuffle`: GB300 OSFP/MPO endpoints traverse a leaf-side
+  passive 2x2 shuffle cassette and land on backend leaf OSFP/MPO endpoints.
+- `leaf_to_spine_shuffle`: backend leaf OSFP/MPO endpoints traverse structured
+  trunks that terminate directly on spine-side shuffle cassette rear MPOs, are
+  transformed through the same 2x2/key-down-roll cassette semantics, and patch
+  from cassette front MPOs to backend spine OSFP/MPO endpoints.
+
+The leaf-to-spine segment is represented by explicit spine-tier roles
+(`spine_switch`, `spine_osfp`, `spine_mpo`), spine-side shuffle roles
+(`spine_shuffle_cassette`, `spine_shuffle_rear_mpo`,
+`spine_shuffle_front_mpo`), the `leaf_spine_shuffle_2x2` transfer pattern, and
+the `backend_leaf_spine_shuffle` allocation rule. The allocation rule captures
+the design math: 32 spine-facing OSFP cages per leaf in 4x200Gbps mode provide
+128 child interfaces for 126 plane-local spine switches, leaving two planned
+spares.
+
+The same architecture includes a first-class cable-profile catalog for the
+observed 96f and 72f trunk assemblies:
+
+- `trunk-96f-mpo8-sm-apc-unpinned-unpinned`: 96 fibers, 12 MPO8 terminations,
+  single-mode, APC, unpinned/unpinned.
+- `trunk-96f-sm-mpo8-unpinned-unpinned`: 96 fibers, 12 MPO8 terminations,
+  single-mode, polish unspecified, unpinned/unpinned.
+- `trunk-72f-sm-mpo8-unpinned-unpinned`: 72 fibers, 9 MPO8 terminations,
+  single-mode, polish unspecified, unpinned/unpinned.
+
+These profiles are not installed-cable rows by themselves. They are architecture
+profile candidates used by site-design imports, stamp plans, and reconciliation
+flows to create concrete `CableAssembly` rows and resolve individual
+`FiberStrand` records through `cable_site` plus `cable_id`.
+
+Transceiver semantics are current V2 runtime data but are not yet published as
+a first-class `transceiver_profiles` section inside the architecture schema
+payload. The runtime catalog is seeded by
+`netbox_plant_graph.services.transceivers.ensure_builtin_transceiver_profiles()`
+and may attach `TransceiverProfile` rows to a `FabricArchitecture`. Stamping and
+import reconciliation then bind NetBox `ModuleBay`/`ModuleType`/`Module`
+inventory to plugin `TransceiverConnectorProfile`, `TransceiverLaneProfile`,
+and `TransceiverConnector` rows. The architecture schema still validates OSFP,
+MPO, channel-map, shuffle, and cable-profile semantics; an explicit schema
+publication contract for transceiver profiles is a follow-on.
 
 Persisted built-in rows store `metadata.schema_contract_version` with the
 current schema contract version. Registry-backed persisted architectures also
@@ -42,6 +87,15 @@ It does not raise assertions. Callers can show all errors, filter by code, or fa
 - fabric class: one of `roce_backend`, `ethernet_frontend`, `management`, or `storage`;
 - `parameter_schema`: a JSON Schema object for stamp-time parameters;
 - `required_device_types`: role slug to compatible NetBox DeviceType slugs;
+- `cable_profiles`: physical cable assembly profiles such as 96f/72f trunks,
+  including fiber count, connector family, pinning, and instance-modeling
+  metadata;
+- `cable_profile_assignments`: topology-segment bindings that declare which
+  cable profiles may be used for a structured cable path;
+- transceiver profile data is currently adjacent runtime/plugin data rather
+  than embedded architecture-schema data; see
+  `docs/v2_transceiver_modeling_plan.md` for the current hybrid
+  NetBox-module/plugin-semantic model;
 - lifecycle fields: `status` and `lifecycle`;
 - provider hooks: `transfer_pair_providers` and `custom_validator_entrypoints`.
 
@@ -185,6 +239,22 @@ Compatibility helpers can also wrap validation failures:
 | `required_device_types.unknown_role` | Stable | Compatibility matrix references an unknown role. |
 | `required_device_types.empty` | Stable | A role lists no compatible DeviceType slugs. |
 | `required_device_types.device_type_slug` | Stable | A compatible DeviceType entry is not a non-empty string. |
+
+### Cable Profiles
+
+| Code | Stability | Notes |
+| --- | --- | --- |
+| `cable_profiles.entry_type` | Stable | A cable profile definition is not an object. |
+| `cable_profiles.duplicate_slug` | Stable | A cable profile slug appears more than once. |
+| `cable_profiles.unknown_assembly_kind` | Stable | Cable profile assembly kind is not supported. |
+| `cable_profiles.metadata_type` | Stable | Cable profile metadata is not an object. |
+| `cable_profiles.fiber_count_mismatch` | Stable | `fiber_count` does not equal `mpo_connector_count * fibers_per_mpo`. |
+| `cable_profile_assignments.entry_type` | Stable | A cable profile assignment is not an object. |
+| `cable_profile_assignments.duplicate_slug` | Stable | A cable profile assignment slug appears more than once. |
+| `cable_profile_assignments.unknown_role` | Stable | Assignment source or destination role is not an architecture role. |
+| `cable_profile_assignments.empty_profile_slugs` | Stable | Assignment does not reference any profiles. |
+| `cable_profile_assignments.profile_slug_type` | Stable | Assignment profile reference is not a non-empty slug. |
+| `cable_profile_assignments.unknown_profile` | Stable | Assignment references a profile not declared in the catalog. |
 
 ### Roles
 
@@ -385,6 +455,10 @@ Architecture definitions must provide these schema surfaces:
   `identity`, `stagger`, `shuffle_2x2`, generalized position-map kinds, and `custom` have additional checks.
 - Allocation rules: every rule set has a unique `slug`, non-empty `name`, and object-shaped `rule`.
   `channel_subinterface_mapping` is required and must carry the same channel map matrix as the architecture.
+- Cable profiles: every profile has a unique `slug`, non-empty `name`, supported `assembly_kind`, positive
+  `fiber_count`, `mpo_connector_count`, and `fibers_per_mpo`, plus connector, fiber-mode, and pinning labels.
+  `fiber_count` must equal `mpo_connector_count * fibers_per_mpo`. Assignments bind profile slugs to source and
+  destination architecture roles for a named topology segment.
 - MPO positions: every physical MPO position must be declared either active or dark. Active groups must be disjoint,
   dark positions must be disjoint from active positions, and all positions must be within `1..mpo_position_count`.
 - Channel map matrix: subinterface indexes must be contiguous, each channel maps the configured number of positions,

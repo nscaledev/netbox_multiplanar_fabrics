@@ -67,6 +67,21 @@ also includes NetBox-side changes for:
 
 This lets operators inspect generated names and collision risk before apply mutates NetBox inventory.
 
+Apply now also uses those NetBox OSFP interfaces as the execution anchor for
+installed transceiver modeling:
+
+- it creates or reuses a NetBox `ModuleBay` named after the OSFP interface,
+- it creates or reuses a NetBox `Module` when a matching transceiver
+  `ModuleType` can be selected,
+- it selects a plugin `TransceiverProfile` from explicit stamp parameters,
+  module-type/profile mappings, role hints, or the built-in 4x200G OSFP
+  default,
+- it creates plugin `TransceiverConnector` rows linking the installed module's
+  connector profiles to the stamped child MPO endpoints, and
+- it records `result.transceiver_bindings`,
+  `result.managed_objects.transceiver_connectors`, and any created NetBox
+  module/module-bay IDs in the `StampRun`.
+
 ## Execute UI Preview
 
 The Stamp Template Execute page renders the same V2.5 preview object used by
@@ -161,6 +176,14 @@ Templates may now opt into a conservative Tier 2 parameter block:
 - `fabric_ownership`: optional `tenant_slug`, `scope_site_slug`, and `scope_location_slug`. Resolved objects are injected
   into the `Fabric`; generated NetBox devices use the resolved site/tenant/location where those Device fields are
   available. Missing references are warning-severity preview issues.
+- `transceivers`: optional profile/module selection hints. Supported fields
+  include `enabled`, top-level `profile_slug` or `default_profile_slug`,
+  top-level `module_type_part_number`, and role-specific sections such as
+  `gpu_osfp`, `h100_osfp`, `leaf_osfp`, or `spine_osfp` with
+  `profile_slug`, `module_type_part_number`, `part_number`, or `role_hint`.
+  `creation_options` can also pass concrete NetBox `ModuleType` objects using
+  aliases such as `transceiver_module_type`, `gpu_transceiver_module_type`,
+  `leaf_transceiver_module_type`, and `spine_transceiver_module_type`.
 
 Phase-scoped rollback is conservative but no longer blocked solely by the presence of another phase's `StampRun`. When a
 run records phase scope and its `managed_objects` manifest contains only objects local to that phase, the compensation
@@ -195,8 +218,9 @@ The planner supports rollback only when all of the following are true:
   manifests. Repeated unphased applies and shared phase manifests remain ambiguous and blocked.
 - Every manifest object still exists or can be skipped as already absent, and every existing object has a clear ownership
   marker. Most plugin rows use `metadata.fixture == true`; connector positions inherit ownership from their endpoint;
-  cable assemblies require `metadata.fixture == true` plus `metadata.fabric_id`; fabrics require fixture, template slug,
-  and executor metadata.
+  transceiver connectors use their binding metadata; cable assemblies require
+  `metadata.fixture == true` plus `metadata.fabric_id`; fabrics require fixture,
+  template slug, and executor metadata.
 - Django delete collection does not reveal non-manifest downstream objects that would be cascaded. Audit events are
   allowed to cascade; operator-owned dependencies such as suppressions block rollback.
 

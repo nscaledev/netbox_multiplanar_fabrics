@@ -53,6 +53,8 @@ SUPPORTED_TOPOLOGY_PARAMETERS = frozenset({
     'plane_count',
     'gpu_tray_count',
     'leaf_count_per_plane',
+    'spine_count_per_plane',
+    'leaf_spine_osfp_cages_per_leaf',
     'racks_per_pod',
     'pods_per_fabric',
 })
@@ -61,6 +63,8 @@ TOPOLOGY_PARAMETER_BOUNDS = {
     'plane_count': (1, 16),
     'gpu_tray_count': (1, 10000),
     'leaf_count_per_plane': (1, 256),
+    'spine_count_per_plane': (1, 1024),
+    'leaf_spine_osfp_cages_per_leaf': (1, 512),
     'racks_per_pod': (1, 1024),
     'pods_per_fabric': (1, 1024),
 }
@@ -232,6 +236,8 @@ def _resolved_topology_parameters(template_spec: dict) -> dict:
         'plane_count': legacy_plane_count or 4,
         'gpu_tray_count': _legacy_group_count(template_spec, 'gpu_tray', 'count', 1),
         'leaf_count_per_plane': 1,
+        'spine_count_per_plane': 126,
+        'leaf_spine_osfp_cages_per_leaf': 32,
         'racks_per_pod': 1,
         'pods_per_fabric': 1,
     }

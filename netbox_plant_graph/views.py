@@ -88,10 +88,12 @@ from .services.onboarding import (
     normalize_source_artifact,
     publish_workspace,
     resolve_prerequisite,
+    workspace_revision,
 )
 from .services.operations import execute_operation_profile
 from .services import resolver as resolver_service
 from .services.resolver import resolve_optical_lane_path
+from .services.transceivers import transceiver_context_for_interface
 from .services.stamp_preview import build_v2_stamp_template_preview
 from .services.stamping import execute_stamp_template, stamp_roce_4plane_mini_fabric
 from .services.stamping_v25 import (
@@ -296,21 +298,329 @@ def _architecture_workspace_detail_url(workspace):
 
 
 def _architecture_workspace_context(workspace: ArchitectureWorkspace):
+    summary = architecture_workspace_summary(workspace)
+    revision = summary.get('revision') or ''
+    source_artifacts = tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50])
+    design_components = tuple(
+        workspace.design_components.select_related('source_artifact').order_by('kind', 'natural_key', 'pk')[:200]
+    )
+    validation_runs = tuple(workspace.validation_runs.order_by('-created', '-pk')[:10])
+    publish_plans = tuple(workspace.publish_plans.order_by('-created', '-pk')[:10])
     current_plan = workspace.current_plan
+    latest_validation_run = validation_runs[0] if validation_runs else None
+    latest_publish_plan = publish_plans[0] if publish_plans else None
+    current_plan_is_stale = bool(current_plan and current_plan.workspace_revision != revision)
+    latest_validation_is_stale = bool(latest_validation_run and latest_validation_run.workspace_revision != revision)
+    latest_import_summary = _architecture_import_summary(latest_validation_run, current_plan)
+    issue_rows = _architecture_issue_rows(latest_validation_run, current_plan, design_components)
+    published_architecture = workspace.published_architecture
     return {
-        'summary': architecture_workspace_summary(workspace),
+        'summary': summary,
         'attach_source_form': forms.ArchitectureSourceArtifactAttachForm(),
-        'source_artifacts': tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50]),
-        'design_components': tuple(workspace.design_components.order_by('kind', 'natural_key', 'pk')[:200]),
-        'validation_runs': tuple(workspace.validation_runs.order_by('-created', '-pk')[:10]),
-        'publish_plans': tuple(workspace.publish_plans.order_by('-created', '-pk')[:10]),
+        'source_artifacts': source_artifacts,
+        'design_components': design_components,
+        'validation_runs': validation_runs,
+        'publish_plans': publish_plans,
         'current_plan': current_plan,
+        'latest_validation_run': latest_validation_run,
+        'latest_publish_plan': latest_publish_plan,
+        'current_plan_is_stale': current_plan_is_stale,
+        'latest_validation_is_stale': latest_validation_is_stale,
+        'latest_import_summary': latest_import_summary,
+        'issue_rows': issue_rows,
+        'source_status_counts': _architecture_count_rows(summary.get('source_counts') or {}),
+        'component_kind_counts': _architecture_count_rows(summary.get('component_counts') or {}),
+        'component_status_counts': _architecture_component_status_counts(design_components),
+        'workflow_steps': _architecture_workflow_steps(
+            workspace,
+            source_artifacts,
+            design_components,
+            latest_validation_run,
+            current_plan,
+            revision,
+        ),
+        'next_action': _architecture_next_action(
+            workspace,
+            source_artifacts,
+            design_components,
+            latest_validation_run,
+            current_plan,
+            revision,
+        ),
+        'semantics': _architecture_normalized_semantics(design_components),
+        'published_architecture': published_architecture,
+        'published_architecture_url': published_architecture.get_absolute_url() if published_architecture else '',
         'source_attach_url': reverse('plugins:netbox_plant_graph:architecture_workspace_source_add', kwargs={'pk': workspace.pk}),
         'validate_url': reverse('plugins:netbox_plant_graph:architecture_workspace_validate', kwargs={'pk': workspace.pk}),
         'plan_generate_url': reverse('plugins:netbox_plant_graph:architecture_workspace_plan_generate', kwargs={'pk': workspace.pk}),
         'publish_url': reverse('plugins:netbox_plant_graph:architecture_workspace_publish', kwargs={'pk': workspace.pk}),
         'handoff_url': reverse('plugins:netbox_plant_graph:architecture_workspace_handoff', kwargs={'pk': workspace.pk}),
+        'payload_docs_url': '/docs/v2_architecture_workspace_payloads.md',
+        'roce_walkthrough_url': '/docs/v2_roce_4plane_shuffle_architecture_walkthrough.md',
     }
+
+
+def _architecture_count_rows(counts):
+    return tuple(
+        SimpleNamespace(key=key, label=str(key).replace('_', ' ').title(), count=count)
+        for key, count in sorted(counts.items())
+    )
+
+
+def _architecture_component_status_counts(components):
+    counts = {}
+    for component in components:
+        status = component.validation_status or 'pending'
+        counts[status] = counts.get(status, 0) + 1
+    return _architecture_count_rows(counts)
+
+
+def _architecture_step(label, state):
+    badge_classes = {
+        'complete': 'bg-success',
+        'active': 'bg-primary',
+        'blocked': 'bg-danger',
+        'not started': 'bg-secondary',
+    }
+    return SimpleNamespace(label=label, state=state, badge_class=badge_classes.get(state, 'bg-secondary'))
+
+
+def _architecture_workflow_steps(workspace, sources, components, latest_validation, current_plan, revision):
+    source_state = 'complete' if sources else 'active'
+    if sources and all(source.status == 'failed' for source in sources):
+        source_state = 'blocked'
+
+    received_sources = [source for source in sources if source.status == 'received']
+    conflicted_components = [component for component in components if component.validation_status == 'conflict']
+    normalize_state = 'not started'
+    if conflicted_components:
+        normalize_state = 'blocked'
+    elif components and not received_sources:
+        normalize_state = 'complete'
+    elif sources:
+        normalize_state = 'active'
+
+    validation_state = 'not started'
+    if latest_validation:
+        if latest_validation.workspace_revision != revision:
+            validation_state = 'active'
+        elif latest_validation.status == 'failed':
+            validation_state = 'blocked'
+        else:
+            validation_state = 'complete'
+    elif components:
+        validation_state = 'active'
+
+    plan_state = 'not started'
+    if current_plan:
+        if current_plan.workspace_revision != revision or current_plan.status in {'blocked', 'failed'}:
+            plan_state = 'blocked'
+        else:
+            plan_state = 'complete'
+    elif latest_validation and latest_validation.status in {'passed', 'warning'}:
+        plan_state = 'active'
+
+    approve_state = 'not started'
+    if current_plan:
+        if current_plan.status in {'approved', 'publishing', 'published'}:
+            approve_state = 'complete'
+        elif current_plan.status == 'generated':
+            approve_state = 'active'
+        elif current_plan.status in {'blocked', 'failed'}:
+            approve_state = 'blocked'
+
+    publish_state = 'not started'
+    if current_plan:
+        if current_plan.status == 'published' or workspace.status == 'published':
+            publish_state = 'complete'
+        elif current_plan.status in {'approved', 'publishing'}:
+            publish_state = 'active'
+        elif current_plan.status == 'failed':
+            publish_state = 'blocked'
+
+    handoff_state = 'complete' if workspace.status == 'published' else 'not started'
+    return (
+        _architecture_step('Sources', source_state),
+        _architecture_step('Normalize', normalize_state),
+        _architecture_step('Validate', validation_state),
+        _architecture_step('Plan', plan_state),
+        _architecture_step('Approve', approve_state),
+        _architecture_step('Publish', publish_state),
+        _architecture_step('Handoff', handoff_state),
+    )
+
+
+def _architecture_next_action(workspace, sources, components, latest_validation, current_plan, revision):
+    if not sources:
+        return SimpleNamespace(
+            label='Attach source',
+            title='Attach a source artifact',
+            reason='No blueprint bundle, schema JSON, template, API payload, or manual entry is attached yet.',
+            target='Use Attach Source.',
+            url='',
+        )
+    received_source = next((source for source in sources if source.status == 'received'), None)
+    if received_source:
+        return SimpleNamespace(
+            label='Normalize source',
+            title='Normalize source',
+            reason=f'{received_source.name} is received but has not produced architecture components.',
+            target='Use the Normalize button on that source row.',
+            url=received_source.get_absolute_url(),
+        )
+    conflicted_component = next((component for component in components if component.validation_status == 'conflict'), None)
+    if conflicted_component:
+        return SimpleNamespace(
+            label='Inspect issues',
+            title='Inspect component issues',
+            reason=f'{conflicted_component.natural_key} is marked conflict and must be corrected before publishing.',
+            target='Open the component row and review validation messages.',
+            url=conflicted_component.get_absolute_url(),
+        )
+    if not latest_validation:
+        return SimpleNamespace(
+            label='Run validation',
+            title='Run validation',
+            reason='Normalized architecture components are ready for publish preflight.',
+            target='Use Validate.',
+            url='',
+        )
+    if current_plan and current_plan.workspace_revision != revision:
+        return SimpleNamespace(
+            label='Generate plan',
+            title='Regenerate stale plan',
+            reason='The current publish plan does not match the workspace revision.',
+            target='Use Generate Publish Plan.',
+            url=current_plan.get_absolute_url(),
+        )
+    if latest_validation.workspace_revision != revision:
+        return SimpleNamespace(
+            label='Run validation',
+            title='Refresh validation',
+            reason='The latest validation run was produced for an older workspace revision.',
+            target='Use Validate.',
+            url=latest_validation.get_absolute_url(),
+        )
+    if latest_validation.status == 'failed':
+        return SimpleNamespace(
+            label='Inspect issues',
+            title='Inspect validation issues',
+            reason='The latest validation run failed and the issue table lists the blockers.',
+            target='Open the latest validation run or affected components.',
+            url=latest_validation.get_absolute_url(),
+        )
+    if not current_plan:
+        return SimpleNamespace(
+            label='Generate plan',
+            title='Generate publish plan',
+            reason='Validation is current and no publish plan exists for this workspace.',
+            target='Use Generate Publish Plan.',
+            url='',
+        )
+    if current_plan.status in {'blocked', 'failed'}:
+        return SimpleNamespace(
+            label='Inspect issues',
+            title='Inspect publish blockers',
+            reason=f'The current publish plan is {current_plan.status}.',
+            target='Review validation issues, import summary, and regenerate when corrected.',
+            url=current_plan.get_absolute_url(),
+        )
+    if current_plan.status == 'generated':
+        return SimpleNamespace(
+            label='Approve plan',
+            title='Approve publish plan',
+            reason='The current publish plan is generated and waiting for approval.',
+            target='Use Approve on the plan row.',
+            url=current_plan.get_absolute_url(),
+        )
+    if current_plan.status in {'approved', 'publishing'}:
+        return SimpleNamespace(
+            label='Publish plan',
+            title='Publish current plan',
+            reason='The approved plan can be published into first-class architecture objects.',
+            target='Use Publish Current Plan.',
+            url=current_plan.get_absolute_url(),
+        )
+    return SimpleNamespace(
+        label='Fetch handoff JSON',
+        title='Fetch handoff JSON',
+        reason='The architecture workspace is published and ready for downstream handoff.',
+        target='Open the handoff JSON or published architecture link.',
+        url=workspace.published_architecture.get_absolute_url() if workspace.published_architecture else '',
+    )
+
+
+def _architecture_import_summary(latest_validation, current_plan):
+    import_plan = None
+    if latest_validation and latest_validation.import_plan:
+        import_plan = latest_validation.import_plan
+    elif current_plan and current_plan.import_plan:
+        import_plan = current_plan.import_plan
+    return (import_plan or {}).get('summary') or {}
+
+
+def _architecture_issue_rows(latest_validation, current_plan, components):
+    rows = []
+    source_issues = []
+    if latest_validation:
+        source_issues = latest_validation.issues or []
+    elif current_plan:
+        source_issues = (current_plan.validation_summary or {}).get('issues') or []
+    for issue in source_issues[:8]:
+        rows.append(
+            SimpleNamespace(
+                severity=issue.get('severity') or 'info',
+                code=issue.get('code') or 'validation',
+                path=issue.get('path') or '',
+                message=issue.get('message') or '',
+            )
+        )
+    for component in components:
+        if len(rows) >= 8:
+            break
+        if component.validation_status not in {'warning', 'conflict'}:
+            continue
+        for message in component.validation_messages or ():
+            if len(rows) >= 8:
+                break
+            rows.append(
+                SimpleNamespace(
+                    severity=message.get('severity') or component.validation_status,
+                    code=message.get('code') or component.kind,
+                    path=component.natural_key,
+                    message=message.get('message') or '',
+                )
+            )
+    return tuple(rows)
+
+
+def _architecture_normalized_semantics(components):
+    blueprint = next((component.desired_state or {} for component in components if component.kind == 'fabric_architecture_blueprint'), {})
+    definition = blueprint.get('definition') or blueprint.get('architecture') or blueprint.get('blueprint') or {}
+    if isinstance(definition, dict) and isinstance(definition.get('definition'), dict):
+        definition = definition['definition']
+    if not isinstance(definition, dict):
+        definition = {}
+    active_groups = definition.get('active_position_groups') or {}
+    active_position_count = sum(len(positions or ()) for positions in active_groups.values()) if isinstance(active_groups, dict) else 0
+    dark_positions = definition.get('dark_positions') or ()
+    osfp_channel_count = 0
+    for role in definition.get('roles') or ():
+        metadata = role.get('metadata') or {}
+        if metadata.get('connector_kind') == 'osfp':
+            osfp_channel_count += int(metadata.get('channels_per_osfp') or 0)
+    return SimpleNamespace(
+        slug=definition.get('slug') or '',
+        version=definition.get('version') or '',
+        plane_count=definition.get('plane_count') or '',
+        fabric_class=definition.get('fabric_class') or '',
+        osfp_channel_count=osfp_channel_count,
+        mpo_count=definition.get('mpo_count_per_osfp') or '',
+        active_position_count=active_position_count,
+        dark_position_count=len(dark_positions),
+        transfer_pattern_count=len(definition.get('transfer_patterns') or ()),
+        stamp_template_count=sum(1 for component in components if component.kind == 'stamp_template'),
+    )
 
 
 def _architecture_publish_plan_context(plan: ArchitecturePublishPlan):
@@ -325,17 +635,302 @@ def _onboarding_workspace_detail_url(workspace):
     return reverse('plugins:netbox_plant_graph:onboardingworkspace', kwargs={'pk': workspace.pk})
 
 
+def _onboarding_count_rows(counts):
+    return tuple(
+        SimpleNamespace(key=key, label=str(key).replace('_', ' ').title(), count=count)
+        for key, count in sorted(counts.items())
+    )
+
+
+def _onboarding_status_counts(objects, attr):
+    counts = {}
+    for obj in objects:
+        status = getattr(obj, attr, '') or 'unknown'
+        counts[status] = counts.get(status, 0) + 1
+    return _onboarding_count_rows(counts)
+
+
+def _onboarding_step(label, state):
+    badge_classes = {
+        'complete': 'bg-success',
+        'active': 'bg-primary',
+        'blocked': 'bg-danger',
+        'not started': 'bg-secondary',
+    }
+    return SimpleNamespace(label=label, state=state, badge_class=badge_classes.get(state, 'bg-secondary'))
+
+
+def _onboarding_workflow_steps(workspace, sources, design_items, prerequisites, current_plan, current_stages, readiness, revision):
+    source_state = 'complete' if sources else 'active'
+    if sources and all(source.status == 'failed' for source in sources):
+        source_state = 'blocked'
+
+    unnormalized_sources = [source for source in sources if source.status == 'received']
+    failed_sources = [source for source in sources if source.status == 'failed']
+    conflict_items = [item for item in design_items if item.validation_status == 'conflict']
+    normalize_state = 'not started'
+    if failed_sources or conflict_items:
+        normalize_state = 'blocked'
+    elif design_items and not unnormalized_sources:
+        normalize_state = 'complete'
+    elif sources:
+        normalize_state = 'active'
+
+    open_prerequisites = [p for p in prerequisites if p.status == 'open']
+    blocked_prerequisites = [p for p in prerequisites if p.status == 'blocked']
+    prerequisites_state = 'not started'
+    if blocked_prerequisites:
+        prerequisites_state = 'blocked'
+    elif open_prerequisites:
+        prerequisites_state = 'active'
+    elif prerequisites:
+        prerequisites_state = 'complete'
+    elif design_items or sources:
+        prerequisites_state = 'active'
+
+    plan_state = 'not started'
+    current_plan_is_stale = bool(current_plan and current_plan.workspace_revision != revision)
+    if current_plan:
+        if current_plan_is_stale or current_plan.status in {'blocked', 'failed'}:
+            plan_state = 'blocked'
+        else:
+            plan_state = 'complete'
+    elif prerequisites and not (open_prerequisites or blocked_prerequisites):
+        plan_state = 'active'
+
+    approve_state = 'not started'
+    if current_plan:
+        if current_plan.status in {'approved', 'applying', 'applied'}:
+            approve_state = 'complete'
+        elif current_plan.status == 'generated':
+            approve_state = 'active'
+        elif current_plan.status in {'blocked', 'failed'} or current_plan_is_stale:
+            approve_state = 'blocked'
+
+    failed_stage = any(stage.status in {'failed', 'rolled_back'} for stage in current_stages)
+    apply_state = 'not started'
+    if current_plan:
+        if current_plan.status == 'applied':
+            apply_state = 'complete'
+        elif failed_stage or current_plan.status == 'failed':
+            apply_state = 'blocked'
+        elif current_plan.status in {'approved', 'applying'}:
+            apply_state = 'active'
+
+    readiness_state = 'not started'
+    readiness_status = (readiness or {}).get('status')
+    if readiness_status == 'ready':
+        readiness_state = 'complete'
+    elif readiness_status == 'blocked':
+        readiness_state = 'blocked'
+    elif current_plan and current_plan.status == 'applied':
+        readiness_state = 'active'
+
+    handoff_state = 'complete' if workspace.status == 'published' else 'not started'
+    if readiness_status == 'ready' and workspace.status != 'published':
+        handoff_state = 'active'
+
+    return (
+        _onboarding_step('Sources', source_state),
+        _onboarding_step('Normalize', normalize_state),
+        _onboarding_step('Prerequisites', prerequisites_state),
+        _onboarding_step('Plan', plan_state),
+        _onboarding_step('Approve', approve_state),
+        _onboarding_step('Apply', apply_state),
+        _onboarding_step('Readiness', readiness_state),
+        _onboarding_step('Publish/Handoff', handoff_state),
+    )
+
+
+def _onboarding_next_action(workspace, sources, prerequisites, current_plan, current_stages, readiness, revision):
+    if not sources:
+        return SimpleNamespace(
+            label='Attach source',
+            title='Attach source artifacts',
+            reason='No site design, cable schedule, rack plan, BOM, or API payload is attached yet.',
+            target='Use Attach Source Artifact.',
+            url='',
+        )
+    received_source = next((source for source in sources if source.status == 'received'), None)
+    if received_source:
+        return SimpleNamespace(
+            label='Normalize source',
+            title='Normalize source',
+            reason=f'{received_source.name} is received and has not produced design inventory.',
+            target='Use Normalize on the source row.',
+            url=received_source.get_absolute_url(),
+        )
+    if not prerequisites:
+        return SimpleNamespace(
+            label='Discover prerequisites',
+            title='Discover prerequisites',
+            reason='Normalized design inventory needs prerequisite checks before planning.',
+            target='Use Discover Prerequisites.',
+            url='',
+        )
+    blocker = next((p for p in prerequisites if p.status in {'blocked', 'open'}), None)
+    if blocker:
+        return SimpleNamespace(
+            label='Resolve blockers',
+            title='Resolve prerequisite blocker',
+            reason=f'{blocker.requirement_key} is {blocker.status} and must be bound, created, deferred, or marked not required.',
+            target='Use the prerequisite update row.',
+            url=blocker.get_absolute_url(),
+        )
+    if current_plan and current_plan.workspace_revision != revision:
+        return SimpleNamespace(
+            label='Generate plan',
+            title='Regenerate stale plan',
+            reason='The current onboarding plan does not match the workspace revision.',
+            target='Use Generate Plan.',
+            url=current_plan.get_absolute_url(),
+        )
+    if not current_plan:
+        return SimpleNamespace(
+            label='Generate plan',
+            title='Generate onboarding plan',
+            reason='Prerequisites are triaged and no current plan exists.',
+            target='Use Generate Plan.',
+            url='',
+        )
+    failed_stage = next((stage for stage in current_stages if stage.status in {'failed', 'rolled_back'}), None)
+    if failed_stage:
+        return SimpleNamespace(
+            label='Inspect failed stage',
+            title='Inspect failed stage',
+            reason=f'{failed_stage.stage_key} is {failed_stage.get_status_display()} and needs operator review.',
+            target='Review the current plan stage table.',
+            url=current_plan.get_absolute_url(),
+        )
+    if current_plan.status in {'blocked', 'failed'}:
+        return SimpleNamespace(
+            label='Resolve blockers',
+            title='Resolve plan blockers',
+            reason=f'The current onboarding plan is {current_plan.get_status_display()}.',
+            target='Review prerequisite, import, and stage summaries before regenerating.',
+            url=current_plan.get_absolute_url(),
+        )
+    if current_plan.status == 'generated':
+        return SimpleNamespace(
+            label='Approve plan',
+            title='Approve onboarding plan',
+            reason='The generated plan is ready for approval.',
+            target='Use Approve on the current plan row.',
+            url=current_plan.get_absolute_url(),
+        )
+    if current_plan.status == 'approved':
+        return SimpleNamespace(
+            label='Apply plan',
+            title='Apply onboarding plan',
+            reason='The plan is approved and ready for staged execution.',
+            target='Use Apply on the current plan row.',
+            url=current_plan.get_absolute_url(),
+        )
+    readiness_status = (readiness or {}).get('status')
+    if current_plan.status == 'applied' and readiness_status != 'ready':
+        return SimpleNamespace(
+            label='Run readiness',
+            title='Run readiness',
+            reason='The plan is applied; readiness must pass before publish and handoff.',
+            target='Use Run Readiness.',
+            url=current_plan.get_absolute_url(),
+        )
+    if readiness_status == 'blocked':
+        return SimpleNamespace(
+            label='Resolve readiness',
+            title='Resolve readiness findings',
+            reason=(readiness or {}).get('reason') or 'Readiness has blocking findings.',
+            target='Review readiness summary and linked operation results.',
+            url='',
+        )
+    if readiness_status == 'ready' and workspace.status != 'published':
+        return SimpleNamespace(
+            label='Publish/handoff',
+            title='Publish workspace handoff',
+            reason='Readiness passed and the workspace can be published for handoff.',
+            target='Use Publish or open Handoff JSON.',
+            url='',
+        )
+    return SimpleNamespace(
+        label='Handoff JSON',
+        title='Open handoff outputs',
+        reason='The onboarding workspace has reached publish and handoff.',
+        target='Open Handoff JSON and staged object links.',
+        url='',
+    )
+
+
+def _onboarding_readiness_rows(readiness):
+    if not readiness:
+        return ()
+    rows = []
+    grouped = readiness.get('grouped_summary') or {}
+    for key, value in sorted(grouped.items()):
+        rows.append(SimpleNamespace(label=str(key).replace('_', ' ').title(), count=value))
+    if not rows and readiness.get('blocking_count') is not None:
+        rows.append(SimpleNamespace(label='Blocking Findings', count=readiness.get('blocking_count')))
+    if not rows and readiness.get('finding_count') is not None:
+        rows.append(SimpleNamespace(label='Findings', count=readiness.get('finding_count')))
+    return tuple(rows)
+
+
 def _onboarding_workspace_context(workspace: OnboardingWorkspace):
     current_plan = workspace.current_plan
+    revision = workspace_revision(workspace)
+    source_artifacts = tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50])
+    design_items = tuple(workspace.design_items.select_related('source_artifact').order_by('kind', 'natural_key', 'pk')[:200])
+    prerequisites = tuple(workspace.prerequisites.order_by('status', 'requirement_key', 'pk')[:100])
+    plans = tuple(workspace.plans.order_by('-created', '-pk')[:10])
+    object_links = tuple(workspace.object_links.order_by('link_kind', 'label', 'pk')[:100])
+    current_stages = tuple(current_plan.stages.order_by('pk')) if current_plan is not None else ()
+    readiness = workspace.readiness_summary or {}
+    import_summary = ((current_plan.import_plan or {}).get('summary') if current_plan else {}) or {}
+    stage_attention = tuple(stage for stage in current_stages if stage.status in {'failed', 'skipped', 'rolled_back'})
+    unresolved_prerequisite_count = sum(1 for prerequisite in prerequisites if prerequisite.status in {'open', 'blocked'})
+    current_plan_links = tuple(link for link in object_links if current_plan and link.plan_id == current_plan.pk)
     return {
         'attach_source_form': forms.OnboardingSourceArtifactAttachForm(),
-        'source_artifacts': tuple(workspace.source_artifacts.order_by('-created', '-pk')[:50]),
-        'design_items': tuple(workspace.design_items.order_by('kind', 'natural_key', 'pk')[:200]),
-        'prerequisites': tuple(workspace.prerequisites.order_by('status', 'requirement_key', 'pk')[:100]),
-        'plans': tuple(workspace.plans.order_by('-created', '-pk')[:10]),
-        'object_links': tuple(workspace.object_links.order_by('link_kind', 'label', 'pk')[:100]),
+        'revision': revision,
+        'source_artifacts': source_artifacts,
+        'design_items': design_items,
+        'prerequisites': prerequisites,
+        'plans': plans,
+        'object_links': object_links,
         'current_plan': current_plan,
-        'current_stages': tuple(current_plan.stages.order_by('pk')) if current_plan is not None else (),
+        'current_plan_is_stale': bool(current_plan and current_plan.workspace_revision != revision),
+        'current_stages': current_stages,
+        'source_status_counts': _onboarding_status_counts(source_artifacts, 'status'),
+        'design_kind_counts': _onboarding_status_counts(design_items, 'kind'),
+        'design_status_counts': _onboarding_status_counts(design_items, 'validation_status'),
+        'prerequisite_status_counts': _onboarding_status_counts(prerequisites, 'status'),
+        'stage_status_counts': _onboarding_status_counts(current_stages, 'status'),
+        'object_link_counts': _onboarding_status_counts(object_links, 'link_kind'),
+        'unresolved_prerequisite_count': unresolved_prerequisite_count,
+        'blocking_prerequisite_count': sum(1 for prerequisite in prerequisites if prerequisite.status == 'blocked'),
+        'import_summary': import_summary,
+        'stage_attention': stage_attention,
+        'readiness': readiness,
+        'readiness_rows': _onboarding_readiness_rows(readiness),
+        'current_plan_links': current_plan_links,
+        'workflow_steps': _onboarding_workflow_steps(
+            workspace,
+            source_artifacts,
+            design_items,
+            prerequisites,
+            current_plan,
+            current_stages,
+            readiness,
+            revision,
+        ),
+        'next_action': _onboarding_next_action(
+            workspace,
+            source_artifacts,
+            prerequisites,
+            current_plan,
+            current_stages,
+            readiness,
+            revision,
+        ),
         'source_attach_url': reverse('plugins:netbox_plant_graph:onboarding_workspace_source_add', kwargs={'pk': workspace.pk}),
         'prerequisites_discover_url': reverse(
             'plugins:netbox_plant_graph:onboarding_workspace_prerequisites_discover',
@@ -3258,6 +3853,7 @@ class InterfaceFanoutTraceView(TemplateView):
         aggregate_schematic_paths = ()
         aggregate_has_shuffle_crossover = False
         aggregate_schematic_stage_connectors = ()
+        selected_transceiver = {}
 
         selected_device_id = self.request.GET.get('device')
         selected_interface_id = self.request.GET.get('interface')
@@ -3297,6 +3893,7 @@ class InterfaceFanoutTraceView(TemplateView):
                 ).order_by('name', 'pk')
 
         if selected_interface is not None:
+            selected_transceiver = transceiver_context_for_interface(selected_interface)
             source_endpoints = tuple(
                 _endpoints_for_source_object(selected_interface)
                 .select_related('fabric', 'node')
@@ -3582,6 +4179,7 @@ class InterfaceFanoutTraceView(TemplateView):
                 'interfaces': interfaces,
                 'selected_device': selected_device,
                 'selected_interface': selected_interface,
+                'selected_transceiver': selected_transceiver,
                 'trace_requested': trace_requested,
                 'trace_mode': 'consolidated' if consolidate_requested else 'expanded',
                 'consolidate_requested': consolidate_requested,

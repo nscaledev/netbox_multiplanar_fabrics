@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -12,7 +13,12 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 
-DEFAULT_WORKBOOK = Path(__file__).resolve().parents[1] / 'data' / 'source' / 'madison-layout-workbook.xlsx'
+DEFAULT_WORKBOOK = Path(
+    os.environ.get(
+        'MADISON_LAYOUT_WORKBOOK',
+        Path(__file__).resolve().parents[1] / 'data' / 'source' / 'madison-layout-workbook.xlsx',
+    )
+)
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'data' / 'generated'
 NC_SU_MAPPING_SHEET = 'NC SU Mapping'
 

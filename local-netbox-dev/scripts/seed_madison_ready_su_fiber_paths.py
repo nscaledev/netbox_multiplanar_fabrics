@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from django.db import transaction
+from django.db.models import Q
 
 from dcim.models import Device, Rack
 from netbox_plant_graph.models import FiberSegment
@@ -29,6 +30,9 @@ from madison_v2_graph import (  # noqa: E402
     shuffle_group_mpos,
     source_position_plane_numbers_for_shuffle_front,
     stamp_path_segments,
+)
+from madison_nvl72_appliance import (  # noqa: E402
+    device_effective_position_sort_key,
 )
 
 
@@ -116,11 +120,16 @@ def su_racks() -> dict[int, list[Rack]]:
 def gb300_trays_by_rack(rack_ids: list[int]) -> dict[int, list[Device]]:
     grouped: dict[int, list[Device]] = {}
     for device in (
-        Device.objects.filter(site__slug=MAD_SITE_SLUG, rack_id__in=rack_ids, device_type__slug='gb300ct')
-        .select_related('rack')
-        .order_by('rack__name', 'position', 'name')
+        Device.objects.filter(site__slug=MAD_SITE_SLUG, device_type__slug='gb300ct')
+        .filter(Q(rack_id__in=rack_ids) | Q(parent_bay__device__rack_id__in=rack_ids))
+        .select_related('rack', 'parent_bay__device__rack')
+        .order_by('name')
     ):
-        grouped.setdefault(device.rack_id, []).append(device)
+        parent_device = getattr(getattr(device, 'parent_bay', None), 'device', None)
+        rack_id = device.rack_id or (parent_device.rack_id if parent_device is not None else None)
+        if rack_id is None:
+            continue
+        grouped.setdefault(rack_id, []).append(device)
     return grouped
 
 
@@ -150,7 +159,8 @@ def complete_su_numbers(pattern_rows: list[dict[str, str]], racks_by_su: dict[in
 
 
 def tray_sort_key(device: Device) -> tuple[int, str]:
-    return (int(device.position or 0), device.name)
+    position, name = device_effective_position_sort_key(device)
+    return (int(position or 0), name)
 
 
 def gb300_rows_for_su(su: int, racks_by_su: dict[int, list[Rack]], trays_by_rack: dict[int, list[Device]]) -> list[dict]:

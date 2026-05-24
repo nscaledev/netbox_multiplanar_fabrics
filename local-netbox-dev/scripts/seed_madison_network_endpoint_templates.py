@@ -28,6 +28,9 @@ DEVICE_ENDPOINTS = [
                 'child_count': 4,
                 'child_speed_kbps': 200_000_000,
                 'breakout_profile_slug': 'dr4-800g-4x200g',
+                'transceiver_profile_slug': 'osfp-dual-mpo12-apc-800g-4x200g-dr4',
+                'module_type_part_number': 'MMS4X00-NM',
+                'transceiver_role_hint': 'gb300_compute_osfp',
             }
             for index in range(1, 5)
         ],
@@ -52,6 +55,9 @@ DEVICE_ENDPOINTS = [
                 'child_count': 4,
                 'child_speed_kbps': 200_000_000,
                 'breakout_profile_slug': 'dr4-800g-4x200g',
+                'transceiver_profile_slug': 'osfp-dual-mpo12-apc-800g-4x200g-dr4',
+                'module_type_part_number': 'MMS4X00-NM',
+                'transceiver_role_hint': 'backend_leaf_osfp',
             }
             for index in range(1, 65)
         ],
@@ -85,6 +91,9 @@ DEVICE_ENDPOINTS = [
                 'child_count': 4,
                 'child_speed_kbps': 100_000_000,
                 'breakout_profile_slug': 'dr4-400g-4x100g',
+                'transceiver_profile_slug': 'qsfpdd-mpo12-apc-400g-dr4',
+                'module_type_part_number': 'MMS1V00-WM',
+                'transceiver_role_hint': 'oob_qsfpdd',
             }
             for index in range(1, 33)
         ],
@@ -186,11 +195,17 @@ def upsert_endpoint_stamp_template(architecture, device_type, definition):
                 'child_speed_kbps': port['child_speed_kbps'],
                 'fabric_plane_start': 1,
                 'transfer_pattern_slug': port['breakout_profile_slug'],
+                'transceiver_profile_slug': port.get('transceiver_profile_slug', ''),
+                'module_type_part_number': port.get('module_type_part_number', ''),
+                'transceiver_role_hint': port.get('transceiver_role_hint', ''),
                 'sort_order': sort_order,
                 'v2_targets': [
+                    'ModuleBay',
+                    'Module',
                     'Endpoint',
                     'ConnectorPosition',
                     'TransportChannel',
+                    'TransceiverConnector',
                     'OpticalLane',
                 ],
             }

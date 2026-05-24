@@ -11,7 +11,7 @@ from dcim.models import Cable, CableTermination, Device, PowerOutlet, PowerPort,
 from tenancy.models import Tenant
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
 NSCALE_TENANT_SLUG = 'nscale'
 PDU_DEVICE_TYPE_SLUG = 'apc-apdu11450me'
 NVL72_RACK_ROLE_SLUG = 'nvl72_poweredgexe9712'

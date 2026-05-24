@@ -4,6 +4,7 @@ import os
 from collections import Counter
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils.text import slugify
 
 from dcim.models import PowerPort, Rack
@@ -16,8 +17,8 @@ from netbox_power_plant.choices import (
 from netbox_power_plant.models import InternalPowerBus, InternalPowerBusAttachment, PowerSystem
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
-POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'MAD-1 Electrical Plant')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
+POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'GS001 Electrical Plant')
 ALLOW_PARTIAL = os.environ.get('MADISON_NVL72_BUSBAR_ALLOW_PARTIAL') == '1'
 NVL72_RACK_ROLE_SLUG = 'nvl72_poweredgexe9712'
 POWER_SHELF_DEVICE_TYPE_SLUGS = ('gb300ps', 'ps33-33kw-power-shelf')
@@ -42,14 +43,19 @@ def attachment_name(bus, power_port, role):
 
 def power_ports_for_rack(rack, *, device_type_slugs, port_names):
     return list(
-        PowerPort.objects.select_related('device', 'device__device_type', 'device__rack')
+        PowerPort.objects.select_related(
+            'device',
+            'device__device_type',
+            'device__rack',
+            'device__parent_bay__device__rack',
+        )
         .filter(
             device__site__slug=MAD_SITE_SLUG,
-            device__rack=rack,
             device__device_type__slug__in=device_type_slugs,
             name__in=port_names,
         )
-        .order_by('device__position', 'device__name', 'name')
+        .filter(Q(device__rack=rack) | Q(device__parent_bay__device__rack=rack))
+        .order_by('device__local_context_data__madison_workbook__ru_bottom', 'device__position', 'device__name', 'name')
     )
 
 

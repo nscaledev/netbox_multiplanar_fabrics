@@ -9,7 +9,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Model
-from dcim.models import Site
+from dcim.models import Interface, Module, ModuleType, Site
 
 from netbox_plant_graph.models import (
     AllocationRuleSet,
@@ -25,6 +25,8 @@ from netbox_plant_graph.models import (
     Plane,
     StampTemplate,
     StrandTermination,
+    TransceiverConnector,
+    TransceiverProfile,
     TransportChannel,
     TransportChannelPositionMap,
     TransferPattern,
@@ -50,6 +52,7 @@ from netbox_plant_graph.services.blueprint_registry import (
     get_default_blueprint_registry,
     validate_parameter_schema,
 )
+from netbox_plant_graph.services.transceivers import bind_transceiver_for_osfp_endpoint
 
 
 OUTCOME_CREATE = 'create'
@@ -614,6 +617,97 @@ class StrandTerminationHandler(BaseHandler):
         )
 
 
+class TransceiverAssignmentHandler(BaseHandler):
+    kind = 'transceiver_assignment'
+    model = TransceiverConnector
+
+    def reconcile(self, *, index, data, context, apply):
+        fabric = _resolve_fabric(_required(data, 'fabric', 'fabric_slug'))
+        endpoint = _resolve_endpoint(
+            fabric,
+            _required(data, 'endpoint', 'endpoint_address', 'osfp_endpoint', 'osfp_endpoint_address'),
+        )
+        identity = f'fabric={fabric.slug} endpoint={endpoint.address}'
+        source = endpoint.source
+        if not isinstance(source, Interface):
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason='endpoint is not bound to a NetBox Interface',
+                details={'code': 'missing_interface_source', 'endpoint_id': endpoint.pk},
+            )
+
+        mpo_endpoints = _resolve_transceiver_mpo_endpoints(fabric, endpoint, data)
+        if not mpo_endpoints:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason='endpoint has no MPO child endpoints to bind',
+                details={'code': 'missing_mpo_endpoints', 'endpoint_id': endpoint.pk},
+            )
+
+        profile_slug = _optional_transceiver_profile_slug(data)
+        if profile_slug and not TransceiverProfile.objects.filter(slug=profile_slug).exists():
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason=f'missing TransceiverProfile slug={profile_slug}',
+                details={'code': 'missing_transceiver_profile', 'profile_slug': profile_slug},
+            )
+
+        module_type = _resolve_optional_module_type(data)
+        module_type_part_number = _optional_module_type_part_number(data)
+        role_hint = _optional_string(data, 'role_hint', default='')
+        create_module = _optional_bool(data, 'create_module', default=True)
+        before = _transceiver_assignment_state(endpoint)
+        if not apply:
+            return _transceiver_assignment_diff(
+                index=index,
+                kind=self.kind,
+                identity=identity,
+                endpoint=endpoint,
+                before=before,
+                module_type=module_type,
+                module_type_part_number=module_type_part_number,
+                profile_slug=profile_slug,
+                role_hint=role_hint,
+                create_module=create_module,
+                expected_connector_count=len(mpo_endpoints),
+            )
+
+        result = bind_transceiver_for_osfp_endpoint(
+            endpoint=endpoint,
+            mpo_endpoints=mpo_endpoints,
+            profile_slug=profile_slug,
+            module_type=module_type,
+            module_type_part_number=module_type_part_number,
+            role_hint=role_hint,
+            create_module=create_module,
+        )
+        if result.get('status') not in {'bound'}:
+            return self.conflict(
+                index=index,
+                identity=identity,
+                reason=f'transceiver binding failed: {result.get("status")}',
+                details=_transceiver_binding_details(result, before=before),
+            )
+        after = _transceiver_assignment_state(endpoint)
+        return _transceiver_assignment_diff(
+            index=index,
+            kind=self.kind,
+            identity=identity,
+            endpoint=endpoint,
+            before=before,
+            after=after,
+            module_type=module_type,
+            module_type_part_number=module_type_part_number,
+            profile_slug=profile_slug,
+            role_hint=role_hint,
+            create_module=create_module,
+            expected_connector_count=len(mpo_endpoints),
+        )
+
+
 class FabricArchitectureBlueprintHandler(BaseHandler):
     kind = 'fabric_architecture_blueprint'
     model = FabricArchitecture
@@ -748,6 +842,257 @@ class FabricArchitectureBlueprintHandler(BaseHandler):
         return replace(diff, details=details)
 
 
+def _explicit_transceiver_mpo_reference_values(data: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+    explicit = _optional(data, 'mpo_endpoints', 'connectors', 'connector_endpoints')
+    if isinstance(explicit, Mapping):
+        return tuple((f'mpo_endpoint_{raw_index}', value) for raw_index, value in explicit.items())
+    if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes, bytearray)):
+        values = []
+        for offset, raw_endpoint in enumerate(explicit, start=1):
+            if isinstance(raw_endpoint, Mapping):
+                endpoint_value = raw_endpoint.get('endpoint') or raw_endpoint.get('address') or raw_endpoint.get('name')
+            else:
+                endpoint_value = raw_endpoint
+            values.append((f'mpo_endpoint_{offset}', endpoint_value))
+        return tuple(values)
+    return ()
+
+
+def _resolve_transceiver_mpo_endpoints(
+    fabric: Fabric,
+    endpoint: Endpoint,
+    data: Mapping[str, Any],
+) -> dict[int, Endpoint]:
+    explicit = _optional(data, 'mpo_endpoints', 'connectors', 'connector_endpoints')
+    if isinstance(explicit, Mapping):
+        resolved: dict[int, Endpoint] = {}
+        for raw_index, raw_endpoint in explicit.items():
+            try:
+                connector_index = int(raw_index)
+            except (TypeError, ValueError) as exc:
+                raise ImportRowError('mpo_endpoints keys must be connector indexes') from exc
+            resolved[connector_index] = _resolve_endpoint(fabric, raw_endpoint)
+        return resolved
+    if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes, bytearray)):
+        resolved = {}
+        for offset, raw_endpoint in enumerate(explicit, start=1):
+            if isinstance(raw_endpoint, Mapping):
+                connector_index = _int_value(
+                    raw_endpoint.get('connector_index') or raw_endpoint.get('mpo_index') or offset,
+                    field_name='connector_index',
+                )
+                endpoint_value = raw_endpoint.get('endpoint') or raw_endpoint.get('address') or raw_endpoint.get('name')
+            else:
+                connector_index = offset
+                endpoint_value = raw_endpoint
+            resolved[connector_index] = _resolve_endpoint(fabric, endpoint_value)
+        return resolved
+
+    resolved = {}
+    for child in Endpoint.objects.filter(parent=endpoint).order_by('address', 'pk'):
+        if not str(child.connector_kind or '').startswith('mpo-'):
+            continue
+        connector_index = _mpo_endpoint_index(child)
+        if connector_index is not None:
+            resolved[connector_index] = child
+    return resolved
+
+
+def _mpo_endpoint_index(endpoint: Endpoint) -> int | None:
+    metadata = endpoint.metadata if isinstance(endpoint.metadata, Mapping) else {}
+    raw_index = metadata.get('mpo_index') or metadata.get('connector_index')
+    if raw_index is None:
+        match = re.search(r'MPO[-.]?(\d+)$', endpoint.address, flags=re.IGNORECASE)
+        raw_index = match.group(1) if match else None
+    try:
+        return int(raw_index)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_optional_module_type(data: Mapping[str, Any]) -> ModuleType | None:
+    value = _optional(data, 'module_type', 'module_type_id')
+    if value is not MISSING:
+        return _resolve_module_type_value(value)
+    part_number = _optional_module_type_part_number(data)
+    if part_number:
+        module_type = ModuleType.objects.filter(part_number=part_number).order_by('pk').first()
+        if module_type is None:
+            raise ImportRowError(f'missing ModuleType part_number={part_number}')
+        return module_type
+    return None
+
+
+def _resolve_module_type_value(value: Any) -> ModuleType:
+    if isinstance(value, ModuleType):
+        return value
+    if isinstance(value, Mapping):
+        if value.get('id') or value.get('pk'):
+            value = value.get('id') or value.get('pk')
+        else:
+            value = value.get('part_number') or value.get('model') or value.get('name')
+    ref = str(value)
+    module_type = None
+    if ref.isdigit():
+        module_type = ModuleType.objects.filter(pk=int(ref)).first()
+    if module_type is None:
+        module_type = (
+            ModuleType.objects.filter(part_number=ref).order_by('pk').first()
+            or ModuleType.objects.filter(model=ref).order_by('pk').first()
+        )
+    if module_type is None:
+        raise ImportRowError(f'missing ModuleType {ref}')
+    return module_type
+
+
+def _optional_module_type_part_number(data: Mapping[str, Any]) -> str:
+    value = _optional(data, 'module_type_part_number', 'part_number', 'transceiver_part_number')
+    if value in (MISSING, None, ''):
+        return ''
+    if isinstance(value, Mapping):
+        value = value.get('part_number') or value.get('model') or value.get('name')
+    return str(value).strip()
+
+
+def _optional_transceiver_profile_slug(data: Mapping[str, Any]) -> str:
+    value = _optional(data, 'profile_slug', 'transceiver_profile_slug', 'transceiver_profile', 'profile')
+    if value in (MISSING, None, ''):
+        return ''
+    if isinstance(value, Mapping):
+        value = value.get('slug') or value.get('name')
+    return str(value).strip()
+
+
+def _optional_bool(data: Mapping[str, Any], name: str, *, default: bool) -> bool:
+    value = _optional(data, name)
+    if value in (MISSING, None, ''):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
+def _transceiver_assignment_state(endpoint: Endpoint) -> dict[str, Any]:
+    source = endpoint.source
+    module = None
+    if isinstance(source, Interface):
+        module = (
+            Module.objects.filter(device=source.device, module_bay__name=source.name)
+            .select_related('module_type', 'module_bay')
+            .order_by('pk')
+            .first()
+        )
+    connectors = tuple(
+        TransceiverConnector.objects.filter(endpoint__parent=endpoint)
+        .select_related('module', 'module__module_type', 'connector_profile', 'connector_profile__profile', 'endpoint')
+        .order_by('connector_profile__connector_index', 'endpoint__address', 'pk')
+    )
+    profile_slugs = tuple(
+        sorted(
+            {
+                connector.connector_profile.profile.slug
+                for connector in connectors
+                if connector.connector_profile_id and connector.connector_profile.profile_id
+            }
+        )
+    )
+    return {
+        'module_id': getattr(module, 'pk', None),
+        'module_type_id': getattr(getattr(module, 'module_type', None), 'pk', None),
+        'module_type_part_number': getattr(getattr(module, 'module_type', None), 'part_number', ''),
+        'connector_ids': tuple(connector.pk for connector in connectors),
+        'connector_count': len(connectors),
+        'profile_slugs': profile_slugs,
+    }
+
+
+def _transceiver_assignment_diff(
+    *,
+    index: int,
+    kind: str,
+    identity: str,
+    endpoint: Endpoint,
+    before: Mapping[str, Any],
+    module_type: ModuleType | None,
+    module_type_part_number: str,
+    profile_slug: str,
+    role_hint: str,
+    create_module: bool,
+    expected_connector_count: int | None = None,
+    after: Mapping[str, Any] | None = None,
+) -> ImportDiff:
+    expected_count = expected_connector_count or 2
+    current_count = int(before.get('connector_count') or 0)
+    if after is None:
+        if current_count >= expected_count:
+            outcome = OUTCOME_SKIP
+        else:
+            outcome = OUTCOME_UPDATE if current_count else OUTCOME_CREATE
+        desired_connectors: Any = f'{expected_count} connector bindings'
+        object_id = (before.get('connector_ids') or (None,))[0]
+    else:
+        before_ids = tuple(before.get('connector_ids') or ())
+        after_ids = tuple(after.get('connector_ids') or ())
+        outcome = OUTCOME_SKIP if before_ids == after_ids and before.get('module_id') == after.get('module_id') else (
+            OUTCOME_UPDATE if before_ids else OUTCOME_CREATE
+        )
+        desired_connectors = after_ids
+        object_id = (after_ids or (None,))[0]
+
+    desired_module_type = getattr(module_type, 'pk', None) or module_type_part_number or before.get('module_type_id')
+    changes: list[FieldChange] = []
+    if outcome != OUTCOME_SKIP:
+        changes.append(
+            FieldChange(
+                field='connector_bindings',
+                current=tuple(before.get('connector_ids') or ()),
+                desired=desired_connectors,
+            )
+        )
+        if desired_module_type and desired_module_type != before.get('module_type_id'):
+            changes.append(
+                FieldChange(
+                    field='module_type',
+                    current=before.get('module_type_id') or before.get('module_type_part_number') or '',
+                    desired=desired_module_type,
+                )
+            )
+
+    diff = _diff(
+        index=index,
+        kind=kind,
+        identity=identity,
+        outcome=outcome,
+        model=TransceiverConnector,
+        object_id=object_id,
+        changes=tuple(changes),
+    )
+    details = {
+        'code': 'transceiver_assignment',
+        'endpoint_id': endpoint.pk,
+        'before': dict(before),
+        'after': dict(after) if after is not None else None,
+        'expected_connector_count': expected_count,
+        'profile_slug': profile_slug,
+        'role_hint': role_hint,
+        'create_module': create_module,
+    }
+    return replace(diff, details=details)
+
+
+def _transceiver_binding_details(result: Mapping[str, Any], *, before: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        'code': 'transceiver_binding_failed',
+        'status': result.get('status'),
+        'before': dict(before),
+        'endpoint_id': result.get('endpoint_id'),
+        'module_id': getattr(result.get('module'), 'pk', None),
+        'module_type_id': getattr(result.get('module_type'), 'pk', None),
+        'profile_slug': getattr(result.get('profile'), 'slug', None),
+        'created': result.get('created') or {},
+    }
+
+
 HANDLERS = {
     'cable_assembly': CableAssemblyHandler(),
     'fiber_strand_cable': FiberStrandCableHandler(),
@@ -755,6 +1100,7 @@ HANDLERS = {
     'transport_channel': TransportChannelHandler(),
     'transport_channel_position_map': TransportChannelPositionMapHandler(),
     'strand_termination': StrandTerminationHandler(),
+    'transceiver_assignment': TransceiverAssignmentHandler(),
     'fabric_architecture_blueprint': FabricArchitectureBlueprintHandler(),
 }
 
@@ -776,6 +1122,11 @@ KIND_ALIASES = {
     'transportchannelpositionmap': 'transport_channel_position_map',
     'strand_termination': 'strand_termination',
     'strandtermination': 'strand_termination',
+    'transceiver': 'transceiver_assignment',
+    'transceiver_assignment': 'transceiver_assignment',
+    'transceiver_binding': 'transceiver_assignment',
+    'transceiver_connector': 'transceiver_assignment',
+    'transceiverconnector': 'transceiver_assignment',
     'architecture_blueprint': 'fabric_architecture_blueprint',
     'blueprint': 'fabric_architecture_blueprint',
     'fabric_architecture_blueprint': 'fabric_architecture_blueprint',
@@ -1591,6 +1942,17 @@ def _required_references(kind: str, data: Mapping[str, Any]) -> tuple[tuple[str,
         )
         if reference is not None:
             references.append(('mpo_endpoint', reference))
+    elif kind == 'transceiver_assignment':
+        reference = _endpoint_reference(
+            _optional(data, 'fabric', 'fabric_slug'),
+            _optional(data, 'endpoint', 'endpoint_address', 'osfp_endpoint', 'osfp_endpoint_address'),
+        )
+        if reference is not None:
+            references.append(('endpoint', reference))
+        for field_name, endpoint_value in _explicit_transceiver_mpo_reference_values(data):
+            mpo_reference = _endpoint_reference(_optional(data, 'fabric', 'fabric_slug'), endpoint_value)
+            if mpo_reference is not None:
+                references.append((field_name, mpo_reference))
     return tuple(references)
 
 

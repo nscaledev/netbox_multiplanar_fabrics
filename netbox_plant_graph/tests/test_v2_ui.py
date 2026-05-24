@@ -1,11 +1,17 @@
 import json
 
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
-from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Module, ModuleBay, ModuleType, Site
 
 from netbox_plant_graph.models import (
+    ArchitectureDesignComponent,
+    ArchitecturePublishPlan,
+    ArchitectureSourceArtifact,
+    ArchitectureValidationRun,
+    ArchitectureWorkspace,
     AuditEvent,
     CableAssembly,
     ConnectorPosition,
@@ -15,10 +21,22 @@ from netbox_plant_graph.models import (
     FabricNode,
     OperationRun,
     OpticalLane,
+    OnboardingDesignItem,
+    OnboardingExecutionStage,
+    OnboardingObjectLink,
+    OnboardingPlan,
+    OnboardingPrerequisite,
+    OnboardingSourceArtifact,
+    OnboardingWorkspace,
     PathIntent,
     Plane,
     StampRun,
     SuppressionRule,
+    TransceiverConnector,
+    TransceiverConnectorProfile,
+    TransceiverLaneProfile,
+    TransceiverProfile,
+    TransceiverProfileModuleType,
 )
 from netbox_plant_graph.navigation import menu
 from netbox_plant_graph.services.architecture import ARCHITECTURE_SLUG, ensure_roce_4plane_shuffle_architecture
@@ -72,7 +90,179 @@ class V2UITestCase(TestCase):
             parameters={'source': 'ui-test'},
             result={'ok': True},
         )
+        self._seed_registry_only_objects(result)
         return result
+
+    def _seed_registry_only_objects(self, result):
+        architecture_workspace = ArchitectureWorkspace.objects.create(
+            name='UI Architecture Workspace',
+            slug='ui-architecture-workspace',
+            target_slug='ui-generated-architecture',
+            target_version='v1',
+            base_architecture=result.fabric.architecture,
+            created_by=self.user,
+            owner=self.user,
+        )
+        architecture_artifact = ArchitectureSourceArtifact.objects.create(
+            workspace=architecture_workspace,
+            name='UI Architecture Source',
+            artifact_type='api_payload',
+            raw_payload={'source': 'ui-test'},
+        )
+        architecture_component = ArchitectureDesignComponent.objects.create(
+            workspace=architecture_workspace,
+            source_artifact=architecture_artifact,
+            kind='role',
+            natural_key='role:gpu-endpoint',
+            desired_state={'name': 'GPU endpoint'},
+            provenance={'test': 'v2-ui'},
+        )
+        ArchitectureValidationRun.objects.create(
+            workspace=architecture_workspace,
+            source_artifact=architecture_artifact,
+            status='completed',
+            validation_kind='schema',
+            executed_by=self.user,
+            summary={'ok': True},
+        )
+        architecture_plan = ArchitecturePublishPlan.objects.create(
+            workspace=architecture_workspace,
+            status='generated',
+            plan_hash='ui-architecture-plan',
+            generated_by=self.user,
+            publish_payload={'components': [architecture_component.natural_key]},
+            validation_summary={'ok': True},
+            import_plan={'actions': []},
+        )
+        architecture_workspace.current_plan = architecture_plan
+        architecture_workspace.save(update_fields=['current_plan'])
+
+        manufacturer = Manufacturer.objects.create(name='UI Transceiver Manufacturer', slug='ui-transceiver-mfg')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='UI Transceiver Host',
+            slug='ui-transceiver-host',
+        )
+        module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model='UI OSFP 800G DR4',
+            part_number='UI-OSFP-800G-DR4',
+        )
+        role = DeviceRole.objects.create(name='UI Transceiver Host', slug='ui-transceiver-host', color='3366ff')
+        site = Site.objects.create(name='UI Registry Site', slug='ui-registry-site', status='active')
+        device = Device.objects.create(name='ui-transceiver-host-1', device_type=device_type, role=role, site=site)
+        module_bay = ModuleBay.objects.create(device=device, name='osfp1', position='1')
+        module = Module.objects.create(device=device, module_bay=module_bay, module_type=module_type)
+        transceiver_profile = TransceiverProfile.objects.create(
+            architecture=result.fabric.architecture,
+            name='UI OSFP Dual MPO Profile',
+            slug='ui-osfp-dual-mpo-profile',
+            status='active',
+            form_factor='osfp112',
+            media_type='dr4',
+            aggregate_rate_gbps=800,
+            channel_count=4,
+            channel_rate_gbps=200,
+        )
+        TransceiverProfileModuleType.objects.create(
+            profile=transceiver_profile,
+            module_type=module_type,
+            is_default=True,
+            role_hint='gb300',
+        )
+        connector_profile = TransceiverConnectorProfile.objects.create(
+            profile=transceiver_profile,
+            name='MPO-1',
+            connector_index=1,
+            connector_family='mpo-12',
+            position_count=12,
+            polish='apc',
+        )
+        TransceiverLaneProfile.objects.create(
+            connector_profile=connector_profile,
+            channel_index=1,
+            lane_index=1,
+            direction='send',
+            mpo_position=1,
+            wavelength_nm='1310.000',
+            nominal_rate_gbps=100,
+        )
+        endpoint = Endpoint.objects.filter(
+            fabric=result.fabric,
+            connector_kind='mpo-12',
+            position_count=12,
+        ).first()
+        TransceiverConnector.objects.create(
+            module=module,
+            connector_profile=connector_profile,
+            endpoint=endpoint,
+        )
+
+        onboarding_workspace = OnboardingWorkspace.objects.create(
+            name='UI Onboarding Workspace',
+            slug='ui-onboarding-workspace',
+            target_fabric_name='UI Onboarded Fabric',
+            target_fabric_slug='ui-onboarded-fabric',
+            fabric=result.fabric,
+            architecture=result.fabric.architecture,
+            site=site,
+            created_by=self.user,
+            owner=self.user,
+        )
+        onboarding_artifact = OnboardingSourceArtifact.objects.create(
+            workspace=onboarding_workspace,
+            name='UI Onboarding Source',
+            artifact_type='api_payload',
+            raw_payload={'source': 'ui-test'},
+        )
+        onboarding_item = OnboardingDesignItem.objects.create(
+            workspace=onboarding_workspace,
+            source_artifact=onboarding_artifact,
+            kind='fabric_node',
+            natural_key='fabric_node:ui',
+            desired_state={'name': 'ui-node'},
+            provenance={'test': 'v2-ui'},
+            planned_object_type=ContentType.objects.get_for_model(result.fabric, for_concrete_model=False),
+            planned_object_id=result.fabric.pk,
+        )
+        OnboardingPrerequisite.objects.create(
+            workspace=onboarding_workspace,
+            design_item=onboarding_item,
+            requirement_key='device-type:ui-transceiver-host',
+            object_model='dcim.devicetype',
+            role='transceiver-host',
+            desired_identity={'slug': device_type.slug},
+            status='satisfied',
+            resolved_object_type=ContentType.objects.get_for_model(device_type, for_concrete_model=False),
+            resolved_object_id=device_type.pk,
+        )
+        onboarding_plan = OnboardingPlan.objects.create(
+            workspace=onboarding_workspace,
+            status='draft',
+            plan_hash='ui-onboarding-plan',
+            generated_by=self.user,
+            prerequisite_plan={'satisfied': 1},
+            plan_payload={'fabric': result.fabric.slug},
+        )
+        onboarding_stage = OnboardingExecutionStage.objects.create(
+            plan=onboarding_plan,
+            stage_key='stamp',
+            stage_kind='stamp',
+            status='pending',
+        )
+        OnboardingObjectLink.objects.create(
+            workspace=onboarding_workspace,
+            plan=onboarding_plan,
+            stage=onboarding_stage,
+            design_item=onboarding_item,
+            source_artifact=onboarding_artifact,
+            link_kind='fabric',
+            object_type=ContentType.objects.get_for_model(result.fabric, for_concrete_model=False),
+            object_id=result.fabric.pk,
+            label=result.fabric.name,
+        )
+        onboarding_workspace.current_plan = onboarding_plan
+        onboarding_workspace.save(update_fields=['current_plan'])
 
     def test_plugin_menu_is_registered_as_single_netbox_menu_resource(self):
         self.assertEqual(menu.label, 'Multi-planar v2')
@@ -580,7 +770,8 @@ class V2UITestCase(TestCase):
         self.assertContains(get_response, 'Change Plan')
         self.assertContains(get_response, 'Name Pattern Samples')
         self.assertContains(get_response, 'compatible')
-        self.assertContains(get_response, 'No validation issues.')
+        self.assertContains(get_response, '0 errors')
+        self.assertContains(get_response, 'architecture_gate.missing_device_type')
 
         post_response = self.client.post(
             url,

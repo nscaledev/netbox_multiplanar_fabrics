@@ -18,6 +18,8 @@ from .choices import (
     ArchitectureWorkspaceKindChoices,
     ArchitectureWorkspaceStatusChoices,
     ConnectorKindChoices,
+    ConnectorPinningChoices,
+    ConnectorPolishChoices,
     EndpointKindChoices,
     FabricClassChoices,
     FabricStatusChoices,
@@ -36,6 +38,9 @@ from .choices import (
     SegmentKindChoices,
     StampRunStatusChoices,
     SuppressionStatusChoices,
+    TransceiverFormFactorChoices,
+    TransceiverMediaTypeChoices,
+    TransceiverProfileStatusChoices,
     TransferMapKindChoices,
 )
 
@@ -245,6 +250,169 @@ class ConnectorPosition(V2Model):
 
     def __str__(self):
         return f'{self.endpoint}:{self.position_number}'
+
+
+class TransceiverProfile(V2Model):
+    architecture = models.ForeignKey(
+        FabricArchitecture,
+        null=True,
+        blank=True,
+        related_name='transceiver_profiles',
+        on_delete=models.SET_NULL,
+    )
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=200, unique=True)
+    status = models.CharField(max_length=32, choices=TransceiverProfileStatusChoices, default='draft')
+    form_factor = models.CharField(max_length=32, choices=TransceiverFormFactorChoices, default='other')
+    media_type = models.CharField(max_length=32, choices=TransceiverMediaTypeChoices, default='other')
+    aggregate_rate_gbps = models.PositiveIntegerField(null=True, blank=True)
+    channel_count = models.PositiveIntegerField(null=True, blank=True)
+    channel_rate_gbps = models.PositiveIntegerField(null=True, blank=True)
+    wavelength_plan = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('name',)
+
+    def __str__(self):
+        return self.name
+
+
+class TransceiverProfileModuleType(V2Model):
+    profile = models.ForeignKey(TransceiverProfile, related_name='module_type_mappings', on_delete=models.CASCADE)
+    module_type = models.ForeignKey('dcim.ModuleType', related_name='+', on_delete=models.CASCADE)
+    is_default = models.BooleanField(default=False)
+    role_hint = models.CharField(max_length=100, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('profile', 'module_type', 'role_hint')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('profile', 'module_type', 'role_hint'),
+                name='mpf_xcvr_profile_module_role_uniq',
+            ),
+        )
+
+    def __str__(self):
+        suffix = f':{self.role_hint}' if self.role_hint else ''
+        return f'{self.profile.slug}:{self.module_type}{suffix}'
+
+
+class TransceiverConnectorProfile(V2Model):
+    profile = models.ForeignKey(TransceiverProfile, related_name='connector_profiles', on_delete=models.CASCADE)
+    name = models.CharField(max_length=200)
+    connector_index = models.PositiveIntegerField()
+    connector_family = models.CharField(max_length=64, choices=ConnectorKindChoices, default='mpo-12')
+    position_count = models.PositiveIntegerField(default=0)
+    polish = models.CharField(max_length=32, choices=ConnectorPolishChoices, default='not_specified')
+    pinning = models.CharField(max_length=32, choices=ConnectorPinningChoices, default='not_specified')
+    key_orientation = models.CharField(max_length=100, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('profile', 'connector_index', 'name')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('profile', 'connector_index'),
+                name='mpf_xcvr_conn_profile_index_uniq',
+            ),
+            models.UniqueConstraint(
+                fields=('profile', 'name'),
+                name='mpf_xcvr_conn_profile_name_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.profile.slug}:{self.name}'
+
+
+class TransceiverLaneProfile(V2Model):
+    connector_profile = models.ForeignKey(
+        TransceiverConnectorProfile,
+        related_name='lane_profiles',
+        on_delete=models.CASCADE,
+    )
+    channel_index = models.PositiveIntegerField()
+    lane_index = models.PositiveIntegerField()
+    direction = models.CharField(max_length=32, choices=LaneDirectionChoices)
+    mpo_position = models.PositiveIntegerField()
+    wavelength_nm = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    nominal_rate_gbps = models.PositiveIntegerField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('connector_profile', 'channel_index', 'direction', 'lane_index')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('connector_profile', 'channel_index', 'direction', 'lane_index'),
+                name='mpf_xcvr_lane_profile_lane_uniq',
+            ),
+            models.UniqueConstraint(
+                fields=('connector_profile', 'direction', 'mpo_position'),
+                name='mpf_xcvr_lane_profile_pos_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.connector_profile}:ch-{self.channel_index}:lane-{self.lane_index}:{self.direction}'
+
+    def clean(self):
+        super().clean()
+        if self.connector_profile_id and self.mpo_position > self.connector_profile.position_count:
+            raise ValidationError({'mpo_position': 'MPO position exceeds connector profile position count.'})
+
+
+class TransceiverConnector(V2Model):
+    module = models.ForeignKey('dcim.Module', related_name='+', on_delete=models.CASCADE)
+    connector_profile = models.ForeignKey(
+        TransceiverConnectorProfile,
+        related_name='installed_connectors',
+        on_delete=models.PROTECT,
+    )
+    endpoint = models.OneToOneField(Endpoint, related_name='transceiver_connector', on_delete=models.PROTECT)
+    connector_family = models.CharField(max_length=64, choices=ConnectorKindChoices, default='mpo-12')
+    position_count = models.PositiveIntegerField(default=0)
+    polish = models.CharField(max_length=32, choices=ConnectorPolishChoices, default='not_specified')
+    pinning = models.CharField(max_length=32, choices=ConnectorPinningChoices, default='not_specified')
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ('module', 'connector_profile')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('module', 'connector_profile'),
+                name='mpf_xcvr_connector_module_profile_uniq',
+            ),
+        )
+
+    def __str__(self):
+        return f'{self.module}:{self.connector_profile.name}'
+
+    def clean(self):
+        super().clean()
+        if self.connector_profile_id:
+            self.connector_family = self.connector_profile.connector_family
+            self.position_count = self.connector_profile.position_count
+            self.polish = self.connector_profile.polish
+            self.pinning = self.connector_profile.pinning
+            if self.connector_family != self.connector_profile.connector_family:
+                raise ValidationError({'connector_family': 'Connector family must match the connector profile.'})
+            if self.position_count != self.connector_profile.position_count:
+                raise ValidationError({'position_count': 'Position count must match the connector profile.'})
+        if self.endpoint_id:
+            if self.connector_family and self.endpoint.connector_kind != self.connector_family:
+                raise ValidationError({'endpoint': 'Endpoint connector kind must match this transceiver connector.'})
+            if self.position_count and self.endpoint.position_count != self.position_count:
+                raise ValidationError({'endpoint': 'Endpoint position count must match this transceiver connector.'})
+
+    def save(self, *args, **kwargs):
+        if self.connector_profile_id:
+            self.connector_family = self.connector_profile.connector_family
+            self.position_count = self.connector_profile.position_count
+            self.polish = self.connector_profile.polish
+            self.pinning = self.connector_profile.pinning
+        super().save(*args, **kwargs)
 
 
 class TransportChannel(V2Model):

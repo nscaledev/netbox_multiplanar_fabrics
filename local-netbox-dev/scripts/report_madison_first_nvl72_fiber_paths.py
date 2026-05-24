@@ -18,11 +18,9 @@ for candidate in (
         sys.path.insert(0, str(candidate))
 
 from madison_v2_graph import (  # noqa: E402
-    ACTIVE_MPO_LANE_INDEXES,
     get_fabric,
     mpo_endpoint_for_device_port,
     optical_lane_for,
-    position_numbers_for_lane_indexes,
 )
 
 
@@ -30,26 +28,13 @@ DEFAULT_PATH_KEY = 'madison-first-nvl72-a2-leaf16-four-plane-lane-aware-v2'
 PATH_KEY = os.environ.get('MADISON_FIBER_PATH_KEY', DEFAULT_PATH_KEY)
 
 
-def edge_key(metadata: dict) -> tuple:
-    return (
-        metadata.get('plane_number'),
-        metadata.get('gb300_device'),
-        metadata.get('gb300_interface'),
-        metadata.get('gb300_mpo'),
-        metadata.get('side'),
-        metadata.get('nic_index_zero'),
-        metadata.get('leaf_device'),
-        metadata.get('leaf_interface'),
-        metadata.get('leaf_mpo'),
-        metadata.get('shuffle_cassette'),
-        metadata.get('shuffle_mpo'),
-        tuple(metadata.get('lane_indexes') or ()),
-    )
-
-
-def lane_positions(metadata: dict) -> list[int]:
-    raw_indexes = metadata.get('lane_indexes') or list(ACTIVE_MPO_LANE_INDEXES)
-    return position_numbers_for_lane_indexes(raw_indexes)
+def segment_position_numbers(segment: FiberSegment) -> list[int]:
+    metadata = segment.metadata or {}
+    values = metadata.get('position_numbers') or ()
+    try:
+        return sorted({int(value) for value in values})
+    except (TypeError, ValueError):
+        return []
 
 
 def step_label(step) -> str:
@@ -59,29 +44,49 @@ def step_label(step) -> str:
 def main() -> None:
     fabric = get_fabric()
     segments = list(FiberSegment.objects.filter(fabric=fabric, metadata__path_key=PATH_KEY).order_by('pk'))
-    gb_segments = {}
-    leaf_segments = {}
+    gb_segments = []
+    leaf_segments = []
     for segment in segments:
         metadata = segment.metadata or {}
         if metadata.get('segment_kind') == 'gb300_to_shuffle':
-            gb_segments[edge_key(metadata)] = segment
+            gb_segments.append(segment)
         elif metadata.get('segment_kind') == 'shuffle_to_leaf':
-            leaf_segments[edge_key(metadata)] = segment
+            leaf_segments.append(segment)
 
     counters = Counter()
     grouped_by_plane = defaultdict(Counter)
-    missing_groups = []
     missing_paths = []
+    structural_findings = []
     sample_traces = []
-    for key, leaf_segment in sorted(leaf_segments.items()):
-        gb_segment = gb_segments.get(key)
-        metadata = leaf_segment.metadata or {}
-        plane_number = metadata.get('plane_number')
-        if gb_segment is None:
-            counters['missing_gb300_to_shuffle_segment_groups'] += 1
-            missing_groups.append(key)
-            continue
 
+    destination_sets_by_source = defaultdict(set)
+    for segment in gb_segments:
+        destination_sets_by_source[segment.a_endpoint_id].add(segment.b_endpoint_id)
+        position_numbers = segment_position_numbers(segment)
+        if len(position_numbers) != 8:
+            structural_findings.append(
+                f'{segment.name} has {len(position_numbers)} modeled positions; expected one 8-strand source MPO jumper.'
+            )
+    split_source_mpos = {
+        source_id: destinations
+        for source_id, destinations in destination_sets_by_source.items()
+        if len(destinations) != 1
+    }
+    if split_source_mpos:
+        counters['source_mpos_with_split_shuffle_fronts'] = len(split_source_mpos)
+        sample_source_ids = sorted(split_source_mpos)[:10]
+        structural_findings.append(
+            f'{len(split_source_mpos)} source MPO endpoint(s) map to multiple shuffle front MPOs; sample endpoint ids {sample_source_ids}.'
+        )
+
+    for segment in leaf_segments:
+        position_numbers = segment_position_numbers(segment)
+        if len(position_numbers) != 8:
+            structural_findings.append(
+                f'{segment.name} has {len(position_numbers)} modeled positions; expected one 8-strand shuffle-to-leaf jumper.'
+            )
+
+    for gb_segment in sorted(gb_segments, key=lambda segment: segment.name):
         gb_metadata = gb_segment.metadata or {}
         source_parent = mpo_endpoint_for_device_port(
             fabric,
@@ -89,57 +94,45 @@ def main() -> None:
             gb_metadata['gb300_interface'],
             int(gb_metadata['gb300_mpo']),
         ).parent
-        destination_parent = mpo_endpoint_for_device_port(
-            fabric,
-            metadata['leaf_device'],
-            metadata['leaf_interface'],
-            int(metadata['leaf_mpo']),
-        ).parent
-
-        for position_number in lane_positions(metadata):
+        for position_number in segment_position_numbers(gb_segment):
             counters['expected_optical_lane_paths'] += 1
-            grouped_by_plane[plane_number]['expected'] += 1
             source_lane = optical_lane_for(
                 source_parent,
                 mpo_index=int(gb_metadata['gb300_mpo']),
                 position_number=position_number,
                 direction='send',
             )
-            destination_lane = optical_lane_for(
-                destination_parent,
-                mpo_index=int(metadata['leaf_mpo']),
-                position_number=position_number,
-                direction='receive',
-            )
-            result = resolve_optical_lane_path(source=source_lane, destination=destination_lane)
+            plane_number = source_lane.plane.plane_number if source_lane.plane_id else 'unassigned'
+            grouped_by_plane[plane_number]['expected'] += 1
+            result = resolve_optical_lane_path(source=source_lane, destination=None)
             if result.path_found:
                 counters['resolved_optical_lane_paths'] += 1
                 grouped_by_plane[plane_number]['resolved'] += 1
                 if len(sample_traces) < 4:
-                    sample_traces.append((metadata, position_number, result))
+                    sample_traces.append((gb_metadata, position_number, plane_number, result))
             else:
                 counters['missing_optical_lane_paths'] += 1
                 grouped_by_plane[plane_number]['missing'] += 1
                 if len(missing_paths) < 20:
-                    missing_paths.append((metadata, position_number, result.error))
+                    missing_paths.append((gb_metadata, position_number, result.error))
 
     print('Madison first NVL72 optical lane path report for netbox_plant_graph v2')
     print(f'path_key={PATH_KEY}')
     print(f'fiber_segments={len(segments)}')
-    print(f'gb300_to_shuffle_groups={len(gb_segments)}')
-    print(f'shuffle_to_leaf_groups={len(leaf_segments)}')
+    print(f'gb300_to_shuffle_segments={len(gb_segments)}')
+    print(f'shuffle_to_leaf_segments={len(leaf_segments)}')
     for key in sorted(counters):
         print(f'{key}={counters[key]}')
-    for plane_number in sorted(grouped_by_plane):
+    for plane_number in sorted(grouped_by_plane, key=lambda value: (str(value))):
         counts = grouped_by_plane[plane_number]
         print(
             f'plane_{plane_number}: expected={counts["expected"]} '
             f'resolved={counts["resolved"]} missing={counts["missing"]}'
         )
-    if missing_groups:
-        print('missing_segment_groups=FAIL')
-        for group in missing_groups[:10]:
-            print(f'- {group}')
+    if structural_findings:
+        print('physical_jumper_structure=FAIL')
+        for finding in structural_findings[:20]:
+            print(f'- {finding}')
         raise SystemExit(1)
     if counters['missing_optical_lane_paths']:
         print('path_resolution=FAIL')
@@ -152,13 +145,13 @@ def main() -> None:
                 f"via {metadata.get('shuffle_cassette')} mpo-{metadata.get('shuffle_mpo')} error={error}"
             )
         raise SystemExit(1)
+    print('physical_jumper_structure=PASS')
     print('path_resolution=PASS')
     print('sample_traces:')
-    for metadata, position_number, result in sample_traces:
+    for metadata, position_number, plane_number, result in sample_traces:
         print(
-            f"  plane={metadata['plane_number']} strand={position_number} "
-            f"{metadata['gb300_device']}:{metadata['gb300_interface']}:mpo-{metadata['gb300_mpo']} "
-            f"-> {metadata['leaf_device']}:{metadata['leaf_interface']}:mpo-{metadata['leaf_mpo']}"
+            f"  plane={plane_number} strand={position_number} "
+            f"{metadata['gb300_device']}:{metadata['gb300_interface']}:mpo-{metadata['gb300_mpo']}"
         )
         for idx, step in enumerate(result.steps or (), start=1):
             print(f'    {idx:02d}. {step_label(step)}')

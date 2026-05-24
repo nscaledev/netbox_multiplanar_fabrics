@@ -11,6 +11,7 @@ The implementation lives in `netbox_plant_graph.services.imports` and currently 
 - `transport_channel`
 - `transport_channel_position_map`
 - `strand_termination`
+- `transceiver_assignment`
 
 It reports one stable row-level outcome per item:
 
@@ -275,6 +276,23 @@ These fields are optional and existing payloads without them remain valid.
       "source_row": 998,
       "external_id": "termination-row-998",
       "idempotency_key": "madison:termination:Jumper-1:1"
+    },
+    {
+      "kind": "transceiver_assignment",
+      "fabric": "mad-1-roce-fabric",
+      "endpoint": "GPU-1.OSFP-1",
+      "profile_slug": "osfp-dual-mpo12-apc-800g-4x200g-dr4",
+      "module_type_part_number": "MMS4X00-NM-T",
+      "role_hint": "gb300_compute_osfp",
+      "create_module": true,
+      "mpo_endpoints": {
+        "1": "GPU-1.OSFP-1.MPO-1",
+        "2": "GPU-1.OSFP-1.MPO-2"
+      },
+      "source_system": "madison-workbook",
+      "source_document": "transceiver-bom.xlsx",
+      "source_row": 42,
+      "idempotency_key": "madison:transceiver:GPU-1.OSFP-1"
     }
   ]
 }
@@ -289,6 +307,45 @@ Natural-key references are intentionally plugin-native:
 - Planes use `Plane.plane_number` or label within a fabric.
 - Fiber strands use `FiberSegment.name` plus `strand_index` within a fabric.
 - MPO positions use `Endpoint.address` plus `ConnectorPosition.position_number`.
+- Transceiver assignments target a parent OSFP/plugin endpoint by
+  `Endpoint.address`. The endpoint must anchor to a NetBox `Interface` when the
+  importer needs to create or find a NetBox `ModuleBay`/`Module`.
+
+## Transceiver Assignment Rows
+
+`transceiver_assignment` binds NetBox module inventory to plugin optical
+semantics for one OSFP-like endpoint. The handler uses the same binding service
+as V2.5 stamping:
+
+1. resolve the parent plugin endpoint,
+2. resolve or infer a `TransceiverProfile`,
+3. resolve an optional NetBox `ModuleType` from `module_type`,
+   `module_type_id`, `module_type_part_number`, `part_number`, or
+   `transceiver_part_number`,
+4. create or reuse a NetBox `ModuleBay` named after the source interface when
+   `create_module` is true,
+5. create or reuse a NetBox `Module` in that bay when a module type is
+   available, and
+6. create plugin `TransceiverConnector` rows linking profile connector faces to
+   the endpoint's MPO children.
+
+Supported row fields:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `kind` | yes | `transceiver_assignment`; aliases include `transceiver`, `transceiver_binding`, and `transceiver_connector`. |
+| `fabric` / `fabric_slug` | yes | Fabric slug. |
+| `endpoint` / `endpoint_address` / `osfp_endpoint` | yes | Parent OSFP/plugin endpoint address inside the fabric. |
+| `profile_slug` / `transceiver_profile_slug` | no | Explicit semantic profile. If omitted, the binder uses module-type mappings, role hints, and built-in defaults. |
+| `module_type`, `module_type_id` | no | NetBox `ModuleType` reference by ID, part number, model, or object-shaped value. |
+| `module_type_part_number`, `part_number`, `transceiver_part_number` | no | Convenience lookup by NetBox `ModuleType.part_number`. |
+| `role_hint` | no | Role-specific profile mapping hint, such as `gb300_compute_osfp`, `backend_leaf_osfp`, or `backend_spine_osfp`. |
+| `create_module` | no | Defaults true. When false, the row only succeeds if a matching module already exists. |
+| `mpo_endpoints` | no | Optional map from connector index to child endpoint address. Omit when child endpoint metadata carries `mpo_index`. |
+
+Dry-run reports `create`, `update`, or `skip` based on the current module,
+module-type, profile, and connector-binding state. Apply is idempotent for the
+same endpoint/profile/module-type natural state.
 
 ## Provenance And Idempotency
 
@@ -336,6 +393,9 @@ Before reconciling rows, the service builds an import bundle with original item 
 - `transport_channel_position_map` -> `transport_channel`
 - `transport_channel_position_map` -> MPO `endpoint`
 - `strand_termination` -> MPO `endpoint`
+- `transceiver_assignment` -> parent OSFP/plugin `endpoint`
+- `transceiver_assignment` -> child MPO endpoints, when explicit
+  `mpo_endpoints` are supplied
 
 When a prerequisite is included in the same payload, apply order is topologically sorted so the prerequisite is reconciled first even if it appears later in the file. Rows without bundle dependencies keep deterministic file-order evaluation. The returned plan keeps `diffs` keyed to the original row indexes and adds:
 
@@ -361,6 +421,10 @@ This is a reconciliation layer for existing V2 topology scaffolding, not a full 
 `fiber_strand_cable` updates the nullable `FiberStrand.cable_site` and `FiberStrand.cable_id` linkage. It does not create `FiberSegment` rows.
 
 `transport_channel_position_map` and `strand_termination` require the target MPO `ConnectorPosition` to already exist.
+
+`transceiver_assignment` requires the parent endpoint and child MPO endpoints to
+already exist. It can create NetBox module bays/modules, but it does not create
+plugin endpoints, connector positions, transport channels, or optical lanes.
 
 Provenance does not create prerequisites, bypass natural-key matching, or perform
 cross-object idempotency lookup. If a future supported kind lacks a metadata

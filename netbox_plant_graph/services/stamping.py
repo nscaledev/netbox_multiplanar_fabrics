@@ -7,7 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.utils.text import slugify
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Location, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Location, ModuleType, Site
 from tenancy.models import Tenant
 
 from netbox_plant_graph.models import (
@@ -30,6 +30,7 @@ from netbox_plant_graph.models import (
     TransportChannel,
     TransportChannelPositionMap,
     TransferPattern,
+    TransceiverConnector,
 )
 from netbox_plant_graph.services.audit import record_audit_event
 from netbox_plant_graph.services.architecture import ArchitectureFixtureResult, ensure_roce_4plane_shuffle_architecture
@@ -40,6 +41,7 @@ from netbox_plant_graph.services.blueprint_registry import (
 )
 from netbox_plant_graph.services.resolver import OpticalLanePath, resolve_optical_lane_path
 from netbox_plant_graph.services.stamp_template_validation import resolve_stamp_template_spec
+from netbox_plant_graph.services.transceivers import bind_transceiver_for_osfp_endpoint
 
 
 DEFAULT_WAVELENGTHS_NM = {
@@ -68,6 +70,7 @@ class StampExecutionContext:
     fabric_slug: str
     source_bindings: dict
     netbox_created_objects: dict
+    creation_options: dict
     actor: object | None
     phase: str | None = None
 
@@ -887,6 +890,117 @@ def _sync_channel_position_maps_for_endpoint(
             )
 
 
+def _transceiver_config(template_spec: dict) -> dict:
+    config = _resolved_spec(template_spec).get('transceivers')
+    if not isinstance(config, dict):
+        config = template_spec.get('transceivers')
+    return dict(config) if isinstance(config, dict) else {}
+
+
+def _transceiver_role_config(template_spec: dict, role_slug: str) -> dict:
+    config = _transceiver_config(template_spec)
+    aliases = {
+        'gpu_osfp': ('gpu_osfp', 'gpu_tray', 'gpu'),
+        'h100_osfp': ('h100_osfp', 'gpu_osfp', 'gpu_tray', 'gpu'),
+        'leaf_osfp': ('leaf_osfp', 'leaf_switch', 'leaf'),
+        'spine_osfp': ('spine_osfp', 'spine_switch', 'spine'),
+    }.get(role_slug, (role_slug,))
+    role_config = {}
+    for alias in aliases:
+        value = config.get(alias)
+        if isinstance(value, dict):
+            role_config.update(value)
+    return role_config
+
+
+def _creation_option_module_type(creation_options: dict, role_slug: str):
+    aliases = {
+        'gpu_osfp': ('gpu_transceiver_module_type', 'gpu_osfp_module_type', 'transceiver_module_type'),
+        'h100_osfp': ('gpu_transceiver_module_type', 'h100_transceiver_module_type', 'transceiver_module_type'),
+        'leaf_osfp': ('leaf_transceiver_module_type', 'leaf_osfp_module_type', 'transceiver_module_type'),
+        'spine_osfp': ('spine_transceiver_module_type', 'spine_osfp_module_type', 'transceiver_module_type'),
+    }.get(role_slug, ('transceiver_module_type',))
+    for alias in aliases:
+        value = creation_options.get(alias)
+        if isinstance(value, ModuleType):
+            return value
+    return None
+
+
+def _transceiver_module_part_number(template_spec: dict, role_slug: str, creation_options: dict) -> str | None:
+    for key in (
+        f'{role_slug}_module_type_part_number',
+        f'{role_slug}_part_number',
+        'transceiver_module_type_part_number',
+        'module_type_part_number',
+    ):
+        value = creation_options.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    role_config = _transceiver_role_config(template_spec, role_slug)
+    config = _transceiver_config(template_spec)
+    value = role_config.get('module_type_part_number') or role_config.get('part_number') or config.get(
+        'module_type_part_number'
+    )
+    return str(value).strip() if value not in (None, '') else None
+
+
+def _transceiver_profile_slug(template_spec: dict, role_slug: str) -> str | None:
+    role_config = _transceiver_role_config(template_spec, role_slug)
+    config = _transceiver_config(template_spec)
+    value = role_config.get('profile_slug') or config.get('default_profile_slug') or config.get('profile_slug')
+    return str(value).strip() if value not in (None, '') else None
+
+
+def _transceivers_enabled(template_spec: dict) -> bool:
+    config = _transceiver_config(template_spec)
+    return config.get('enabled', True) is not False
+
+
+def _bind_stamped_transceiver(
+    *,
+    context: StampExecutionContext,
+    endpoint: Endpoint,
+    mpo_endpoints: dict[int, Endpoint],
+    role_slug: str,
+) -> dict:
+    if not _transceivers_enabled(context.template_spec):
+        return {'status': 'disabled', 'endpoint_id': endpoint.pk, 'created': {}}
+    result = bind_transceiver_for_osfp_endpoint(
+        endpoint=endpoint,
+        mpo_endpoints=mpo_endpoints,
+        profile_slug=_transceiver_profile_slug(context.template_spec, role_slug),
+        module_type=_creation_option_module_type(context.creation_options, role_slug),
+        module_type_part_number=_transceiver_module_part_number(
+            context.template_spec,
+            role_slug,
+            context.creation_options,
+        ),
+        role_hint=_transceiver_role_config(context.template_spec, role_slug).get('role_hint'),
+        create_module=True,
+    )
+    created = result.get('created') or {}
+    for result_key, created_key in (
+        ('module_bay_ids', 'module_bays'),
+        ('module_ids', 'modules'),
+        ('transceiver_connector_ids', 'transceiver_connectors'),
+    ):
+        ids = list(created.get(result_key) or ())
+        if ids:
+            context.netbox_created_objects.setdefault(created_key, []).extend(ids)
+    return {
+        'endpoint_id': endpoint.pk,
+        'endpoint_address': endpoint.address,
+        'status': result.get('status'),
+        'module_id': getattr(result.get('module'), 'pk', None),
+        'module_type_id': getattr(result.get('module_type'), 'pk', None),
+        'profile_id': getattr(result.get('profile'), 'pk', None),
+        'profile_slug': getattr(result.get('profile'), 'slug', None),
+        'connector_ids': [connector.pk for connector in result.get('connectors') or ()],
+        'role_slug': role_slug,
+    }
+
+
 def _fallback_cable_site() -> Site:
     site, _ = Site.objects.get_or_create(
         slug='mpf-unassigned',
@@ -1080,6 +1194,11 @@ def _managed_object_ids(fabric: Fabric) -> dict[str, list[int]]:
         'connector_positions': list(
             ConnectorPosition.objects.filter(endpoint__fabric=fabric)
             .order_by('endpoint__address', 'position_number')
+            .values_list('pk', flat=True)
+        ),
+        'transceiver_connectors': list(
+            TransceiverConnector.objects.filter(endpoint__fabric=fabric)
+            .order_by('endpoint__address', 'connector_profile__connector_index', 'pk')
             .values_list('pk', flat=True)
         ),
         'transport_channels': list(
@@ -1347,6 +1466,26 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             endpoint=osfp_endpoint,
         )
 
+    transceiver_bindings = []
+    for key, osfp_endpoint in gpu_osfps.items():
+        transceiver_bindings.append(
+            _bind_stamped_transceiver(
+                context=context,
+                endpoint=osfp_endpoint,
+                mpo_endpoints=gpu_mpos_by_osfp[key],
+                role_slug='gpu_osfp',
+            )
+        )
+    for key, osfp_endpoint in leaf_osfps.items():
+        transceiver_bindings.append(
+            _bind_stamped_transceiver(
+                context=context,
+                endpoint=osfp_endpoint,
+                mpo_endpoints=leaf_mpos_by_leaf[key],
+                role_slug='leaf_osfp',
+            )
+        )
+
     source_lanes = []
     destination_lanes = []
     resolved_paths = []
@@ -1511,6 +1650,7 @@ def _execute_roce_4plane_mini_proof(context: StampExecutionContext) -> MiniFabri
             'wavelength_plan': _resolved_spec(template_spec).get('wavelength_plan'),
             'allocation_rule_override': _resolved_spec(template_spec).get('allocation_rule_override'),
             'fabric_ownership': _fabric_ownership_manifest(template_spec),
+            'transceiver_bindings': transceiver_bindings,
         },
         metadata={'fixture': True},
     )
@@ -1688,6 +1828,26 @@ def _execute_roce_direct_attach_mini_proof(context: StampExecutionContext) -> Mi
             endpoint=osfp_endpoint,
         )
 
+    transceiver_bindings = []
+    for key, osfp_endpoint in gpu_osfps.items():
+        transceiver_bindings.append(
+            _bind_stamped_transceiver(
+                context=context,
+                endpoint=osfp_endpoint,
+                mpo_endpoints=gpu_mpos_by_osfp[key],
+                role_slug='h100_osfp',
+            )
+        )
+    for key, osfp_endpoint in leaf_osfps.items():
+        transceiver_bindings.append(
+            _bind_stamped_transceiver(
+                context=context,
+                endpoint=osfp_endpoint,
+                mpo_endpoints=leaf_mpos_by_leaf[key],
+                role_slug='leaf_osfp',
+            )
+        )
+
     source_lanes = []
     destination_lanes = []
     resolved_paths = []
@@ -1820,6 +1980,7 @@ def _execute_roce_direct_attach_mini_proof(context: StampExecutionContext) -> Mi
             'wavelength_plan': _resolved_spec(template_spec).get('wavelength_plan'),
             'allocation_rule_override': _resolved_spec(template_spec).get('allocation_rule_override'),
             'fabric_ownership': _fabric_ownership_manifest(template_spec),
+            'transceiver_bindings': transceiver_bindings,
         },
         metadata={'fixture': True},
     )
@@ -1895,6 +2056,7 @@ def execute_stamp_template(
         fabric_slug=fabric_slug,
         source_bindings=resolved_source_bindings,
         netbox_created_objects=netbox_created_objects,
+        creation_options=creation_options or {},
         actor=actor,
         phase=phase,
     )

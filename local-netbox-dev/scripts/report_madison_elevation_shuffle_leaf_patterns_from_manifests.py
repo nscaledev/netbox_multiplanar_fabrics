@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import re
 from collections import Counter, defaultdict
@@ -20,7 +21,8 @@ OUTPUT_PATHS = [
 ]
 
 BE_LEAF_PATTERN = re.compile(
-    r'\bSU(?P<su>\d+)\s+BE\s+LEAF#(?P<leaf>\d+)\.NIC(?P<nic>\d+)(?P<side>[AB])\.PL(?P<plane>\d+)\b'
+    r'\b(?:SU(?P<su>\d+)\s+|v\s+)?BE\s+LEAF#(?P<leaf>\d+)\.NIC(?P<nic>\d+)(?P<side>[AB])\.PL(?P<plane>\d+)\b',
+    re.IGNORECASE,
 )
 RACK_SOURCE_SU_PATTERN = re.compile(r'\bSU(?P<su>\d+)\s+BE\s+-\s+Leaf\b', re.IGNORECASE)
 
@@ -65,7 +67,10 @@ def first_existing(paths: list[Path], label: str) -> Path:
     raise RuntimeError(f'{label} not found in: {paths}')
 
 
-def output_path() -> Path:
+def output_path(custom_path: Path | None = None) -> Path:
+    if custom_path is not None:
+        custom_path.parent.mkdir(parents=True, exist_ok=True)
+        return custom_path
     for path in OUTPUT_PATHS:
         if path.parent.exists():
             return path
@@ -107,9 +112,9 @@ def parse_leaf(row: dict[str, str]) -> dict[str, object] | None:
     return {
         'leaf': int(match.group('leaf')),
         'nic': int(match.group('nic')),
-        'side': match.group('side'),
+        'side': match.group('side').upper(),
         'plane': int(match.group('plane')),
-        'leaf_label_su': int(match.group('su')),
+        'leaf_label_su': int(match.group('su')) if match.group('su') else None,
         'rack_label_su': rack_source_su(row['rack_source_label']),
         'manifest_sus': parse_int_csv(row.get('scalable_units', '')),
     }
@@ -117,7 +122,7 @@ def parse_leaf(row: dict[str, str]) -> dict[str, object] | None:
 
 def selected_su_for_leaf_items(leaf_items: list[tuple[dict[str, str], dict[str, object]]]) -> tuple[int | None, str]:
     rack_sus = sorted({item[1]['rack_label_su'] for item in leaf_items if item[1]['rack_label_su'] is not None})
-    leaf_sus = sorted({item[1]['leaf_label_su'] for item in leaf_items})
+    leaf_sus = sorted({item[1]['leaf_label_su'] for item in leaf_items if item[1]['leaf_label_su'] is not None})
     manifest_sus = sorted({su for item in leaf_items for su in item[1]['manifest_sus']})
 
     if len(rack_sus) == 1:
@@ -164,7 +169,7 @@ def pattern_row(
     leaf_numbers = sorted({int(item[1]['leaf']) for item in leaf_items})
     leaf_ru_tops = [int(item[0]['ru_top']) for item in leaf_items]
     rack_sus = sorted({int(item[1]['rack_label_su']) for item in leaf_items if item[1]['rack_label_su'] is not None})
-    leaf_sus = sorted({int(item[1]['leaf_label_su']) for item in leaf_items})
+    leaf_sus = sorted({int(item[1]['leaf_label_su']) for item in leaf_items if item[1]['leaf_label_su'] is not None})
     manifest_sus = sorted({su for item in leaf_items for su in item[1]['manifest_sus']})
     selected_su, selected_su_source = selected_su_for_leaf_items(leaf_items)
     expected_planes = [1, 2] if side == 'A' else [3, 4]
@@ -196,14 +201,18 @@ def pattern_row(
 
     if len(rack_sus) != 1:
         warnings.append(f'rack_label_sus={rack_sus}')
-    if len(leaf_sus) != 1:
+    if leaf_sus and len(leaf_sus) != 1:
         warnings.append(f'leaf_label_sus={leaf_sus}')
-    if len(manifest_sus) != 1:
+    if manifest_sus and len(manifest_sus) != 1:
         warnings.append(f'manifest_scalable_units={manifest_sus}')
     if selected_su is not None and leaf_sus and leaf_sus != [selected_su]:
         warnings.append(f'leaf_label_su_mismatch={leaf_sus}')
     if selected_su is not None and manifest_sus and manifest_sus != [selected_su]:
         warnings.append(f'manifest_su_mismatch={manifest_sus}')
+    if selected_su is not None and not leaf_sus:
+        warnings.append('leaf_label_su_omitted')
+    if selected_su is not None and not manifest_sus:
+        warnings.append('manifest_su_omitted')
 
     notes = [
         'Manifest-derived elevation-authoritative pattern: bottom-up leaf index maps to NIC index; '
@@ -247,14 +256,22 @@ def pattern_row(
 
 
 def main() -> None:
-    device_path = first_existing(DEVICE_MANIFEST_PATHS, 'Madison device placement manifest')
-    shuffle_path = first_existing(SHUFFLE_MANIFEST_PATHS, 'Madison shuffle box placement manifest')
+    parser = argparse.ArgumentParser(
+        description='Build Madison BE leaf/shuffle pair patterns from generated device and shuffle manifests.'
+    )
+    parser.add_argument('--device-manifest', type=Path, default=None)
+    parser.add_argument('--shuffle-manifest', type=Path, default=None)
+    parser.add_argument('--output', type=Path, default=None)
+    args = parser.parse_args()
+
+    device_path = args.device_manifest or first_existing(DEVICE_MANIFEST_PATHS, 'Madison device placement manifest')
+    shuffle_path = args.shuffle_manifest or first_existing(SHUFFLE_MANIFEST_PATHS, 'Madison shuffle box placement manifest')
     leaf_groups = grouped_leaf_rows(read_csv(device_path))
     shuffle_groups = grouped_shuffle_rows(read_csv(shuffle_path))
     keys = sorted(set(leaf_groups) | set(shuffle_groups), key=lambda key: (natural_key(key[0]), key[1], key[2]))
     rows = [pattern_row(key, leaf_groups.get(key, []), shuffle_groups.get(key, [])) for key in keys]
 
-    path = output_path()
+    path = output_path(args.output)
     with path.open('w', newline='') as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
         writer.writeheader()

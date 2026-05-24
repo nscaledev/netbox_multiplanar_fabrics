@@ -197,8 +197,82 @@ class ArchitectureWorkspaceAPITestCase(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Architecture Workspace')
+        self.assertContains(response, 'Sources: active')
+        self.assertContains(response, 'Next action')
+        self.assertContains(response, 'Attach a source artifact')
         self.assertContains(response, 'Attach Architecture Source Artifact')
+        self.assertContains(response, 'Blueprint Bundle')
+        self.assertContains(response, 'Parser Key can be blank')
         self.assertContains(response, 'Generate Publish Plan')
+
+    def test_workspace_detail_renders_normalized_inventory_and_provenance(self):
+        workspace = ArchitectureWorkspace.objects.create(
+            name='Rendered Architecture Inventory',
+            slug='rendered-architecture-inventory',
+            target_slug='rendered-architecture-target',
+            target_version='v1',
+        )
+        artifact = attach_architecture_source_artifact(
+            workspace=workspace,
+            name='Rendered bundle',
+            artifact_type='blueprint_bundle',
+            raw_payload=architecture_workspace_bundle('rendered-architecture-blueprint'),
+            actor=self.user,
+        )
+        normalize_architecture_source_artifact(artifact, actor=self.user)
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:architectureworkspace', kwargs={'pk': workspace.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Normalize: complete')
+        self.assertContains(response, 'Component Inventory')
+        self.assertContains(response, 'Normalized Architecture Semantics')
+        self.assertContains(response, 'rendered-architecture-blueprint')
+        self.assertContains(response, 'OSFP channels')
+        self.assertContains(response, 'stamp templates 1')
+        self.assertContains(response, 'mpf_blueprint_bundle')
+        self.assertContains(response, 'Rendered bundle')
+
+    def test_workspace_detail_renders_validation_publish_triage(self):
+        workspace = ArchitectureWorkspace.objects.create(
+            name='Rendered Architecture Triage',
+            slug='rendered-architecture-triage',
+            target_slug='rendered-architecture-triage-target',
+            target_version='v1',
+        )
+        artifact = attach_architecture_source_artifact(
+            workspace=workspace,
+            name='Triage bundle',
+            artifact_type='blueprint_bundle',
+            raw_payload=architecture_workspace_bundle('rendered-triage-blueprint'),
+            actor=self.user,
+        )
+        normalize_architecture_source_artifact(artifact, actor=self.user)
+        validate_architecture_workspace(workspace, actor=self.user)
+        generate_architecture_publish_plan(workspace, actor=self.user)
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:architectureworkspace', kwargs={'pk': workspace.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Validation And Import Triage')
+        self.assertContains(response, 'No validation or component issues surfaced.')
+        self.assertContains(response, 'Approve publish plan')
+        self.assertContains(response, 'Generated')
+        self.assertContains(response, '0 conflict')
+
+        workspace.target_version = 'v2'
+        workspace.save(update_fields=('target_version', 'last_updated'))
+        stale_response = self.client.get(
+            reverse('plugins:netbox_plant_graph:architectureworkspace', kwargs={'pk': workspace.pk})
+        )
+
+        self.assertEqual(stale_response.status_code, 200)
+        self.assertContains(stale_response, 'Regenerate stale plan')
+        self.assertContains(stale_response, 'stale plan')
 
     def test_handoff_api_returns_workspace_artifacts_and_plans(self):
         ArchitectureValidationRun.objects.create(

@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from django.test import TestCase
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleType, Site
 
 from netbox_plant_graph.models import (
     AllocationRuleSet,
@@ -22,6 +22,7 @@ from netbox_plant_graph.models import (
     TransferMap,
     TransportChannel,
     TransportChannelPositionMap,
+    TransceiverConnector,
 )
 from netbox_plant_graph.services.architecture import ensure_roce_4plane_shuffle_architecture
 from netbox_plant_graph.services.blueprint_registry import get_default_blueprint_registry
@@ -558,6 +559,58 @@ class V2StampingV25TestCase(TestCase):
         self.assertEqual(rollback.strategy, 'managed_object_compensation')
         self.assertEqual(rollback.stamp_run_id, second.execution.stamp_run.pk)
         self.assertValidationIssue(rollback, 'rollback_shared_fabric_stamp_runs', 'stamp_run.fabric')
+
+    def test_v25_apply_binds_transceiver_modules_and_mpo_connectors_for_created_osfps(self):
+        fixture = ensure_roce_4plane_shuffle_architecture()
+        manufacturer = Manufacturer.objects.create(name='NVIDIA', slug='nvidia-xcvr-stamp')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='GB300 Tray XCVR Stamp',
+            slug='gb300-tray-xcvr-stamp',
+        )
+        module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model='MMS4X00-NM-T',
+            part_number='MMS4X00-NM-T',
+        )
+        role = DeviceRole.objects.create(name='Fabric Endpoint XCVR', slug='fabric-endpoint-xcvr', color='00ff00')
+        site = Site.objects.create(name='XCVR Stamp Site', slug='xcvr-stamp-site', status='active')
+
+        result = apply_stamp_template_v25(
+            template=fixture.stamp_template,
+            fabric_name='XCVR stamp proof',
+            fabric_slug='xcvr-stamp-proof',
+            creation_options={
+                'enabled': True,
+                'site': site,
+                'gpu_device_type': device_type,
+                'gpu_role': role,
+                'leaf_device_type': device_type,
+                'leaf_role': role,
+                'name_prefix': 'xcvr-proof',
+                'transceiver_module_type': module_type,
+            },
+        )
+        fabric = result.execution.fabric
+        connectors = TransceiverConnector.objects.filter(endpoint__fabric=fabric)
+
+        self.assertEqual(Module.objects.filter(module_type=module_type).count(), 8)
+        self.assertEqual(connectors.count(), 16)
+        self.assertEqual(
+            set(connectors.values_list('connector_profile__profile__slug', flat=True)),
+            {'osfp-dual-mpo12-apc-800g-4x200g-dr4'},
+        )
+        self.assertEqual(len(result.execution.stamp_run.result['transceiver_bindings']), 8)
+        self.assertTrue(
+            all(binding['status'] == 'bound' and len(binding['connector_ids']) == 2
+                for binding in result.execution.stamp_run.result['transceiver_bindings'])
+        )
+        self.assertEqual(len(result.execution.stamp_run.result['managed_objects']['transceiver_connectors']), 16)
+
+        rollback = rollback_stamp_run_v25(stamp_run=result.execution.stamp_run, apply=True)
+        self.assertTrue(rollback.supported, [str(issue) for issue in rollback.issues])
+        self.assertEqual(TransceiverConnector.objects.filter(endpoint__fabric=fabric).count(), 0)
+        self.assertEqual(Endpoint.objects.filter(fabric=fabric).count(), 0)
 
     def test_phase_scoped_rollback_allows_phase_two_while_phase_one_run_remains(self):
         fixture = ensure_roce_4plane_shuffle_architecture()

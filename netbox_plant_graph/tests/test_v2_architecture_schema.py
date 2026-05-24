@@ -299,8 +299,11 @@ class V2ArchitectureSchemaTestCase(ArchitectureSchemaAssertionsMixin, SimpleTest
                 metadata['connector_kind'] = 'mpo-24'
                 metadata['position_count'] = 24
         transfer_patterns = deepcopy(definition.transfer_patterns)
-        shuffle_pattern = next(pattern for pattern in transfer_patterns if pattern['slug'] == 'shuffle_2x2')
-        shuffle_pattern['rule']['groups'][0]['rear_position_transform']['position_count'] = 24
+        for shuffle_pattern in (
+            pattern for pattern in transfer_patterns if pattern.get('pattern_kind') == 'shuffle_2x2'
+        ):
+            for group in shuffle_pattern['rule']['groups']:
+                group['rear_position_transform']['position_count'] = 24
         active_positions = set(definition.active_position_groups['A']) | set(definition.active_position_groups['B'])
         dark_positions = tuple(position for position in range(1, 25) if position not in active_positions)
 
@@ -331,16 +334,48 @@ class V2ArchitectureSchemaTestCase(ArchitectureSchemaAssertionsMixin, SimpleTest
             path='required_device_types.missing_role',
         )
 
+    def test_cable_profile_fiber_count_mismatch_fails_clearly(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        cable_profiles = deepcopy(definition.cable_profiles)
+        cable_profiles[0]['fiber_count'] = 95
+
+        result = validate_architecture_schema(replace(definition, cable_profiles=tuple(cable_profiles)))
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='cable_profiles.fiber_count_mismatch',
+            path='cable_profiles[trunk-96f-mpo8-sm-apc-unpinned-unpinned].fiber_count',
+            message_contains='must equal mpo_connector_count * fibers_per_mpo',
+        )
+
+    def test_cable_profile_assignment_unknown_profile_fails_clearly(self):
+        definition = build_roce_4plane_shuffle_architecture_schema()
+        cable_profile_assignments = deepcopy(definition.cable_profile_assignments)
+        cable_profile_assignments[0]['profile_slugs'] = ['missing-profile']
+
+        result = validate_architecture_schema(
+            replace(definition, cable_profile_assignments=tuple(cable_profile_assignments))
+        )
+
+        self.assertFalse(result.is_valid)
+        self.assertSchemaError(
+            result,
+            code='cable_profile_assignments.unknown_profile',
+            path='cable_profile_assignments[gb300-to-leaf-structured-trunk].profile_slugs[1]',
+            message_contains='unknown cable profile',
+        )
+
     def test_tier2_port_requires_matching_tier_device(self):
         definition = build_roce_4plane_shuffle_architecture_schema()
         roles = tuple(deepcopy(definition.roles)) + (
             {
-                'slug': 'spine_uplink_osfp',
-                'name': 'Spine uplink OSFP',
+                'slug': 'super_spine_uplink_osfp',
+                'name': 'Super-spine uplink OSFP',
                 'role_kind': 'active_tier_2_port',
-                'description': 'Spine-facing uplink role without a matching spine device role.',
+                'description': 'Super-spine-facing uplink role without a matching super-spine device role.',
                 'metadata': {
-                    'fabric_tier': 'spine',
+                    'fabric_tier': 'super_spine',
                     'connector_kind': 'osfp',
                     'channels': 4,
                     'channels_per_osfp': 4,
@@ -356,7 +391,7 @@ class V2ArchitectureSchemaTestCase(ArchitectureSchemaAssertionsMixin, SimpleTest
         self.assertSchemaError(
             result,
             code='roles.fabric_tier_parent_missing',
-            path='roles[10].metadata.fabric_tier',
+            path='roles[16].metadata.fabric_tier',
             message_contains='without a matching tier device role',
         )
 

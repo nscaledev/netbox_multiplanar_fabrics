@@ -50,7 +50,10 @@ Each page still prepares its own data:
   `visual_path_trace_json` plus `visual_path_trace_stages_json`.
 - `Interface Fanout Trace` resolves expanded or consolidated per-interface
   paths and passes `aggregate_schematic_paths_json` plus
-  `aggregate_schematic_stage_connectors_json`.
+  `aggregate_schematic_stage_connectors_json`. It also renders a
+  page-specific Transceiver Context card for the selected OSFP interface when a
+  matching NetBox module bay/module, semantic `TransceiverProfile`, or plugin
+  `TransceiverConnector` binding exists.
 
 Page templates decide:
 
@@ -58,7 +61,15 @@ Page templates decide:
 - body ID,
 - trace mode,
 - source title and source URL,
-- warning copy for identity shuffle mappings.
+- warning copy for identity shuffle mappings,
+- any non-SVG summary/context cards, including transceiver module/profile
+  details.
+
+The shared SVG renderer currently depicts the optical-lane, MPO connector,
+fiber-position, cable-assembly, shuffle, and destination hierarchy. It links to
+represented objects when URLs are present in the payload. The installed
+transceiver module/profile itself is surfaced in the Interface Fanout Trace
+context card, not yet as a dedicated SVG layer.
 
 ## Test Hooks
 
@@ -158,12 +169,15 @@ For any visual trace change, manually verify:
 1. Path Query renders the same visual path trace.
 2. Interface Fanout Trace renders expanded mode.
 3. Interface Fanout Trace renders consolidated mode.
-4. Show/hide still toggles the visual card body.
-5. Sub-interface summary and matrix sections still collapse independently.
-6. Export SVG downloads a usable SVG.
-7. SVG object links still navigate to endpoint, position, interface, and cable
+4. Interface Fanout Trace shows the selected OSFP's transceiver context when a
+   module/profile/connector binding exists, and degrades cleanly when it does
+   not.
+5. Show/hide still toggles the visual card body.
+6. Sub-interface summary and matrix sections still collapse independently.
+7. Export SVG downloads a usable SVG.
+8. SVG object links still navigate to endpoint, position, interface, and cable
    assembly objects.
-8. Cable assembly cylinders and brace labels still align with their lane bundle.
+9. Cable assembly cylinders and brace labels still align with their lane bundle.
 
 The component is not a contract for machine scraping. External automation
 should use REST or GraphQL contracts documented in

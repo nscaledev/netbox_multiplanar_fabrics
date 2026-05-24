@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
 from extras.events import serialize_for_event
 from utilities.api import get_serializer_for_model
 
@@ -40,6 +41,11 @@ from netbox_plant_graph.models import (
     StampTemplate,
     StrandTermination,
     SuppressionRule,
+    TransceiverConnector,
+    TransceiverConnectorProfile,
+    TransceiverLaneProfile,
+    TransceiverProfile,
+    TransceiverProfileModuleType,
     TransferMap,
     TransferPattern,
     TransportChannel,
@@ -65,6 +71,11 @@ V2_MODELS = (
     FabricNode,
     Endpoint,
     ConnectorPosition,
+    TransceiverProfile,
+    TransceiverProfileModuleType,
+    TransceiverConnectorProfile,
+    TransceiverLaneProfile,
+    TransceiverConnector,
     TransportChannel,
     TransportChannelPositionMap,
     FiberSegment,
@@ -175,6 +186,65 @@ class V2APISerializerTestCase(TestCase):
         )
         architecture_workspace.current_plan = architecture_plan
         architecture_workspace.save(update_fields=('current_plan', 'last_updated'))
+        manufacturer = Manufacturer.objects.create(name='API Transceiver Manufacturer', slug='api-transceiver-mfg')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='API Transceiver Host',
+            slug='api-transceiver-host',
+        )
+        module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model='API OSFP 800G DR4',
+            part_number='API-OSFP-800G-DR4',
+        )
+        role = DeviceRole.objects.create(name='API Transceiver Host', slug='api-transceiver-host', color='3366ff')
+        site = Site.objects.create(name='API Registry Site', slug='api-registry-site', status='active')
+        device = Device.objects.create(name='api-transceiver-host-1', device_type=device_type, role=role, site=site)
+        module_bay = ModuleBay.objects.create(device=device, name='osfp1', position='1')
+        module = Module.objects.create(device=device, module_bay=module_bay, module_type=module_type)
+        transceiver_profile = TransceiverProfile.objects.create(
+            architecture=result.fabric.architecture,
+            name='API OSFP Dual MPO Profile',
+            slug='api-osfp-dual-mpo-profile',
+            status='active',
+            form_factor='osfp112',
+            media_type='dr4',
+            aggregate_rate_gbps=800,
+            channel_count=4,
+            channel_rate_gbps=200,
+        )
+        TransceiverProfileModuleType.objects.create(
+            profile=transceiver_profile,
+            module_type=module_type,
+            is_default=True,
+            role_hint='gb300',
+        )
+        connector_profile = TransceiverConnectorProfile.objects.create(
+            profile=transceiver_profile,
+            name='MPO-1',
+            connector_index=1,
+            connector_family='mpo-12',
+            position_count=12,
+            polish='apc',
+        )
+        TransceiverLaneProfile.objects.create(
+            connector_profile=connector_profile,
+            channel_index=1,
+            lane_index=1,
+            direction='send',
+            mpo_position=1,
+            wavelength_nm='1310.000',
+            nominal_rate_gbps=100,
+        )
+        TransceiverConnector.objects.create(
+            module=module,
+            connector_profile=connector_profile,
+            endpoint=Endpoint.objects.filter(
+                fabric=result.fabric,
+                connector_kind='mpo-12',
+                position_count=12,
+            ).first(),
+        )
         workspace = OnboardingWorkspace.objects.create(
             name='API Onboarding Workspace',
             slug='api-onboarding-workspace',

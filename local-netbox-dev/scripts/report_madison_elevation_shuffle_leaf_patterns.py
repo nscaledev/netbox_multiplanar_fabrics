@@ -57,11 +57,7 @@ def parse_leaf(device: Device) -> dict | None:
 
 def parse_shuffle_box(device: Device) -> dict:
     context = device.local_context_data or {}
-    metadata = (
-        context.get('madison_shuffle_flattened_containment_v1')
-        or context.get('madison_shuffle_elevation_migration_v1')
-        or {}
-    )
+    metadata = context.get('madison_shuffle_flattened_containment') or {}
     return {
         'nic': metadata.get('nic_index_zero'),
         'side': metadata.get('side') or '',

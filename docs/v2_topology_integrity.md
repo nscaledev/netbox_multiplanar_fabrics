@@ -172,6 +172,14 @@ Object families are `architecture`, `cable_plant`, `endpoints`, `channels`,
 `blast_radius`, `channel_coverage`, `import_reconciliation`,
 `stamp_preflight`, and `operator_display`.
 
+Current transceiver coverage is indirect. The audit validates the plugin
+endpoint, connector-position, transport-channel, lane, cable, and transfer-map
+rows that transceiver bindings depend on, but it does not yet emit dedicated
+findings for missing NetBox modules, unmapped module types, absent
+`TransceiverConnector` rows, or cable/transceiver polish mismatches. Those
+checks are tracked as the next transceiver readiness increment and are described
+in `docs/v2_transceiver_modeling_plan.md`.
+
 ### Architecture
 
 | Code | Severity | Path blocking | Affected workflows | Remediation |

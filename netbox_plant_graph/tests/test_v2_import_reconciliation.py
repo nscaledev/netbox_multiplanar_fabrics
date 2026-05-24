@@ -3,9 +3,10 @@ import tempfile
 from dataclasses import replace
 from io import StringIO
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.test import TestCase
-from dcim.models import Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Module, ModuleType, Site
 
 from netbox_plant_graph.models import (
     CableAssembly,
@@ -24,6 +25,7 @@ from netbox_plant_graph.models import (
     TransferPattern,
     AllocationRuleSet,
     StampTemplate,
+    TransceiverConnector,
 )
 from netbox_plant_graph.services.imports import build_import_plan, reconcile_import_payload
 from netbox_plant_graph.services.imports.reconciliation import PROVENANCE_METADATA_NAMESPACE
@@ -109,6 +111,65 @@ class V2ImportReconciliationTestCase(TestCase):
         )
         self.strand_1 = FiberStrand.objects.create(segment=self.segment, strand_index=1)
         self.strand_2 = FiberStrand.objects.create(segment=self.segment, strand_index=2)
+
+    def test_transceiver_assignment_import_binds_module_and_mpo_connector_rows(self):
+        manufacturer = Manufacturer.objects.create(name='NVIDIA Import', slug='nvidia-import')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='GB300 Import Tray',
+            slug='gb300-import-tray',
+        )
+        module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model='MMS4X00-NM-T Import',
+            part_number='MMS4X00-NM-T',
+        )
+        role = DeviceRole.objects.create(name='Import GPU Tray', slug='import-gpu-tray', color='3366ff')
+        device = Device.objects.create(name='gpu-import-1', device_type=device_type, role=role, site=self.site)
+        interface = Interface.objects.create(device=device, name='OSFP-1', type='800gbase-x-osfp')
+        self.osfp.source_type = ContentType.objects.get_for_model(interface, for_concrete_model=False)
+        self.osfp.source_id = interface.pk
+        self.osfp.save()
+        Endpoint.objects.create(
+            fabric=self.fabric,
+            node=self.node,
+            parent=self.osfp,
+            name='OSFP-1.MPO-2',
+            address='GPU-1.OSFP-1.MPO-2',
+            endpoint_kind='subconnector',
+            connector_kind='mpo-12',
+            position_count=12,
+            metadata={'mpo_index': 2},
+        )
+        payload = {
+            'items': [
+                {
+                    'kind': 'transceiver_assignment',
+                    'fabric': self.fabric.slug,
+                    'endpoint': self.osfp.address,
+                    'module_type_part_number': module_type.part_number,
+                    'role_hint': 'gb300_compute_osfp',
+                }
+            ]
+        }
+
+        preview = reconcile_import_payload(payload)
+        self.assertEqual(preview.summary.create, 1)
+        self.assertEqual(TransceiverConnector.objects.count(), 0)
+
+        applied = reconcile_import_payload(payload, apply=True)
+        self.assertTrue(applied.committed, [diff.message for diff in applied.diffs])
+        self.assertEqual(applied.summary.create, 1)
+        self.assertEqual(Module.objects.filter(module_type=module_type).count(), 1)
+        connectors = TransceiverConnector.objects.filter(endpoint__parent=self.osfp)
+        self.assertEqual(connectors.count(), 2)
+        self.assertEqual(
+            set(connectors.values_list('connector_profile__profile__slug', flat=True)),
+            {'osfp-dual-mpo12-apc-800g-4x200g-dr4'},
+        )
+
+        second_preview = reconcile_import_payload(payload)
+        self.assertEqual(second_preview.summary.skip, 1)
 
     def test_dry_run_reports_create_update_skip_and_conflict_without_writes(self):
         CableAssembly.objects.create(site=self.site, cable_id='EXISTING-1', manufacturer='Existing Maker')

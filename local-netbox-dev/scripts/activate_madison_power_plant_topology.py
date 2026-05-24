@@ -16,8 +16,8 @@ from netbox_power_plant.models import (
 )
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
-POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'MAD-1 Electrical Plant')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
+POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'GS001 Electrical Plant')
 APPLY = os.environ.get('MADISON_POWER_PLANT_ACTIVATE') == '1'
 
 

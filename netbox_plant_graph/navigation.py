@@ -122,6 +122,21 @@ menu = PluginMenu(
                     ),
                 ),
                 PluginMenuItem(
+                    link='plugins:netbox_plant_graph:transceiverprofile_list',
+                    link_text='Transceiver Profiles',
+                    buttons=(
+                        PluginMenuButton(
+                            link='plugins:netbox_plant_graph:transceiverprofile_add',
+                            title='Add Transceiver Profile',
+                            icon_class='mdi mdi-plus-thick',
+                        ),
+                    ),
+                ),
+                PluginMenuItem(
+                    link='plugins:netbox_plant_graph:transceiverconnector_list',
+                    link_text='Transceiver Connectors',
+                ),
+                PluginMenuItem(
                     link='plugins:netbox_plant_graph:lane_workspace',
                     link_text='Lane Inventory',
                 ),

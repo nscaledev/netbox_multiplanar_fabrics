@@ -8,7 +8,7 @@ from django.db import transaction
 from dcim.models import Device, PowerPort, PowerPortTemplate
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
 POWER_SHELF_DEVICE_TYPE_SLUGS = ('gb300ps', 'ps33-33kw-power-shelf')
 POWER_SHELF_FACILITY_INPUT_NAME = 'facility-input'
 POWER_SHELF_FACILITY_INPUT_TYPE = 'iec-60309-560p6'
@@ -16,6 +16,7 @@ POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW = 33000
 
 # Passive plant objects intentionally have no power ports.
 PASSIVE_DEVICE_TYPE_SLUGS = {
+    'nvl72-rackscale-appliance',
     'shuffle-box-3tray-18cassette',
     'shuffle-cassette-2x2-mpo',
 }
@@ -57,14 +58,14 @@ def ensure_power_shelf_facility_input(device, counters):
         name=POWER_SHELF_FACILITY_INPUT_NAME,
         defaults={
             'type': POWER_SHELF_FACILITY_INPUT_TYPE,
-            'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+            'description': 'Facility-side 415V 60A input from the GS001 electrical plant.',
             'maximum_draw': POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW,
             'allocated_draw': None,
         },
     )
     desired = {
         'type': POWER_SHELF_FACILITY_INPUT_TYPE,
-        'description': 'Facility-side 415V 60A input from the MAD-1 electrical plant.',
+        'description': 'Facility-side 415V 60A input from the GS001 electrical plant.',
         'maximum_draw': POWER_SHELF_FACILITY_INPUT_MAXIMUM_DRAW,
         'allocated_draw': None,
     }

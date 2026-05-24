@@ -24,7 +24,7 @@ from madison_v2_graph import ensure_surfaces_for_devices, get_fabric  # noqa: E4
 
 FABRIC_SLUG = 'gs001-roce-fabric'
 MAD_SITE_SLUG = 'gs001'
-SOURCE_MARKER = 'madison_transport_channel_backfill_v1'
+SOURCE_MARKER = 'madison_transport_channel_backfill'
 
 
 def apply_enabled() -> bool:

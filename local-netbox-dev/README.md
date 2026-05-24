@@ -65,7 +65,7 @@ docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/man
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_rack_reconciliation.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_devices_from_workbook.py
 .venv/bin/python scripts/report_madison_shuffle_box_placements.py
-docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/migrate_madison_shuffle_boxes_from_elevations_fast.py
+docker compose exec -T -e MADISON_SHUFFLE_APPLY=1 netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_shuffle_containment_from_elevations.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/sync_madison_power_ports_from_templates.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_apdu11450me_pdus.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_power_handoff_points.py
@@ -74,8 +74,6 @@ docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/man
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_nvl72_internal_busbars.py
 .venv/bin/python scripts/report_madison_fiber_bom.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "script='/opt/netbox/netbox/scripts/seed_madison_fiber_bom_plan.py'; exec(open(script).read(), {'__name__': '__main__', '__file__': script})"
-docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "script='/opt/netbox/netbox/scripts/seed_madison_fabric_endpoint_units.py'; exec(open(script).read(), {'__name__': '__main__', '__file__': script})"
-docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_shuffle_full_cassette_capacity.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "script='/opt/netbox/netbox/scripts/seed_madison_fabric_endpoint_units.py'; exec(open(script).read(), {'__name__': '__main__', '__file__': script})"
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/report_madison_fiber_path_resolution.py
 docker compose exec -T netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < scripts/seed_madison_fiber_paths_from_resolution.py
@@ -124,14 +122,12 @@ placements from the row-elevation labels. A label such as
 14 populated cassette positions, logical shuffle-box number `8`, NIC group `3`,
 and side `A`.
 
-`migrate_madison_shuffle_boxes_from_elevations_fast.py` corrects the physical
-shuffle hierarchy from the elevation manifest: each workbook shuffle label
-becomes a racked 1RU shuffle box, every box gets three tray bays, every tray gets
-six cassette bays, and populated cassette devices with four front MPOs and four
-rear MPOs are created under those trays. It also removes the stale
-one-box-per-rack hierarchy and deletes plant-graph endpoint objects tied to the placeholder
-shuffle cassette devices; rerun `seed_madison_fabric_endpoint_units.py`
-afterward.
+`seed_madison_shuffle_containment_from_elevations.py` applies the physical
+shuffle containment from the elevation manifest: each workbook shuffle label
+becomes a racked 1RU shuffle box with the populated cassette devices parented
+under the box. The script is dry-run by default and applies only with
+`MADISON_SHUFFLE_APPLY=1`; rerun `seed_madison_fabric_endpoint_units.py` after
+changing shuffle containment.
 
 `sync_madison_power_ports_from_templates.py` creates or updates concrete
 NetBox power ports on the instantiated MAD-1 devices from their device-type
@@ -161,37 +157,32 @@ busbar per NVL72 rack. Each busbar attaches the eight power-shelf
 `busbar-output-1` ports as source attachments and the GB300 compute-tray,
 NVLink-switch, and `SN2201_M` busbar ports as load attachments.
 
-`report_madison_fiber_bom.py` parses `Nscale NC 18k Fiber BOM v1.4.xlsx` and
-writes a normalized Madison fiber BOM manifest under `data/generated/`. The
+`report_madison_fiber_bom.py` parses the Madison fiber BOM workbook selected
+from `data/source/` or `MADISON_FIBER_BOM_WORKBOOK` and writes a normalized
+Madison fiber BOM manifest under `data/generated/`. The
 manifest separates BOM lots for node-to-shuffle, shuffle-to-leaf,
 shuffle-to-spine, node-to-leaf, leaf-to-spine, and material alignment rows.
 
 `seed_madison_fiber_bom_plan.py` stages the normalized BOM in the
-`netbox_plant_graph` plugin planning layer. It creates the `MAD-1 RoCE Fabric`,
+`netbox_plant_graph` plugin planning layer. It creates the `GS001 RoCE Fabric`,
 four fabric planes, reusable MPO8 assembly/breakout templates for 96f, 72f,
-64f, and single-MPO patch assemblies, plus one planned PlantNode BOM lot per
-manifest row. Native NetBox `Cable` objects are intentionally deferred until
-exact per-device/per-cassette terminations are resolved.
+64f, and single-MPO patch assemblies, plus one planned `FabricNode` BOM lot per
+manifest row. Native NetBox `Cable` objects are intentionally avoided for
+modeled RoCE fabric paths.
 
 `seed_madison_fabric_endpoint_units.py` creates the plugin graph endpoint
-surface needed for fiber worksheet resolution. It creates PlantNodes for MAD-1
-OSFP-bearing active devices and passive MPO devices, TerminationPoints for OSFP
-interfaces plus cassette/panel front/rear MPO ports, and AttachmentUnits that
-expand each 800G OSFP into two MPO logical slices while preserving each passive
-MPO as one passive group.
-
-`seed_madison_shuffle_full_cassette_capacity.py` fills every empty cassette bay
-under the Madison shuffle boxes so all 18 physical cassette positions are
-addressable. The corrected fiber worksheet references the full 18-position box
-capacity, even where row-elevation labels carry smaller leading numbers.
+surface needed for fiber worksheet resolution. It creates `FabricNode`,
+`Endpoint`, `ConnectorPosition`, `OpticalLane`, and cassette `TransferMap`
+objects for OSFP-bearing active devices and passive MPO cassette devices.
 
 `report_madison_fiber_path_resolution.py` resolves the corrected one-SU fiber
 worksheet pattern against instantiated MAD-1 GB300 trays, BE leaf switches,
-Plant Graph attachment units, and candidate shuffle boxes. The generated CSV
+plugin graph endpoints, and candidate shuffle boxes. The generated CSV
 records which rows are fully resolvable and which rows are blocked by the
 remaining worksheet-to-elevation shuffle-box crosswalk ambiguity.
 
-`seed_madison_fiber_paths_from_resolution.py` creates Plant Graph `CoarseEdge`
-and `FineEdge` rows for the unambiguous fiber worksheet paths only. It currently
-stamps GB300-to-shuffle and shuffle-to-leaf MPO8 graph edges for rows whose
-worksheet shuffle-box number maps to exactly one physical shuffle box.
+`seed_madison_fiber_paths_from_resolution.py` creates plugin-native
+`CableAssembly`, `FiberSegment`, `FiberStrand`, and `StrandTermination` rows for
+the unambiguous fiber worksheet paths only. It currently stamps GB300-to-shuffle
+and shuffle-to-leaf MPO8 paths for rows whose worksheet shuffle-box number maps
+to exactly one physical shuffle box.

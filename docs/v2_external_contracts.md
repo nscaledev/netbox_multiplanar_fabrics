@@ -1,6 +1,6 @@
 # V2 External Automation Contracts
 
-Contract Date: `2026-05-22`
+Contract Date: `2026-05-24`
 
 This document defines which V2 surfaces external scripts and operators may rely
 on. Anything not named here is an implementation detail, even if it is reachable
@@ -146,6 +146,11 @@ Resource catalog:
 | `nodes` | `FabricNode` |
 | `endpoints` | `Endpoint` |
 | `connector-positions` | `ConnectorPosition` |
+| `transceiver-profiles` | `TransceiverProfile` |
+| `transceiver-profile-module-types` | `TransceiverProfileModuleType` |
+| `transceiver-connector-profiles` | `TransceiverConnectorProfile` |
+| `transceiver-lane-profiles` | `TransceiverLaneProfile` |
+| `transceiver-connectors` | `TransceiverConnector` |
 | `transport-channels` | `TransportChannel` |
 | `transport-channel-position-maps` | `TransportChannelPositionMap` |
 | `fiber-segments` | `FiberSegment` |
@@ -178,6 +183,10 @@ curl -H "Authorization: Token $NETBOX_TOKEN" \
 Direct registry writes are supported by NetBox permissions, but they are not the
 preferred contract for building topology graphs. Use stamp execution for whole
 fabric scaffolds and import/reconcile for repeatable script-fed updates.
+Transceiver registry resources are intended to be safe read surfaces for
+automation; writes are supported, but bulk module/profile/connector binding
+should prefer V2.5 stamping or `transceiver_assignment` import rows so NetBox
+module inventory and plugin connector bindings stay synchronized.
 
 ### REST Architecture Workspace Endpoints
 
@@ -251,7 +260,10 @@ is stable and matches `OperationalImpactReport.as_dict()`:
 
 Nested entries are JSON objects owned by the operational-impact report schema.
 Automation may read documented IDs and severity fields, but should tolerate
-additional nested fields.
+additional nested fields. OSFP-unseat reports use `interface_id` selectors
+today and may include plugin `TransceiverConnector` object references in
+`scenario`, `simulated_components`, matched components, and hierarchy nodes
+when the selected interface has an installed module/profile binding.
 
 | Method | Path | Required target field |
 | --- | --- | --- |
@@ -446,6 +458,7 @@ they have production Madison soak time:
 - `transport_channel`
 - `transport_channel_position_map`
 - `strand_termination`
+- `transceiver_assignment`
 
 See `docs/v2_import_reconciliation.md` for JSON item shapes.
 

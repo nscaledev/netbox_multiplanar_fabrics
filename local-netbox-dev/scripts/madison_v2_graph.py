@@ -37,6 +37,9 @@ from netbox_plant_graph.services.architecture import (
     ensure_roce_4plane_shuffle_architecture,
     shuffle_2x2_transfer_position_pairs,
 )
+from netbox_plant_graph.services.transceivers import bind_transceiver_for_osfp_endpoint
+
+from madison_nvl72_appliance import device_effective_rack
 
 
 MAD_SITE_SLUG = 'gs001'
@@ -219,6 +222,7 @@ def node_kind_for(device: Device) -> str:
 
 
 def ensure_device_node(fabric: Fabric, device: Device, *, marker: str, counters: Counter | None = None) -> FabricNode:
+    rack = device_effective_rack(device)
     node, created = FabricNode.objects.update_or_create(
         fabric=fabric,
         address=device.name,
@@ -231,7 +235,7 @@ def ensure_device_node(fabric: Fabric, device: Device, *, marker: str, counters:
                 'modeled_status': 'planned',
                 'device_type_slug': device.device_type.slug,
                 'role_slug': device.role.slug if device.role_id else '',
-                'rack': device.rack.name if device.rack_id else '',
+                'rack': rack.name if rack is not None else '',
             },
             **source_fields(device),
         },
@@ -500,6 +504,7 @@ def ensure_osfp_interface_surface(
         metadata={'netbox_interface_type': interface.type},
         counters=counters,
     )
+    mpo_endpoints = {}
     for mpo_index in (1, 2):
         mpo = ensure_endpoint(
             fabric,
@@ -514,8 +519,44 @@ def ensure_osfp_interface_surface(
             metadata={'mpo_index': mpo_index},
             counters=counters,
         )
+        mpo_endpoints[mpo_index] = mpo
         ensure_optical_lanes(fabric, osfp, mpo, mpo_index=mpo_index, marker=marker, counters=counters)
+    binding = bind_transceiver_for_osfp_endpoint(
+        endpoint=osfp,
+        mpo_endpoints=mpo_endpoints,
+        module_type_part_number=transceiver_module_part_number_for_interface(interface),
+        role_hint=transceiver_role_hint_for_interface(interface),
+        create_module=True,
+    )
+    if counters is not None:
+        counters[f'transceiver_bindings_{binding["status"]}'] += 1
+        for key, values in binding.get('created', {}).items():
+            counters[f'transceiver_{key}_created'] += len(values)
     return osfp
+
+
+def transceiver_role_hint_for_interface(interface: Interface) -> str:
+    role_slug = interface.device.role.slug if interface.device.role_id else ''
+    device_type_slug = interface.device.device_type.slug
+    if device_type_slug == 'gb300ct':
+        return 'gb300_compute_osfp'
+    if device_type_slug == 'sn5610':
+        if role_slug == 'be-leaf-switch':
+            return 'backend_leaf_osfp'
+        if role_slug == 'be-spine-switch':
+            return 'backend_spine_osfp'
+    return role_slug
+
+
+def transceiver_module_part_number_for_interface(interface: Interface) -> str | None:
+    device_type_slug = interface.device.device_type.slug
+    if device_type_slug == 'gb300ct':
+        return 'MMS4X00-NM'
+    if device_type_slug == 'sn5610':
+        return 'MMS4X00-NM'
+    if device_type_slug == 'sn5750x1200':
+        return 'MMS4A00-XM'
+    return None
 
 
 def ensure_cassette_surface(

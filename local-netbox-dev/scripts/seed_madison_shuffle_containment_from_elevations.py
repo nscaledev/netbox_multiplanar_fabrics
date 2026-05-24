@@ -35,7 +35,7 @@ CASSETTE_TYPE_SLUG = 'shuffle-cassette-2x2-mpo'
 ROW_ID_TAG_PREFIX = 'nscale-row-id-'
 SU_TAG_PREFIX = 'nv_su_'
 
-SOURCE_MARKER = 'madison_shuffle_flattened_containment_v1'
+SOURCE_MARKER = 'madison_shuffle_flattened_containment'
 SOURCE_MARKER_BEGIN = '<!-- madison-shuffle-flattened-containment:start -->'
 SOURCE_MARKER_END = '<!-- madison-shuffle-flattened-containment:end -->'
 

@@ -6,6 +6,7 @@ from dcim.models import Site
 from netbox_plant_graph.models import (
     FabricArchitecture,
     OnboardingDesignItem,
+    OnboardingExecutionStage,
     OnboardingPlan,
     OnboardingPrerequisite,
     OnboardingSourceArtifact,
@@ -198,5 +199,77 @@ class OnboardingWorkspaceAPITestCase(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Onboarding Workspace')
+        self.assertContains(response, 'Next action')
+        self.assertContains(response, 'Sources: active')
+        self.assertContains(response, 'Attach source artifacts')
         self.assertContains(response, 'Attach Source Artifact')
         self.assertContains(response, 'Generate Plan')
+
+    def test_workspace_detail_renders_prerequisite_grouped_counts(self):
+        OnboardingPrerequisite.objects.create(
+            workspace=self.workspace,
+            requirement_key='site:target',
+            object_model='dcim.site',
+            status='open',
+        )
+        OnboardingPrerequisite.objects.create(
+            workspace=self.workspace,
+            requirement_key='architecture:target',
+            object_model='netbox_plant_graph.fabricarchitecture',
+            status='blocked',
+        )
+        OnboardingPrerequisite.objects.create(
+            workspace=self.workspace,
+            requirement_key='tenant:target',
+            object_model='tenancy.tenant',
+            status='resolved',
+            resolution_mode='not_required',
+        )
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:onboardingworkspace', kwargs={'pk': self.workspace.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Unresolved Prerequisites')
+        self.assertContains(response, 'Open 1')
+        self.assertContains(response, 'Blocked 1')
+        self.assertContains(response, 'Resolved 1')
+        self.assertContains(response, '2 unresolved or blocking prerequisites')
+
+    def test_workspace_detail_renders_plan_stage_and_readiness_summary(self):
+        plan = OnboardingPlan.objects.create(
+            workspace=self.workspace,
+            status='applied',
+            plan_hash='stage-readiness-plan',
+            workspace_revision='stale-revision',
+            import_plan={'summary': {'create': 2, 'update': 1, 'skip': 0, 'conflict': 0}},
+        )
+        self.workspace.current_plan = plan
+        self.workspace.status = 'applied'
+        self.workspace.readiness_summary = {
+            'status': 'blocked',
+            'reason': 'Topology integrity audit has blocking findings.',
+            'blocking_count': 2,
+            'finding_count': 3,
+            'grouped_summary': {'path_blocking_count': 2},
+        }
+        self.workspace.save(update_fields=('current_plan', 'status', 'readiness_summary'))
+        OnboardingExecutionStage.objects.create(
+            plan=plan,
+            stage_key='import',
+            stage_kind='import',
+            status='failed',
+            result={'message': 'Import conflict'},
+        )
+
+        response = self.client.get(
+            reverse('plugins:netbox_plant_graph:onboardingworkspace', kwargs={'pk': self.workspace.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Current Plan Stages')
+        self.assertContains(response, 'Stage Attention')
+        self.assertContains(response, 'Import conflict')
+        self.assertContains(response, 'Readiness & Handoff')
+        self.assertContains(response, 'Path Blocking Count 2')

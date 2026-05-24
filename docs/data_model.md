@@ -105,15 +105,20 @@ used by import preview/apply.
 3. `FabricNode`
 4. `Endpoint`
 5. `ConnectorPosition`
-6. `TransportChannel`
-7. `TransportChannelPositionMap`
-8. `CableAssembly`
-9. `FiberSegment`
-10. `FiberStrand`
-11. `StrandTermination`
-12. `OpticalLane`
-13. `TransferMap`
-14. `PathIntent`
+6. `TransceiverProfile`
+7. `TransceiverProfileModuleType`
+8. `TransceiverConnectorProfile`
+9. `TransceiverLaneProfile`
+10. `TransceiverConnector`
+11. `TransportChannel`
+12. `TransportChannelPositionMap`
+13. `CableAssembly`
+14. `FiberSegment`
+15. `FiberStrand`
+16. `StrandTermination`
+17. `OpticalLane`
+18. `TransferMap`
+19. `PathIntent`
 
 Purpose:
 
@@ -159,20 +164,24 @@ V2 uses NetBox object references where appropriate:
 3. `Fabric.scope_location` -> `dcim.Location` (optional)
 4. `FabricNode.source` -> Generic FK (`source_type` + `source_id`)
 5. `Endpoint.source` -> Generic FK (`source_type` + `source_id`)
-6. `TransportChannel.source_subinterface` -> `dcim.Interface` (optional)
-7. `CableAssembly.site` and `FiberStrand.cable_site` -> `dcim.Site`
-8. `AuditEvent.actor`, `SuppressionRule.created_by/approved_by`,
+6. `TransceiverProfileModuleType.module_type` -> NetBox `dcim.ModuleType`
+7. `TransceiverConnector.module` -> NetBox `dcim.Module`
+8. `TransceiverConnector.endpoint` -> plugin `Endpoint` representing the
+   installed optic connector face in the fabric graph
+9. `TransportChannel.source_subinterface` -> `dcim.Interface` (optional)
+10. `CableAssembly.site` and `FiberStrand.cable_site` -> `dcim.Site`
+11. `AuditEvent.actor`, `SuppressionRule.created_by/approved_by`,
    `OperationRun.initiated_by` -> auth user model
-9. `ArchitectureWorkspace.created_by/owner`,
+12. `ArchitectureWorkspace.created_by/owner`,
    `ArchitectureValidationRun.executed_by`, and
    `ArchitecturePublishPlan.generated_by/approved_by` -> auth user model
-10. `ArchitectureWorkspace.base_architecture/published_architecture` ->
+13. `ArchitectureWorkspace.base_architecture/published_architecture` ->
    `FabricArchitecture`
-11. `OnboardingWorkspace.site/location/tenant` -> NetBox `Site`, `Location`,
+14. `OnboardingWorkspace.site/location/tenant` -> NetBox `Site`, `Location`,
    and `Tenant` scope
-12. `OnboardingWorkspace.created_by/owner`,
+15. `OnboardingWorkspace.created_by/owner`,
    `OnboardingPlan.generated_by/approved_by` -> auth user model
-13. `OnboardingDesignItem.planned_object_type`,
+16. `OnboardingDesignItem.planned_object_type`,
    `OnboardingPrerequisite.resolved_object_type`, and
    `OnboardingObjectLink.object_type` -> content type anchors for staged,
    resolved, and applied objects
@@ -198,6 +207,11 @@ while anchoring select objects back to NetBox inventory as needed.
    - `site` + `cable_id` (unique per site),
    - manufacturer / serial / model / description,
    - optional `parent_cable` for trunk -> child jumper hierarchy.
+   Architecture definitions may also declare cable-profile catalogs that
+   describe allowed physical assembly profiles before installed cable rows
+   exist. The GB300 shuffle architecture declares 96f and 72f MPO8
+   unpinned/unpinned trunk profiles; concrete site designs instantiate those
+   profiles as `CableAssembly` rows.
 2. `FiberSegment` connects two endpoint containers (`a_endpoint`, `b_endpoint`)
    inside one fabric.
 3. `FiberStrand` indexes individual strands inside a segment, and references a
@@ -211,7 +225,58 @@ while anchoring select objects back to NetBox inventory as needed.
 
 This is the normalized strand/MPO-position join table used by resolver logic.
 
-### 4.3 Transport channel semantics
+### 4.3 Transceiver semantics
+
+V2 models installed optics as a hybrid of NetBox-native module inventory and
+plugin-owned optical semantics:
+
+1. NetBox `ModuleBayTemplate` / `ModuleBay` represents the physical cage or
+   slot, such as a GB300 OSFP cage or switch OSFP cage.
+2. NetBox `ModuleType` / `Module` represents the installed pluggable optic.
+3. `TransceiverProfile` describes the plugin-owned operating mode and optical
+   capability of that module, including form factor, media type, aggregate
+   rate, channel count, channel rate, and wavelength plan.
+4. `TransceiverProfileModuleType` maps NetBox module types to plugin
+   transceiver profiles. This lets NetBox handle inventory while the plugin
+   owns exact 4x200G/2DR4 semantics that NetBox 4.2 cannot express.
+5. `TransceiverConnectorProfile` describes optic connector faces, including
+   connector family, position count, polish, pinning, and key orientation.
+6. `TransceiverLaneProfile` is the normalized operating-mode matrix from
+   transceiver-local channel/lane to connector position. For the GB300 OSFP
+   dual-MPO 4x200G mode, MPO1 positions `1,12,2,11` are channel 1, MPO1
+   positions `3,10,4,9` are channel 2, and the same position groups on MPO2 are
+   channels 3 and 4.
+7. `TransceiverConnector` binds an installed NetBox `Module` connector face to
+   the plugin `Endpoint` representing the actual MPO/LC connector face in the
+   fabric graph. It snapshots connector family, position count, polish, and
+   pinning from the selected connector profile.
+
+This keeps NetBox responsible for equipment inventory and module occupancy,
+while the plugin owns every semantic that NetBox cannot represent exactly:
+OSFP 4x200G operating mode, dual-MPO face geometry, per-channel MPO position
+mapping, connector polish, and fabric-graph anchoring.
+
+The built-in profile catalog is seeded by
+`services.transceivers.ensure_builtin_transceiver_profiles()`. It includes the
+current Madison/NVL72 OSFP/QSFP optic families, including the default
+`osfp-dual-mpo12-apc-800g-4x200g-dr4` profile used by GB300 tray, backend leaf,
+and backend spine OSFP endpoints when no more specific profile is supplied.
+
+Current workflow integration:
+
+1. V2.5 stamping can create/reuse NetBox `ModuleBay` and `Module` rows for
+   created OSFP endpoints, select a profile from explicit parameters,
+   role-specific module-type hints, profile mappings, or defaults, and create
+   `TransceiverConnector` rows for the stamped child MPO endpoints.
+2. Import reconciliation supports `transceiver_assignment` rows for dry-run and
+   exact-plan apply of the same module/profile/connector binding.
+3. Interface Fanout Trace displays installed module, module type, selected
+   transceiver profile, and connector bindings for the selected interface.
+4. OSFP-unseat impact modeling still accepts NetBox interface selections for
+   operator ergonomics, but includes any bound `TransceiverConnector` faces as
+   failed components when bindings exist.
+
+### 4.4 Transport channel semantics
 
 `TransportChannel` represents a logical 200gbps transport channel on a
 fabric endpoint. In the GB300/OSFP architecture this is the plugin-side
@@ -245,7 +310,7 @@ children and four 200gbps transport channels:
 
 MPO positions 5-8 are dark in this model.
 
-### 4.4 Optical lane semantics (endpoint-local)
+### 4.5 Optical lane semantics (endpoint-local)
 
 `OpticalLane` is a transceiver-local signaling construct, not an end-to-end
 path row. It carries:
@@ -259,7 +324,7 @@ path row. It carries:
 
 This allows distinct wavelengths to coexist on the same local MPO position.
 
-### 4.5 Passive/internal remap semantics
+### 4.6 Passive/internal remap semantics
 
 `TransferMap` maps one connector position to another within a fabric graph
 context and supports both:
@@ -276,7 +341,31 @@ The seeded `shuffle_2x2` transfer pattern models a true cassette transform:
 each front MPO fans out across both rear MPOs and applies the key-down roll on
 the rear side (`dst_position = 13 - base_dst_position` for MPO12).
 
-### 4.6 Path intent semantics
+The built-in `roce-4-plane-gb300-2x2-shuffle` architecture uses that transform
+in two places:
+
+1. GB300 compute tray OSFP/MPO endpoints to backend leaf OSFP/MPO endpoints.
+2. Backend leaf OSFP/MPO endpoints to backend spine OSFP/MPO endpoints through
+   a spine-side shuffle cassette.
+
+The leaf-to-spine segment is explicit in the architecture role taxonomy:
+`spine_switch`, `spine_osfp`, and `spine_mpo` represent the active spine side;
+`spine_shuffle_cassette`, `spine_shuffle_rear_mpo`, and
+`spine_shuffle_front_mpo` represent the passive spine-side cassette. The
+`backend_leaf_spine_shuffle` allocation rule records the physical intent:
+leaf-side structured trunks terminate directly on the cassette rear MPOs, the
+cassette applies the 2x2 key-down-roll transform, and short MPO jumpers connect
+the cassette front MPOs to spine OSFP/MPO endpoints.
+
+Physical trunk profile candidates are now part of the same architecture
+contract. `cable_profiles` defines the observed 96f and 72f trunk assembly
+families, while `cable_profile_assignments` binds those profiles to the
+GB300-to-leaf and leaf-to-spine structured-trunk segments. This keeps the
+architecture honest about supported cable-plant geometry without forcing every
+greenfield model to select exact installed cable IDs before the physical plant
+design is finalized.
+
+### 4.7 Path intent semantics
 
 `PathIntent` captures desired source/destination channel or endpoint intent plus
 a `selector` JSON for intent metadata and targeting.
@@ -329,11 +418,20 @@ The V2 model enforces several critical invariants:
 8. `ConnectorPosition`: unique (`endpoint`, `position_number`)
 9. `TransportChannel`: unique (`endpoint`, `channel_index`)
 10. `TransportChannelPositionMap`: unique (`channel`, `mpo_position`)
-11. `CableAssembly`: unique (`site`, `cable_id`)
-12. `FiberStrand`: unique (`segment`, `strand_index`)
-13. `StrandTermination`: unique (`strand`, `mpo_position`) and unique
+11. `TransceiverProfile`: unique (`slug`)
+12. `TransceiverProfileModuleType`: unique (`profile`, `module_type`,
+    `role_hint`)
+13. `TransceiverConnectorProfile`: unique (`profile`, `connector_index`) and
+    unique (`profile`, `name`)
+14. `TransceiverLaneProfile`: unique (`connector_profile`, `channel_index`,
+    `direction`, `lane_index`) and unique (`connector_profile`, `direction`,
+    `mpo_position`)
+15. `TransceiverConnector`: unique (`module`, `connector_profile`)
+16. `CableAssembly`: unique (`site`, `cable_id`)
+17. `FiberStrand`: unique (`segment`, `strand_index`)
+18. `StrandTermination`: unique (`strand`, `mpo_position`) and unique
     (`mpo_position`) for single occupancy
-14. `OpticalLane`: unique (`endpoint`, `lane_index`, `direction`)
+19. `OpticalLane`: unique (`endpoint`, `lane_index`, `direction`)
 
 Additional model-level validation includes:
 
@@ -346,11 +444,15 @@ Additional model-level validation includes:
 6. `TransportChannelPositionMap` endpoint/MPO anchors must be
    fabric-consistent, and parented MPO endpoints must belong to the channel
    endpoint.
-7. `TransferMap` requires exactly one owner (`owner_node` xor `owner_segment`)
+7. `TransceiverLaneProfile.mpo_position` must fit within its connector
+   profile's position count.
+8. `TransceiverConnector.endpoint` geometry must match the selected connector
+   profile.
+9. `TransferMap` requires exactly one owner (`owner_node` xor `owner_segment`)
    and distinct source/destination positions.
-8. `FiberStrand` `cable_site` and `cable_id` must be provided together, and the
+10. `FiberStrand` `cable_site` and `cable_id` must be provided together, and the
    referenced cable assembly must exist.
-9. `SuppressionRule` plane/lane scope must align to the same fabric.
+11. `SuppressionRule` plane/lane scope must align to the same fabric.
 
 Indexes optimized for lane lookup:
 
@@ -377,6 +479,10 @@ The operator-facing stamp path is V2.5:
    persists a `StampRun`.
 3. Saved `StampRun` pages expose retry classification and rollback
    preview/apply actions through the V2.5 service layer.
+4. When transceiver creation/binding is enabled or inferable, the apply result
+   records `result.transceiver_bindings` plus managed
+   `transceiver_connectors`, NetBox module-bay IDs, and NetBox module IDs so
+   retry and rollback can reason about installed optics.
 
 ### 7.2 Policy suppressions and disjointness exceptions
 
@@ -479,32 +585,41 @@ Key constrained enums used by model fields:
    `subconnector`
 5. `ConnectorKindChoices`: `osfp`, `qsfp-dd`, `mpo-8`, `mpo-12`, `mpo-16`,
    `mpo-24`, `lc`, `virtual`, `other`
-6. `SegmentKindChoices`: `jumper`, `trunk`, `internal`, `external_plant`
-7. `LaneDirectionChoices`: `send`, `receive`
-8. `TransferMapKindChoices`: `identity`, `polarity_swap`, `shuffle_2x2`,
+6. `TransceiverProfileStatusChoices`: `draft`, `active`, `deprecated`,
+   `retired`
+7. `TransceiverFormFactorChoices`: `osfp112`, `osfp224`, `qsfp112`,
+   `qsfpdd`, `qsfp28`, `sfp`, `other`
+8. `TransceiverMediaTypeChoices`: `dr1`, `dr4`, `2dr4`, `fr4`, `sr4`, `dac`,
+   `aec`, `other`
+9. `ConnectorPolishChoices`: `apc`, `upc`, `not_applicable`, `not_specified`
+10. `ConnectorPinningChoices`: `pinned`, `unpinned`, `not_applicable`,
+    `not_specified`
+11. `SegmentKindChoices`: `jumper`, `trunk`, `internal`, `external_plant`
+12. `LaneDirectionChoices`: `send`, `receive`
+13. `TransferMapKindChoices`: `identity`, `polarity_swap`, `shuffle_2x2`,
    `shuffle_1x4`, `shuffle_2x2_mpo24`, `shuffle_4x4`, `direct_attach`,
    `polarity_type_b`, `polarity_type_c`, `shuffle_nxm`, `stagger`, `breakout`,
    `custom`
-9. `StampRunStatusChoices`: `pending`, `running`, `completed`, `failed`
-10. `SuppressionStatusChoices`: `pending`, `active`, `revoked`, `expired`
-11. `AuditEventTypeChoices`: `stamp`, `path_resolve`, `suppression_change`,
+14. `StampRunStatusChoices`: `pending`, `running`, `completed`, `failed`
+15. `SuppressionStatusChoices`: `pending`, `active`, `revoked`, `expired`
+16. `AuditEventTypeChoices`: `stamp`, `path_resolve`, `suppression_change`,
     `operation_run`, `policy_eval`
-12. `OperationProfileChoices`: `generic_roce`, `madison_default`,
+17. `OperationProfileChoices`: `generic_roce`, `madison_default`,
     `topology_integrity`, `operational_impact`, `import_reconciliation`
-13. `OperationRunStatusChoices`: `pending`, `running`, `completed`, `failed`
-14. `ArchitectureWorkspaceStatusChoices`: `draft`, `collecting_sources`,
+18. `OperationRunStatusChoices`: `pending`, `running`, `completed`, `failed`
+19. `ArchitectureWorkspaceStatusChoices`: `draft`, `collecting_sources`,
     `normalizing`, `validating`, `blocked`, `ready`, `awaiting_approval`,
     `approved`, `publishing`, `published`, `archived`, `cancelled`
-15. `ArchitectureWorkspaceKindChoices`: `new_blueprint`, `new_version`,
+20. `ArchitectureWorkspaceKindChoices`: `new_blueprint`, `new_version`,
     `revision`, `comparison`
-16. `ArchitectureSourceArtifactTypeChoices`: `blueprint_bundle`,
+21. `ArchitectureSourceArtifactTypeChoices`: `blueprint_bundle`,
     `schema_json`, `stamp_template`, `diagram`, `spreadsheet`, `api_payload`,
     `manual_entry`, `note`, `other`
-17. `ArchitectureSourceArtifactStatusChoices`: `received`, `normalized`,
+22. `ArchitectureSourceArtifactStatusChoices`: `received`, `normalized`,
     `failed`, `superseded`, `ignored`
-18. `ArchitectureComponentStatusChoices`: `pending`, `valid`, `warning`,
+23. `ArchitectureComponentStatusChoices`: `pending`, `valid`, `warning`,
     `conflict`, `ignored`
-19. `ArchitectureValidationStatusChoices`: `pending`, `passed`, `warning`,
+24. `ArchitectureValidationStatusChoices`: `pending`, `passed`, `warning`,
     `failed`
 20. `ArchitecturePublishPlanStatusChoices`: `generated`, `blocked`,
     `approved`, `publishing`, `published`, `failed`, `superseded`,
@@ -561,6 +676,8 @@ Those views render:
 
 `Interface Fanout Trace` starts from a NetBox device/interface pair and can
 render either expanded per-lane paths or consolidated 200gbps channel groups.
+It also shows the selected interface's module/transceiver context when a NetBox
+module bay named after the interface exists.
 `Path Query` starts from selected optical lanes and renders the resolved path in
 the same visual language.
 
@@ -583,9 +700,10 @@ exports JSON, and compares two saved reports.
 
 `Import Preview` supports paste/upload JSON dry-runs for plugin-native imports,
 including cable assemblies, strand-to-cable assignment, endpoints, transport
-channels, channel-position maps, strand terminations, and architecture
-blueprints. Applied and dry-run imports can be saved as `OperationRun`
-snapshots, exported as JSON, replayed, or applied from the exact saved plan.
+channels, channel-position maps, strand terminations, transceiver assignments,
+and architecture blueprints. Applied and dry-run imports can be saved as
+`OperationRun` snapshots, exported as JSON, replayed, or applied from the exact
+saved plan.
 
 ### 9.5 Architecture workspaces
 

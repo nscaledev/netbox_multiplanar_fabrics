@@ -22,7 +22,7 @@ from madison_v2_graph import cable_assembly_for_segment
 
 
 DEFAULT_PATH_KEY = 'madison-ready-sus-leaf16-four-plane-lane-aware-v2'
-DEFAULT_FABRIC_SLUGS = ('gs001-roce-fabric', 'mad-1-roce-fabric')
+DEFAULT_FABRIC_SLUGS = ('gs001-roce-fabric',)
 APPLY_ENV = 'MADISON_FIBER_CABLE_ASSEMBLY_APPLY'
 
 

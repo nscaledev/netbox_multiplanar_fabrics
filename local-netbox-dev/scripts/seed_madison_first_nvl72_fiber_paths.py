@@ -9,7 +9,7 @@ import sys
 
 from django.db import transaction
 
-from dcim.models import Device
+from dcim.models import Device, Rack
 from netbox_plant_graph.models import FiberSegment
 
 
@@ -26,7 +26,13 @@ from madison_v2_graph import (  # noqa: E402
     delete_marked_connectivity,
     ensure_fabric,
     ensure_surfaces_for_devices,
+    shuffle_group_mpos,
     stamp_path_segments,
+    source_position_plane_numbers_for_shuffle_front,
+)
+from madison_nvl72_appliance import (  # noqa: E402
+    device_effective_position_sort_key,
+    device_effective_rack_filter,
 )
 
 
@@ -70,20 +76,21 @@ def read_pattern_rows() -> list[dict[str, str]]:
 
 
 def tray_sort_key(device: Device) -> tuple[int, str]:
-    position = getattr(device, 'position', None)
-    return (int(position or 0), device.name)
+    position, name = device_effective_position_sort_key(device)
+    return (int(position or 0), name)
 
 
 def target_gb300_trays() -> list[Device]:
+    rack = Rack.objects.get(site__slug=MAD_SITE_SLUG, name=TARGET_NVL72_RACK)
     trays = list(
         Device.objects.filter(
             site__slug=MAD_SITE_SLUG,
-            rack__name=TARGET_NVL72_RACK,
             device_type__slug='gb300ct',
             local_context_data__madison_active_endpoint_test_subset=True,
         )
-        .select_related('rack')
-        .order_by('position', 'name')
+        .filter(device_effective_rack_filter(rack))
+        .select_related('rack', 'parent_bay__device__rack')
+        .order_by('name')
     )
     if len(trays) != 18:
         raise RuntimeError(f'Expected 18 GB300 compute trays in rack {TARGET_NVL72_RACK}; found {len(trays)}.')
@@ -91,11 +98,13 @@ def target_gb300_trays() -> list[Device]:
 
 
 def cassettes_for_box(box_name: str) -> list[Device]:
-    pattern = re.compile(r'-cassette-(?P<tray>\d+)\.(?P<slot>\d+)$')
+    box_name = normalize_shuffle_box_name(box_name)
+    cassette_prefix = f'{box_name[:-3]}-sbc-' if box_name.endswith('-sb') else f'{box_name}-sbc-'
+    pattern = re.compile(r'-sbc-(?P<tray>\d+)\.(?P<slot>\d+)$')
     cassettes = list(
         Device.objects.filter(
             site__slug=MAD_SITE_SLUG,
-            name__startswith=f'{box_name}-cassette-',
+            name__startswith=cassette_prefix,
             device_type__slug='shuffle-cassette-2x2-mpo',
         ).order_by('name')
     )
@@ -110,88 +119,193 @@ def cassettes_for_box(box_name: str) -> list[Device]:
     )
 
 
+def normalize_device_name(name: str) -> str:
+    if name.startswith('mad1-'):
+        return f'gs001-{name[len("mad1-"):]}'
+    return name
+
+
+def normalize_shuffle_box_name(name: str) -> str:
+    name = normalize_device_name(name)
+    if name.endswith('-shuffle-box'):
+        return f'{name[:-len("-shuffle-box")]}-sb'
+    return name
+
+
 def endpoint(device_name: str, termination: str, ordinal: int) -> tuple[str, str, int]:
-    return (device_name, termination, ordinal)
+    return (normalize_device_name(device_name), termination, ordinal)
+
+
+def normalized_leaf_devices(value: str) -> list[str]:
+    return [normalize_device_name(device_name) for device_name in value.split('|')]
+
+
+def cassette_mpo_sequence(cassettes: list[Device]) -> list[dict]:
+    rows = []
+    for cassette_index, cassette in enumerate(cassettes, start=1):
+        for mpo in range(1, 5):
+            rows.append(
+                {
+                    'cassette_index': cassette_index,
+                    'mpo': mpo,
+                    'device': cassette,
+                    'front': endpoint(cassette.name, f'front-mpo-{mpo:02d}', 1),
+                    'rear': endpoint(cassette.name, f'rear-mpo-{mpo:02d}', 1),
+                }
+            )
+    return rows
+
+
+def leaf_endpoint_sequence(pattern_row: dict[str, str]) -> list[dict]:
+    planes = [int(value) for value in pattern_row['planes'].split(',')]
+    leaf_devices = normalized_leaf_devices(pattern_row['leaf_devices'])
+    if len(planes) != 2 or len(leaf_devices) != 2:
+        raise RuntimeError(f'Unexpected plane/leaf pair in pattern row: {pattern_row}')
+    rows = []
+    for cage in range(1, 33):
+        rows.extend(
+            [
+                {'plane': planes[0], 'device_name': leaf_devices[0], 'interface': f'swp{cage}', 'mpo': 1},
+                {'plane': planes[1], 'device_name': leaf_devices[1], 'interface': f'swp{cage}', 'mpo': 1},
+                {'plane': planes[0], 'device_name': leaf_devices[0], 'interface': f'swp{cage}', 'mpo': 2},
+                {'plane': planes[1], 'device_name': leaf_devices[1], 'interface': f'swp{cage}', 'mpo': 2},
+            ]
+        )
+    return rows
+
+
+def plane_by_mpo_for_cassette(rows_by_cassette_mpo: dict[tuple[str, int], dict], cassette_name: str, mpo: int) -> int | None:
+    row = rows_by_cassette_mpo.get((cassette_name, int(mpo)))
+    if row is None:
+        return None
+    return int(row['leaf_row']['plane'])
+
+
+def source_position_plane_numbers(
+    *,
+    rows_by_cassette_mpo: dict[tuple[str, int], dict],
+    cassette_row: dict,
+    leaf_row: dict,
+) -> dict[int, int]:
+    cassette_name = cassette_row['device'].name
+    front_mpo = int(cassette_row['mpo'])
+    group_first_mpo, group_second_mpo = shuffle_group_mpos(front_mpo)
+    first_plane = plane_by_mpo_for_cassette(rows_by_cassette_mpo, cassette_name, group_first_mpo)
+    second_plane = plane_by_mpo_for_cassette(rows_by_cassette_mpo, cassette_name, group_second_mpo)
+    if first_plane is None:
+        first_plane = int(leaf_row['plane'])
+    if second_plane is None:
+        second_plane = int(leaf_row['plane'])
+    return source_position_plane_numbers_for_shuffle_front(
+        front_mpo=front_mpo,
+        first_plane=first_plane,
+        second_plane=second_plane,
+    )
 
 
 def pattern_policy_rows(pattern_rows: list[dict[str, str]], trays: list[Device]) -> list[dict]:
     segments = []
     for pattern_row in pattern_rows:
-        planes = [int(value) for value in pattern_row['planes'].split(',')]
-        leaf_devices = pattern_row['leaf_devices'].split('|')
-        if len(planes) != 2 or len(leaf_devices) != 2:
-            raise RuntimeError(f'Unexpected plane/leaf pair in pattern row: {pattern_row}')
-
         nic_index = int(pattern_row['nic_index_zero'])
         osfp_name = f'osfp{nic_index + 1}'
         gb_mpo = 1 if pattern_row['side'] == 'A' else 2
-        cassettes = cassettes_for_box(pattern_row['shuffle_18_box'])
+        shuffle_18_box = normalize_shuffle_box_name(pattern_row['shuffle_18_box'])
+        shuffle_14_box = normalize_shuffle_box_name(pattern_row['shuffle_14_box'])
+        cassettes = cassettes_for_box(shuffle_18_box)
         if len(cassettes) < len(trays):
             raise RuntimeError(
-                f"{pattern_row['shuffle_18_box']} has {len(cassettes)} cassettes; "
+                f"{shuffle_18_box} has {len(cassettes)} cassettes; "
                 f'{len(trays)} are required for the first NVL72 rack pass.'
             )
 
-        for tray_index, (tray, cassette) in enumerate(zip(trays, cassettes, strict=True), start=1):
-            for pair_index, (plane_number, leaf_device_name) in enumerate(zip(planes, leaf_devices, strict=True)):
-                lane_indexes = (
-                    tuple(ACTIVE_MPO_LANE_INDEXES[:4])
-                    if pair_index == 0
-                    else tuple(ACTIVE_MPO_LANE_INDEXES[4:])
-                )
-                cassette_mpo = pair_index + 1
-                leaf_interface = f'swp{tray_index}'
-                common = {
-                    'plane_number': plane_number,
-                    'lane_indexes': lane_indexes,
-                    'plane_membership_granularity': 'signal_lane',
-                    'cable_profile_name': 'madison-mpo8-smf-patch-lane-split',
-                }
-                metadata = {
-                    SOURCE_MARKER: True,
-                    'modeled_status': 'planned',
-                    'source_authority': 'Madison rack elevation worksheets',
-                    'policy': PATH_KEY,
-                    'su_tag': TARGET_SU_TAG,
-                    'gb300_rack': TARGET_NVL72_RACK,
-                    'gb300_device': tray.name,
-                    'gb300_tray_index': tray_index,
-                    'gb300_interface': osfp_name,
-                    'gb300_mpo': gb_mpo,
-                    'side': pattern_row['side'],
-                    'nic_index_zero': nic_index,
-                    'leaf_index_bottom_up': int(pattern_row['leaf_index_bottom_up']),
-                    'leaf_device': leaf_device_name,
-                    'leaf_interface': leaf_interface,
-                    'leaf_mpo': 1,
-                    'shuffle_18_box': pattern_row['shuffle_18_box'],
-                    'shuffle_14_box': pattern_row['shuffle_14_box'],
-                    'shuffle_cassette': cassette.name,
-                    'shuffle_mpo': cassette_mpo,
-                    'lane_indexes': list(lane_indexes),
-                }
-                segments.extend([
-                    {
-                        **common,
-                        'a': endpoint(tray.name, osfp_name, gb_mpo),
-                        'b': endpoint(cassette.name, f'front-mpo-{cassette_mpo:02d}', 1),
-                        'segment_role': 'gb300_to_shuffle_mpo12_active_lane_split',
-                        'metadata': {
-                            **metadata,
-                            'segment_kind': 'gb300_to_shuffle',
-                        },
+        cassette_rows = cassette_mpo_sequence(cassettes)
+        leaf_rows = leaf_endpoint_sequence(pattern_row)
+        sequence_rows = [
+            {
+                'tray_index': tray_index,
+                'tray': tray,
+                'cassette_row': cassette_row,
+                'leaf_row': leaf_row,
+            }
+            for tray_index, (tray, cassette_row, leaf_row) in enumerate(
+                zip(trays, cassette_rows[:len(trays)], leaf_rows[:len(trays)], strict=True),
+                start=1,
+            )
+        ]
+        rows_by_cassette_mpo = {
+            (row['cassette_row']['device'].name, int(row['cassette_row']['mpo'])): row
+            for row in sequence_rows
+        }
+
+        for row in sequence_rows:
+            tray_index = row['tray_index']
+            tray = row['tray']
+            cassette_row = row['cassette_row']
+            leaf_row = row['leaf_row']
+            cassette = cassette_row['device']
+            cassette_mpo = int(cassette_row['mpo'])
+            leaf_device_name = leaf_row['device_name']
+            leaf_interface = leaf_row['interface']
+            leaf_mpo = int(leaf_row['mpo'])
+            source_plane_map = source_position_plane_numbers(
+                rows_by_cassette_mpo=rows_by_cassette_mpo,
+                cassette_row=cassette_row,
+                leaf_row=leaf_row,
+            )
+            common = {
+                'lane_indexes': ACTIVE_MPO_LANE_INDEXES,
+                'plane_membership_granularity': 'signal_lane',
+                'cable_profile_name': 'madison-mpo8-smf-patch',
+            }
+            metadata = {
+                SOURCE_MARKER: True,
+                'modeled_status': 'planned',
+                'source_authority': 'Madison rack elevation worksheets',
+                'policy': PATH_KEY,
+                'su_tag': TARGET_SU_TAG,
+                'gb300_rack': TARGET_NVL72_RACK,
+                'gb300_device': tray.name,
+                'gb300_tray_index': tray_index,
+                'gb300_interface': osfp_name,
+                'gb300_mpo': gb_mpo,
+                'side': pattern_row['side'],
+                'nic_index_zero': nic_index,
+                'leaf_index_bottom_up': int(pattern_row['leaf_index_bottom_up']),
+                'leaf_device': leaf_device_name,
+                'leaf_interface': leaf_interface,
+                'leaf_mpo': leaf_mpo,
+                'shuffle_18_box': shuffle_18_box,
+                'shuffle_14_box': shuffle_14_box,
+                'shuffle_cassette': cassette.name,
+                'shuffle_cassette_index_in_box': cassette_row['cassette_index'],
+                'shuffle_mpo': cassette_mpo,
+                'lane_indexes': list(ACTIVE_MPO_LANE_INDEXES),
+            }
+            segments.extend([
+                {
+                    **common,
+                    'a': endpoint(tray.name, osfp_name, gb_mpo),
+                    'b': cassette_row['front'],
+                    'segment_role': 'gb300_to_shuffle_mpo8_jumper',
+                    'metadata': {
+                        **metadata,
+                        'segment_kind': 'gb300_to_shuffle',
+                        'position_plane_numbers': source_plane_map,
+                        'plane_assignment': 'per_position_from_2x2_shuffle_group',
                     },
-                    {
-                        **common,
-                        'a': endpoint(cassette.name, f'rear-mpo-{cassette_mpo:02d}', 1),
-                        'b': endpoint(leaf_device_name, leaf_interface, 1),
-                        'segment_role': 'shuffle_to_leaf_mpo12_active_lane_split',
-                        'metadata': {
-                            **metadata,
-                            'segment_kind': 'shuffle_to_leaf',
-                        },
+                },
+                {
+                    **common,
+                    'plane_number': int(leaf_row['plane']),
+                    'a': cassette_row['rear'],
+                    'b': endpoint(leaf_device_name, leaf_interface, leaf_mpo),
+                    'segment_role': 'shuffle_to_leaf_mpo8_jumper',
+                    'metadata': {
+                        **metadata,
+                        'segment_kind': 'shuffle_to_leaf',
                     },
-                ])
+                },
+            ])
     return segments
 
 
@@ -204,17 +318,16 @@ def print_dry_run(pattern_rows: list[dict[str, str]], trays: list[Device], segme
     print(f'pattern_rows={len(pattern_rows)}')
     print(f'leaf_devices={len({leaf for row in pattern_rows for leaf in row["leaf_devices"].split("|")})}')
     print(f'external_segments={len(segments)}')
-    print(f'expected_signal_lane_fine_edges={sum(len(segment["lane_indexes"]) for segment in segments)}')
+    print(f'expected_fiber_strands={sum(len(segment["lane_indexes"]) for segment in segments)}')
     print('policy:')
     print('  - side A uses GB300 MPO 1 and leaf planes 1/2')
     print('  - side B uses GB300 MPO 2 and leaf planes 3/4')
-    print('  - each side/plane pair splits MPO optical lanes as 0-3 for the lower plane and 4-7 for the upper plane')
-    print('  - first NVL72 tray index maps to leaf swp index and the corresponding 18-cassette shuffle box positions')
+    print('  - every source MPO is modeled as one 8-strand MPO-to-MPO jumper to one cassette front MPO')
+    print('  - source MPO lane groups carry per-position plane assignment; the cassette transfer maps split them internally')
+    print('  - first NVL72 tray indexes consume the first 18 cassette front MPO positions in the elevation-derived fill order')
     for segment in segments[:8]:
-        print(
-            f"  sample plane={segment['plane_number']} lanes={segment['lane_indexes']} "
-            f"{segment['a']} -> {segment['b']}"
-        )
+        plane_label = segment.get('plane_number') or segment.get('metadata', {}).get('position_plane_numbers')
+        print(f"  sample plane={plane_label} lanes={segment['lane_indexes']} {segment['a']} -> {segment['b']}")
 
 
 def main() -> None:

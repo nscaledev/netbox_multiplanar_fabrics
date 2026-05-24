@@ -61,6 +61,9 @@ active implementation contract.
   planned post-MVP work areas.
 - [First-class cabling plan](v2_first_class_cabling_plan.md): plan that led to
   `CableAssembly` and strand-to-cable linkage.
+- [Transceiver modeling](v2_transceiver_modeling_plan.md): current hybrid
+  NetBox-module/plugin-semantic transceiver model, built-in profiles, stamping
+  and import bindings, UI exposure, and remaining polish.
 - [V2 ground-up rewrite plan](v2_ground_up_rewrite_plan.md): historical V2
   implementation plan; useful for intent, but code and `data_model.md` are now
   authoritative.

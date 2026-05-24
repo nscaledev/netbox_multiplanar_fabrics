@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -14,13 +15,18 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 
-DEFAULT_WORKBOOK = Path(__file__).resolve().parents[1] / 'data' / 'source' / 'madison-layout-workbook.xlsx'
+DEFAULT_WORKBOOK = Path(
+    os.environ.get(
+        'MADISON_LAYOUT_WORKBOOK',
+        Path(__file__).resolve().parents[1] / 'data' / 'source' / 'madison-layout-workbook.xlsx',
+    )
+)
 DEFAULT_RACK_MANIFEST = Path(__file__).resolve().parents[1] / 'data' / 'generated' / 'madison_workbook_rack_manifest.json'
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'data' / 'generated'
 
 ROW_SHEET_PATTERN = re.compile(r'^Row\s+([A-X])\b', re.IGNORECASE)
 RACK_HEADER_PATTERN = re.compile(r'^Row\s+([A-X])\s*(\d{1,2})$', re.IGNORECASE)
-RACK_LABEL_PATTERN = re.compile(r'^GB300\s+SU\d+$', re.IGNORECASE)
+RACK_LABEL_PATTERN = re.compile(r'^GB300\s+(?:SU\d+|v)$', re.IGNORECASE)
 SU_PATTERN = re.compile(r'\bSU\s*(\d+)\b', re.IGNORECASE)
 PLANE_PATTERN = re.compile(r'\bPL(?:ANE)?\s*([1-4])\b', re.IGNORECASE)
 
@@ -153,6 +159,11 @@ def classify_label(label: str) -> tuple[str, str, str, list[str]]:
         return 'gb300st', 'gb300st', 'GB300 NVL72 NVLink Switch Tray', []
     if lower == 'in rack 1gb switch':
         return 'sn2201_m', 'oob-leaf', 'SN2201_M GPU OOB TOR', []
+
+    if re.fullmatch(r'gpu row mgmt oob leaf\s*#?\d+', lower):
+        return 'sn2201', 'oob-leaf', 'SN2201 GPU Row MGMT OOB Leaf', [
+            'Workbook label omits explicit model; staged as SN2201 OOB leaf pending final SKU confirmation.'
+        ]
 
     if 'sn2201' in lower:
         if 'spine' in lower:

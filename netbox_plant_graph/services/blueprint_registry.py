@@ -378,6 +378,8 @@ def architecture_definition_to_payload(definition: ArchitectureSchemaDefinition)
         },
         'status': definition.status,
         'lifecycle': deepcopy(dict(definition.lifecycle)),
+        'cable_profiles': _jsonable_sequence(definition.cable_profiles),
+        'cable_profile_assignments': _jsonable_sequence(definition.cable_profile_assignments),
         'custom_validator_entrypoints': list(definition.custom_validator_entrypoints),
     }
 
@@ -413,6 +415,8 @@ def architecture_definition_from_payload(
         required_device_types=_required_device_types_from_payload(payload.get('required_device_types') or {}),
         status=str(payload.get('status') or 'active'),
         lifecycle=dict(payload.get('lifecycle') or {}),
+        cable_profiles=tuple(payload.get('cable_profiles') or ()),
+        cable_profile_assignments=tuple(payload.get('cable_profile_assignments') or ()),
         custom_validator_entrypoints=tuple(payload.get('custom_validator_entrypoints') or ()),
     )
 
@@ -430,10 +434,17 @@ def build_builtin_blueprint_entries() -> tuple[BlueprintRegistryEntry, ...]:
                 'gpu_tray': ('gb300-tray', 'gb300-gpu-tray', 'gb300-nvl72-tray'),
                 'leaf_switch': ('roce-leaf-switch', 'leaf-switch', 'sn5600-roce-leaf'),
                 'shuffle_cassette': ('gpu-leaf-shuffle-1x4', 'shuffle-cassette', 'gb300-shuffle-cassette'),
+                'spine_switch': ('roce-spine-200g-plane', 'roce-spine-switch', 'sn5610'),
+                'spine_shuffle_cassette': (
+                    'leaf-spine-shuffle-1x4',
+                    'spine-shuffle-cassette',
+                    'shuffle-cassette',
+                ),
             },
             metadata={
                 'family': 'gb300',
                 'transfer_geometry': 'shuffle_2x2',
+                'topology_segments': ['gb300_to_leaf_shuffle', 'leaf_to_spine_shuffle'],
                 'stamp_template_slugs': [STAMP_TEMPLATE_SLUG],
             },
             stamp_templates={
@@ -474,10 +485,17 @@ def build_builtin_blueprint_entries() -> tuple[BlueprintRegistryEntry, ...]:
                 'gpu_tray': ('gb300-tray', 'gb300-gpu-tray', 'gb300-nvl72-tray'),
                 'leaf_switch': ('roce-leaf-switch', 'leaf-switch', 'sn5600-roce-leaf'),
                 'shuffle_cassette': ('gpu-leaf-shuffle-1x4', 'shuffle-cassette', 'gb300-shuffle-cassette'),
+                'spine_switch': ('roce-spine-200g-plane', 'roce-spine-switch', 'sn5610'),
+                'spine_shuffle_cassette': (
+                    'leaf-spine-shuffle-1x4',
+                    'spine-shuffle-cassette',
+                    'shuffle-cassette',
+                ),
             },
             metadata={
                 'family': 'gb300',
                 'transfer_geometry': 'shuffle_2x2',
+                'topology_segments': ['gb300_to_leaf_shuffle', 'leaf_to_spine_shuffle'],
                 'topology_parameters': {
                     'plane_count': 8,
                     'leaf_count_per_plane': 1,
@@ -526,6 +544,8 @@ def _base_parameter_schema(*, default_planes: int, max_planes: int) -> dict[str,
                     },
                     'gpu_tray_count': {'type': 'integer', 'minimum': 1, 'default': 1},
                     'leaf_count_per_plane': {'type': 'integer', 'minimum': 1, 'default': 1},
+                    'spine_count_per_plane': {'type': 'integer', 'minimum': 1, 'default': 126},
+                    'leaf_spine_osfp_cages_per_leaf': {'type': 'integer', 'minimum': 1, 'default': 32},
                     'racks_per_pod': {'type': 'integer', 'minimum': 1},
                     'pods_per_fabric': {'type': 'integer', 'minimum': 1},
                 },

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,20 @@ from django.db import transaction
 from dcim.models import Device, DeviceRole, DeviceType, Rack
 from extras.models import Tag
 from tenancy.models import Tenant
+
+for candidate in (
+    Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path('/Users/mencken/github-repos/netbox_multiplanar_fabrics/local-netbox-dev/scripts'),
+    Path(globals().get('__file__', '.')).resolve().parent,
+):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+from madison_nvl72_appliance import (  # noqa: E402
+    device_bay_for_child_row,
+    install_child_device_in_bay,
+    nvl72_bay_assignments,
+)
 
 
 MAD_SITE_SLUG = 'gs001'
@@ -160,6 +175,7 @@ def main() -> None:
     racks = racks_by_su(sus)
     rows = selected_manifest_rows(racks)
     print_dry_run(sus, racks, rows)
+    nvl72_bay_map = nvl72_bay_assignments(rows)
     if not apply_enabled():
         print('apply=false; set MADISON_PATTERN_SU_GB300_APPLY=1 to create/update GB300 trays for pattern-backed SUs.')
         return
@@ -217,6 +233,11 @@ def main() -> None:
                 'comments': staged_comments(row, su),
                 'local_context_data': context,
             }
+            parent_bay = device_bay_for_child_row(rack=rack, row=row, assignments=nvl72_bay_map)
+            if parent_bay is not None:
+                defaults['rack'] = None
+                defaults['position'] = None
+                defaults['face'] = ''
             device, created = Device.objects.get_or_create(site=rack.site, name=device_name(row), defaults=defaults)
             changed = False
             if not created:
@@ -228,6 +249,8 @@ def main() -> None:
                 device.full_clean()
                 device.save()
             counters['devices_created' if created else 'devices_updated' if changed else 'devices_unchanged'] += 1
+            if parent_bay is not None:
+                install_child_device_in_bay(device, parent_bay, counters)
             for tag in (row_tag, su_tag):
                 if not device.tags.filter(pk=tag.pk).exists():
                     device.tags.add(tag)

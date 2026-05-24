@@ -20,6 +20,7 @@ from netbox_plant_graph.services.architecture import (
     MPO_POSITION_COUNT,
     ensure_roce_4plane_shuffle_architecture,
 )
+from netbox_plant_graph.services.transceivers import ensure_builtin_transceiver_profiles
 
 
 SOURCE = 'madison_fiber_component_template_staging_2026_05_19'
@@ -69,6 +70,20 @@ def upsert_module_type(manufacturer, definition):
     return module_type
 
 
+def osfp_4x200_interface_templates():
+    return [
+        {
+            'name': f'{{module}}/{index}',
+            'type': 'other',
+            'description': (
+                '200G OSFP logical channel. NetBox 4.2 has no exact 200G OSFP interface type; '
+                'the plugin transceiver profile owns exact 4x200G semantics.'
+            ),
+        }
+        for index in range(1, 5)
+    ]
+
+
 def connector_spec(connector):
     return {
         'label': connector['label'],
@@ -108,7 +123,8 @@ def upsert_transfer_pattern(architecture, definition):
 
 def upsert_shuffle_transfer_pattern(architecture):
     rule = {
-        'type': 'cassette_transfer_policy',
+        'type': 'position_map',
+        'bidirectional': True,
         'connector_kind': 'mpo-12',
         'positions_per_connector': MPO_POSITION_COUNT,
         'active_position_matrix': [dict(entry) for entry in CHANNEL_MAP_MATRIX],
@@ -121,11 +137,24 @@ def upsert_shuffle_transfer_pattern(architecture):
             'A': [1, 12, 2, 11],
             'B': [3, 10, 4, 9],
         },
+        'active_position_groups': {
+            'A': [1, 12, 2, 11],
+            'B': [3, 10, 4, 9],
+        },
         'groups': [
             {
                 'name': 'shuffle-1',
                 'front_mpos': [1, 2],
                 'rear_mpos': [1, 2],
+                'rear_position_transform': {
+                    'type': 'key_down_roll',
+                    'position_count': MPO_POSITION_COUNT,
+                    'formula': 'dst_position = position_count + 1 - base_dst_position',
+                },
+                'active_position_groups': {
+                    'A': [1, 12, 2, 11],
+                    'B': [3, 10, 4, 9],
+                },
                 'matrix': [
                     {'front_mpo': 1, 'rear_mpo': 1, 'src_group': 'A', 'dst_group': 'A'},
                     {'front_mpo': 1, 'rear_mpo': 2, 'src_group': 'B', 'dst_group': 'A'},
@@ -137,6 +166,15 @@ def upsert_shuffle_transfer_pattern(architecture):
                 'name': 'shuffle-2',
                 'front_mpos': [3, 4],
                 'rear_mpos': [3, 4],
+                'rear_position_transform': {
+                    'type': 'key_down_roll',
+                    'position_count': MPO_POSITION_COUNT,
+                    'formula': 'dst_position = position_count + 1 - base_dst_position',
+                },
+                'active_position_groups': {
+                    'A': [1, 12, 2, 11],
+                    'B': [3, 10, 4, 9],
+                },
                 'matrix': [
                     {'front_mpo': 3, 'rear_mpo': 3, 'src_group': 'A', 'dst_group': 'A'},
                     {'front_mpo': 3, 'rear_mpo': 4, 'src_group': 'B', 'dst_group': 'A'},
@@ -249,50 +287,39 @@ OPTIC_MODULE_TYPES = [
         'model': 'MMS4X00-NM OSFP112 800G 2x400G 2DR4 Twin',
         'part_number': 'MMS4X00-NM',
         'description': 'MPO OSFP112 800G 2x400G 2DR4 twin optical transceiver.',
-        'comments': 'Base twin optic SKU from Madison BoM. Model exposes two 400G DR4 MPO line endpoints.',
-        'interfaces': [
-            {'name': 'line-1', 'type': '400gbase-x-osfp', 'description': 'First 400G DR4 MPO line side.'},
-            {'name': 'line-2', 'type': '400gbase-x-osfp', 'description': 'Second 400G DR4 MPO line side.'},
-        ],
+        'comments': (
+            'Base twin optic SKU from Madison BoM. NetBox interface templates expose four operator-visible '
+            '200G logical channels; plugin transceiver profiles own the exact MPO/lane map.'
+        ),
+        'interfaces': osfp_4x200_interface_templates(),
     },
     {
         'model': 'MMS4X00-NM-T OSFP112 800G 2x400G 2DR4 Twin',
         'part_number': 'MMS4X00-NM-T',
         'description': 'MPO OSFP112 800G 2x400G 2DR4 twin optical transceiver, T variant.',
         'comments': 'Variant retained as a distinct module type until SKU suffix semantics are confirmed.',
-        'interfaces': [
-            {'name': 'line-1', 'type': '400gbase-x-osfp', 'description': 'First 400G DR4 MPO line side.'},
-            {'name': 'line-2', 'type': '400gbase-x-osfp', 'description': 'Second 400G DR4 MPO line side.'},
-        ],
+        'interfaces': osfp_4x200_interface_templates(),
     },
     {
         'model': 'MMS4X00-NM-FLT OSFP112 800G 2x400G 2DR4 Twin',
         'part_number': 'MMS4X00-NM-FLT',
         'description': 'MPO OSFP112 800G 2x400G 2DR4 twin optical transceiver, FLT/RHS variant.',
         'comments': 'Variant retained as a distinct module type until physical side/orientation semantics are confirmed.',
-        'interfaces': [
-            {'name': 'line-1', 'type': '400gbase-x-osfp', 'description': 'First 400G DR4 MPO line side.'},
-            {'name': 'line-2', 'type': '400gbase-x-osfp', 'description': 'Second 400G DR4 MPO line side.'},
-        ],
+        'interfaces': osfp_4x200_interface_templates(),
     },
     {
         'model': 'MMS4A20-XM800 OSFP224 800G DR4',
         'part_number': 'MMS4A20-XM800',
         'description': 'MPO OSFP224 800G DR4 single optical transceiver.',
         'comments': 'Madison network BoM description: MPO OSFP224-800G-DR4 Single. One MPO DR4 line endpoint.',
-        'interfaces': [
-            {'name': 'line', 'type': '800gbase-x-osfp', 'description': '800G DR4 MPO line side.'},
-        ],
+        'interfaces': osfp_4x200_interface_templates(),
     },
     {
         'model': 'MMS4A00-XM OSFP224 1600G 2x800G 2DR4 Twin',
         'part_number': 'MMS4A00-XM',
         'description': 'MPO OSFP224 1600G 2x800G 2DR4 twin optical transceiver.',
-        'comments': 'NetBox 4.2 has no native 1600G OSFP interface type, so this module exposes two 800G OSFP line endpoints.',
-        'interfaces': [
-            {'name': 'line-1', 'type': '800gbase-x-osfp', 'description': 'First 800G DR4 MPO line side.'},
-            {'name': 'line-2', 'type': '800gbase-x-osfp', 'description': 'Second 800G DR4 MPO line side.'},
-        ],
+        'comments': 'NetBox 4.2 has no native 1600G OSFP or 200G OSFP interface type; plugin profiles own exact operating modes.',
+        'interfaces': osfp_4x200_interface_templates(),
     },
     {
         'model': 'MMS1X00-NS400 QSFP112 400G DR4',
@@ -503,6 +530,8 @@ def main():
     for definition in OPTIC_MODULE_TYPES:
         upsert_module_type(nvidia, definition)
         counters['module_types'] += 1
+
+    counters.update(ensure_builtin_transceiver_profiles(architecture=architecture))
 
     for definition in BREAKOUT_PROFILES:
         upsert_transfer_pattern(architecture, definition)

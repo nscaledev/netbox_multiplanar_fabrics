@@ -21,6 +21,7 @@ from netbox_plant_graph.models import (
     OperationRun,
     OpticalLane,
     StrandTermination,
+    TransceiverConnector,
     TransportChannel,
 )
 from netbox_plant_graph.services.resolver import _neighbors, build_path_resolver_matrix
@@ -739,6 +740,11 @@ def _components_for_osfp_transceiver_unseat(
     fabric_ids = {endpoint.fabric_id for endpoint in endpoints}
     if selected_fabric is not None:
         fabric_ids.add(selected_fabric.pk)
+    transceiver_connectors = tuple(
+        TransceiverConnector.objects.filter(endpoint_id__in=endpoint_ids)
+        .select_related('module', 'connector_profile', 'endpoint')
+        .order_by('module', 'connector_profile__connector_index', 'pk')
+    )
 
     components = [
         _component_entry(
@@ -763,6 +769,18 @@ def _components_for_osfp_transceiver_unseat(
         )
         for endpoint in endpoints
     )
+    components.extend(
+        _component_entry(
+            obj=connector,
+            kind='transceiver_connector',
+            severity=IMPACT_FAILED,
+            reason_code='transceiver_connector_unavailable',
+            message='Installed transceiver connector face is unavailable because the transceiver is unseated.',
+            remediation='Re-seat or replace the transceiver, then validate this connector face and attached fiber positions.',
+            endpoint_ids=(connector.endpoint_id,),
+        )
+        for connector in transceiver_connectors
+    )
 
     selected_fabric_ref = _ref(selected_fabric) if selected_fabric is not None else None
     return _ScenarioComponents(
@@ -774,6 +792,7 @@ def _components_for_osfp_transceiver_unseat(
             details={
                 'interface_ids': [interface.pk for interface in interfaces],
                 'endpoint_ids': sorted(endpoint_ids),
+                'transceiver_connector_ids': [connector.pk for connector in transceiver_connectors],
             },
         ),
         unavailable_positions=frozenset(position_ids),

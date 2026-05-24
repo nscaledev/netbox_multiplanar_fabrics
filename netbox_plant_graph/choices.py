@@ -70,6 +70,68 @@ class ConnectorKindChoices(ChoiceSet):
     ]
 
 
+class TransceiverProfileStatusChoices(ChoiceSet):
+    key = 'PlantGraphV2.transceiver_profile_status'
+
+    CHOICES = [
+        ('draft', 'Draft'),
+        ('active', 'Active'),
+        ('deprecated', 'Deprecated'),
+        ('retired', 'Retired'),
+    ]
+
+
+class TransceiverFormFactorChoices(ChoiceSet):
+    key = 'PlantGraphV2.transceiver_form_factor'
+
+    CHOICES = [
+        ('osfp112', 'OSFP112'),
+        ('osfp224', 'OSFP224'),
+        ('qsfp112', 'QSFP112'),
+        ('qsfpdd', 'QSFP-DD'),
+        ('qsfp28', 'QSFP28'),
+        ('sfp', 'SFP'),
+        ('other', 'Other'),
+    ]
+
+
+class TransceiverMediaTypeChoices(ChoiceSet):
+    key = 'PlantGraphV2.transceiver_media_type'
+
+    CHOICES = [
+        ('dr1', 'DR1'),
+        ('dr4', 'DR4'),
+        ('2dr4', '2DR4'),
+        ('fr4', 'FR4'),
+        ('sr4', 'SR4'),
+        ('dac', 'DAC'),
+        ('aec', 'AEC'),
+        ('other', 'Other'),
+    ]
+
+
+class ConnectorPolishChoices(ChoiceSet):
+    key = 'PlantGraphV2.connector_polish'
+
+    CHOICES = [
+        ('apc', 'APC'),
+        ('upc', 'UPC'),
+        ('not_applicable', 'Not Applicable'),
+        ('not_specified', 'Not Specified'),
+    ]
+
+
+class ConnectorPinningChoices(ChoiceSet):
+    key = 'PlantGraphV2.connector_pinning'
+
+    CHOICES = [
+        ('pinned', 'Pinned'),
+        ('unpinned', 'Unpinned'),
+        ('not_applicable', 'Not Applicable'),
+        ('not_specified', 'Not Specified'),
+    ]
+
+
 class SegmentKindChoices(ChoiceSet):
     key = 'PlantGraphV2.segment_kind'
 

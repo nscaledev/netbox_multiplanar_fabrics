@@ -6,6 +6,7 @@ import re
 from collections import Counter
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils.text import slugify
 
 from dcim.models import PowerPort, Rack
@@ -13,8 +14,8 @@ from netbox_power_plant.choices import DesignStateChoices, NodeKindChoices, Term
 from netbox_power_plant.models import ElectricalNode, ElectricalSegment, PowerHandoffPoint, PowerSystem
 
 
-MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'mad-1')
-POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'MAD-1 Electrical Plant')
+MAD_SITE_SLUG = os.environ.get('MADISON_SITE_SLUG', 'gs001')
+POWER_SYSTEM_NAME = os.environ.get('MADISON_POWER_SYSTEM_NAME', 'GS001 Electrical Plant')
 APPLY = os.environ.get('MADISON_POWER_HANDOFF_APPLY') == '1'
 ALLOW_PARTIAL = os.environ.get('MADISON_POWER_HANDOFF_ALLOW_PARTIAL') == '1'
 STRICT = os.environ.get('MADISON_POWER_HANDOFF_STRICT') == '1'
@@ -179,12 +180,12 @@ def target_port_for_rack_circuit(rack, circuit):
             PowerPort.objects
             .filter(
                 device__site__slug=MAD_SITE_SLUG,
-                device__rack=rack,
                 device__device_type__slug__in=POWER_SHELF_DEVICE_TYPE_SLUGS,
                 name=POWER_SHELF_FACILITY_INPUT_NAME,
             )
-            .select_related('device', 'device__rack', 'device__device_type')
-            .order_by('device__position', 'device__name', 'name')
+            .filter(Q(device__rack=rack) | Q(device__parent_bay__device__rack=rack))
+            .select_related('device', 'device__rack', 'device__parent_bay__device__rack', 'device__device_type')
+            .order_by('device__local_context_data__madison_workbook__ru_bottom', 'device__position', 'device__name', 'name')
         )
         if len(ports) != 8:
             return None, f'nvl72_facility_input_count_{len(ports)}'
@@ -225,7 +226,7 @@ def desired_handoff_fields(power_system, node, terminal, target_port, redundancy
         'feed_label': feed_label[:100],
         'design_state': DesignStateChoices.STATE_PLANNED,
         'description': short_description(
-            f'MAD-1 handoff from electrical rack id {electrical_rack_id} circuit {circuit} to NetBox rack {slot}.'
+            f'GS001 handoff from electrical rack id {electrical_rack_id} circuit {circuit} to NetBox rack {slot}.'
         ),
     }
 
@@ -328,7 +329,9 @@ def main():
         )
         ready.append(fields)
         counters['handoff_points_ready'] += 1
-        if target_port.device.rack.role and target_port.device.rack.role.slug == NVL72_RACK_ROLE_SLUG:
+        parent_device = getattr(getattr(target_port.device, 'parent_bay', None), 'device', None)
+        target_rack = target_port.device.rack or (parent_device.rack if parent_device is not None else None)
+        if target_rack and target_rack.role and target_rack.role.slug == NVL72_RACK_ROLE_SLUG:
             counters['handoff_points_ready_nvl72'] += 1
         else:
             counters['handoff_points_ready_conventional'] += 1
@@ -340,7 +343,7 @@ def main():
         for key in sorted(samples):
             print(f'{key}_sample=' + '; '.join(samples[key]))
         raise RuntimeError(
-            f'Refusing to apply partial MAD-1 power handoffs: ready={len(ready)} blocked={blockers}. '
+            f'Refusing to apply partial GS001 power handoffs: ready={len(ready)} blocked={blockers}. '
             'Resolve target-port/rack blockers or set MADISON_POWER_HANDOFF_ALLOW_PARTIAL=1.'
         )
 
@@ -362,7 +365,7 @@ def main():
         print(f'{key}_sample=' + '; '.join(samples[key]))
 
     if STRICT and blockers:
-        raise RuntimeError(f'MAD-1 power handoff coverage is incomplete: blocked={blockers}.')
+        raise RuntimeError(f'GS001 power handoff coverage is incomplete: blocked={blockers}.')
 
 
 main()

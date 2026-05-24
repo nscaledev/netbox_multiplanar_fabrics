@@ -27,6 +27,7 @@ from madison_v2_graph import (  # noqa: E402
 
 MAD_SITE_SLUG = 'gs001'
 FABRIC_NAME = 'GS001 RoCE Fabric'
+SHUFFLE_CONTAINMENT_MARKER = 'madison_shuffle_flattened_containment'
 SOURCE_WORKBOOK_PATHS = [
     Path('/opt/netbox/local-plugins/netbox_multiplanar_fabrics/local-netbox-dev/data/source/mencken-nc-backend-fiber-worksheet.xlsx'),
     Path('/Users/mencken/Documents/mencken-nc-backend-fiber-worksheet.xlsx'),
@@ -179,7 +180,7 @@ def shuffle_candidates_by_su_and_group() -> dict[tuple[int, int, str], list[Devi
         .select_related('rack')
         .order_by('rack__name', 'position', 'name')
     ):
-        metadata = box.local_context_data.get('madison_shuffle_elevation_migration_v1') or {}
+        metadata = box.local_context_data.get(SHUFFLE_CONTAINMENT_MARKER) or {}
         nic = metadata.get('nic_index_zero')
         side = metadata.get('side') or ''
         if nic is None or side not in {'A', 'B'}:
@@ -271,7 +272,7 @@ def main() -> None:
             candidates = shuffle_candidates.get((su, nic_index_zero, side), [])
             matching_label_candidates = []
             for candidate in candidates:
-                logical = (candidate.local_context_data.get('madison_shuffle_elevation_migration_v1') or {}).get('logical_shuffle_box')
+                logical = (candidate.local_context_data.get(SHUFFLE_CONTAINMENT_MARKER) or {}).get('logical_shuffle_box')
                 if logical == pattern['shuffle_box_ordinal']:
                     matching_label_candidates.append(candidate)
             if not candidates:

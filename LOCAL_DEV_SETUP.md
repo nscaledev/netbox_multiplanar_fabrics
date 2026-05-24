@@ -53,7 +53,8 @@ Common examples:
   channel data.
 - `backfill_madison_fiber_cable_assemblies.py` links existing lab strands to
   first-class cable assemblies.
-- `smoke_madison_su1_fiber_ui.py` performs a lab-oriented UI smoke check.
+- `report_madison_first_nvl72_fiber_paths.py` and
+  `audit_madison_first_nvl72_fiber_fast.py` verify routed Madison fiber paths.
 
 ## Development Notes
 

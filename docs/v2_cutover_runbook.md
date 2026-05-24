@@ -1,6 +1,6 @@
 # V2 Cutover Runbook
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 ## Preconditions
 
@@ -74,7 +74,9 @@ The expected primary operator pages are:
 
 1. Stamp or load a V2 fabric.
    - Confirm `Fabric`, `Plane`, `FabricNode`, `Endpoint`,
-     `TransportChannel`, `ConnectorPosition`, `CableAssembly`, `FiberSegment`,
+     `TransportChannel`, `ConnectorPosition`, `TransceiverProfile`,
+     `TransceiverConnectorProfile`, `TransceiverLaneProfile`,
+     `TransceiverConnector`, `CableAssembly`, `FiberSegment`,
      `FiberStrand`, `StrandTermination`, `OpticalLane`, and `TransferMap`
      objects are present as expected.
 
@@ -83,6 +85,10 @@ The expected primary operator pages are:
    - Verify `Source` fields anchor to the intended NetBox devices/interfaces.
    - Open a NetBox interface detail page and confirm the multiplanar context
      extension appears when the interface participates in the fabric.
+   - For stamped OSFP endpoints, verify matching NetBox `ModuleBay`/`Module`
+     inventory exists when transceiver creation was requested or inferable, and
+     verify plugin `TransceiverConnector` rows bind installed module connector
+     faces to child MPO endpoints.
 
 3. Confirm cable independence.
    - Verify no NetBox-native cable rows were introduced for modeled-fabric
@@ -100,6 +106,8 @@ The expected primary operator pages are:
 5. Validate Interface Fanout Trace.
    - Navigate to `Multi-planar v2 -> Operate -> Interface Fanout Trace`.
    - Select a device and physical OSFP interface.
+   - Confirm the Transceiver Context card shows installed module, module type,
+     semantic profile, and connector binding status when those rows exist.
    - Confirm expanded mode shows all optical lanes.
    - Confirm consolidated mode groups by 200gbps transport channel.
    - Confirm shuffle-cassette transforms and cable assemblies are rendered.

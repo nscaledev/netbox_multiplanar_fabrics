@@ -1,6 +1,6 @@
 # Architecture Workspace Payloads
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 This document is the operator-facing preparation guide for source artifacts
 attached to `Build & Run -> Architecture Workspaces`.
@@ -13,6 +13,14 @@ The architecture workspace form uses `JSON Payload` as the raw JSON input field.
 That field is not a separate payload format. It is where an operator pastes the
 JSON body for the selected `Artifact Type`, such as a blueprint bundle, raw
 architecture schema, standalone stamp template, or manual component list.
+
+Current architecture payloads describe reusable topology semantics such as
+roles, MPO geometry, channel maps, transfer/shuffle patterns, allocation rules,
+cable profiles, required device types, and stamp templates. They do not yet
+publish a dedicated `transceiver_profiles` schema section. Transceiver profiles
+are seeded or imported through the plugin transceiver model and then consumed by
+V2.5 stamping/import reconciliation when binding NetBox module inventory to
+plugin connector faces.
 
 ## What To Use
 

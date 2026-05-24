@@ -79,6 +79,65 @@
       </div>
     </div>
   </div>
+  <div class="card mb-3">
+    <div class="card-header">Transceiver Context</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="fanout-metric h-100">
+            <div class="small text-muted">Installed Module</div>
+            {% if selected_transceiver.module %}
+              <div class="fw-semibold">
+                <a href="{{ selected_transceiver.module.get_absolute_url }}">{{ selected_transceiver.module }}</a>
+              </div>
+              <div class="small text-muted">{{ selected_transceiver.module_type.manufacturer }} {{ selected_transceiver.module_type.model }}</div>
+            {% else %}
+              <div class="fw-semibold text-warning">No module installed in matching module bay</div>
+              <div class="small text-muted">Expected a module bay named {{ selected_interface.name }} on this device.</div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="fanout-metric h-100">
+            <div class="small text-muted">Plugin Transceiver Profile</div>
+            {% if selected_transceiver.profile %}
+              <div class="fw-semibold">{{ selected_transceiver.profile.name }}</div>
+              <div class="small text-muted">
+                {{ selected_transceiver.profile.aggregate_rate_gbps }}G aggregate /
+                {{ selected_transceiver.profile.channel_count }} x {{ selected_transceiver.profile.channel_rate_gbps }}G
+              </div>
+            {% else %}
+              <div class="fw-semibold text-warning">No mapped transceiver profile</div>
+              {% if selected_transceiver.module_type %}
+                <div class="small text-muted">Add a profile mapping for module type {{ selected_transceiver.module_type }}.</div>
+              {% else %}
+                <div class="small text-muted">Install a NetBox module before profile inference.</div>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="fanout-metric h-100">
+            <div class="small text-muted">Connector Bindings</div>
+            {% if selected_transceiver.connectors %}
+              <div class="fw-semibold">{{ selected_transceiver.connectors|length }} connector{{ selected_transceiver.connectors|length|pluralize }} bound</div>
+              <div class="small text-muted">
+                {% for connector in selected_transceiver.connectors %}
+                  {{ connector.connector_profile.name }} -> {{ connector.endpoint.name }}{% if not forloop.last %}, {% endif %}
+                {% endfor %}
+              </div>
+            {% elif selected_transceiver.profile %}
+              <div class="fw-semibold text-warning">Profile mapped, connector endpoints not bound</div>
+              <div class="small text-muted">Bind transceiver connector faces to plugin MPO endpoints for full fidelity.</div>
+            {% else %}
+              <div class="fw-semibold text-muted">Unavailable</div>
+              <div class="small text-muted">No transceiver profile context is available.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   {% if subinterface_summaries %}
     <div class="card mb-3">

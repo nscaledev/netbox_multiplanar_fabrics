@@ -64,35 +64,145 @@
         </div>
       </div>
       <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          {% for step in architecture_workspace_context.workflow_steps %}
+            <span class="badge {{ step.badge_class }}">{{ step.label }}: {{ step.state }}</span>
+          {% endfor %}
+        </div>
+
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+              <div class="small text-secondary">Next action</div>
+              <div class="h5 mb-1">{{ architecture_workspace_context.next_action.title }}</div>
+              <div class="small">{{ architecture_workspace_context.next_action.reason }}</div>
+              <div class="small text-secondary">{{ architecture_workspace_context.next_action.target }}</div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <span class="badge bg-primary">{{ architecture_workspace_context.next_action.label }}</span>
+              {% if architecture_workspace_context.next_action.url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ architecture_workspace_context.next_action.url }}">Open Target</a>
+              {% endif %}
+              {% if architecture_workspace_context.published_architecture_url %}
+                <a class="btn btn-sm btn-outline-success" href="{{ architecture_workspace_context.published_architecture_url }}">Published Architecture</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
         <div class="row g-3 mb-3">
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Sources</div>
               <div class="fw-semibold">{{ architecture_workspace_context.source_artifacts|length }}</div>
+              <div class="small">
+                {% for row in architecture_workspace_context.source_status_counts %}
+                  <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="text-secondary">None attached</span>
+                {% endfor %}
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Components</div>
               <div class="fw-semibold">{{ architecture_workspace_context.design_components|length }}</div>
+              <div class="small">
+                {% for row in architecture_workspace_context.component_status_counts %}
+                  <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="text-secondary">Not normalized</span>
+                {% endfor %}
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Validation</div>
-              <div class="fw-semibold">{{ object.validation_summary.status|default:"Not run" }}</div>
+              <div class="fw-semibold">
+                {% if architecture_workspace_context.latest_validation_run %}
+                  {{ architecture_workspace_context.latest_validation_run.get_status_display }}
+                  {% if architecture_workspace_context.latest_validation_is_stale %}<span class="badge bg-warning text-dark">stale</span>{% endif %}
+                {% else %}
+                  Not run
+                {% endif %}
+              </div>
+              <div class="small">
+                {{ architecture_workspace_context.latest_import_summary.create|default:"0" }} create /
+                {{ architecture_workspace_context.latest_import_summary.update|default:"0" }} update /
+                {{ architecture_workspace_context.latest_import_summary.conflict|default:"0" }} conflict
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
-              <div class="small text-secondary">Current Revision</div>
+              <div class="small text-secondary">Publish Plan / Revision</div>
               <div class="fw-semibold"><code>{{ architecture_workspace_context.summary.revision|slice:":12" }}</code></div>
+              <div class="small">
+                {% if architecture_workspace_context.current_plan %}
+                  {{ architecture_workspace_context.current_plan.get_status_display }}
+                  {% if architecture_workspace_context.current_plan_is_stale %}<span class="badge bg-warning text-dark">stale plan</span>{% endif %}
+                {% else %}
+                  <span class="text-secondary">No plan</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary mb-1">Component Inventory</div>
+              {% for row in architecture_workspace_context.component_kind_counts %}
+                <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+              {% empty %}
+                <span class="text-secondary small">No normalized architecture components yet.</span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary mb-1">Normalized Architecture Semantics</div>
+              {% if architecture_workspace_context.semantics.slug %}
+                <div class="small">
+                  <strong>{{ architecture_workspace_context.semantics.slug }}</strong>
+                  {{ architecture_workspace_context.semantics.version }}
+                  · {{ architecture_workspace_context.semantics.fabric_class }}
+                  · {{ architecture_workspace_context.semantics.plane_count }} planes
+                </div>
+                <div class="small">
+                  OSFP channels {{ architecture_workspace_context.semantics.osfp_channel_count|default:"0" }} ·
+                  MPO per OSFP {{ architecture_workspace_context.semantics.mpo_count|default:"0" }} ·
+                  active positions {{ architecture_workspace_context.semantics.active_position_count|default:"0" }} ·
+                  dark positions {{ architecture_workspace_context.semantics.dark_position_count|default:"0" }} ·
+                  transfer patterns {{ architecture_workspace_context.semantics.transfer_pattern_count|default:"0" }} ·
+                  stamp templates {{ architecture_workspace_context.semantics.stamp_template_count|default:"0" }}
+                </div>
+              {% else %}
+                <span class="text-secondary small">Normalize a blueprint or schema source to populate semantics.</span>
+              {% endif %}
             </div>
           </div>
         </div>
 
         <details class="mb-3" open>
           <summary class="fw-semibold">Attach Architecture Source Artifact</summary>
+          <div class="small text-secondary mt-2">
+            <strong>Blueprint Bundle</strong> carries a full architecture bundle with optional templates.
+            <strong>Schema JSON</strong> is a single architecture definition.
+            <strong>Stamp Template</strong> attaches a reusable execution template.
+            <strong>API Payload</strong> lets the parser infer bundle, schema, or manual items from JSON shape.
+            <strong>Manual Entry</strong> records one-off component rows.
+          </div>
+          <div class="small text-secondary">
+            Parser Key can be blank: blueprint bundles use <code>mpf_blueprint_bundle</code>, schema JSON uses
+            <code>architecture_schema_json</code>, stamp templates use <code>stamp_template_json</code>, manual entries use
+            <code>manual_component</code>, and API payloads use <code>generic_json</code> inference.
+            <a href="{{ architecture_workspace_context.payload_docs_url }}">Payload examples</a>
+            · <a href="{{ architecture_workspace_context.roce_walkthrough_url }}">RoCE walkthrough</a>
+          </div>
           <form method="post" action="{{ architecture_workspace_context.source_attach_url }}" class="mt-2">
             {% csrf_token %}
             {{ architecture_workspace_context.attach_source_form.as_p }}
@@ -127,6 +237,8 @@
                       {% if source.parse_result.created or source.parse_result.updated %}
                         {{ source.parse_result.created|default:"0" }} created /
                         {{ source.parse_result.updated|default:"0" }} updated
+                      {% elif source.parse_result.issues %}
+                        {{ source.parse_result.issues|length }} issue(s)
                       {% else %}
                         <span class="text-secondary">Not normalized</span>
                       {% endif %}
@@ -165,8 +277,23 @@
                     <td><code>{{ component.kind }}</code></td>
                     <td><a href="{{ component.get_absolute_url }}">{{ component.natural_key }}</a></td>
                     <td>{{ component.get_validation_status_display }}</td>
-                    <td>{% if component.source_artifact %}<a href="{{ component.source_artifact.get_absolute_url }}">{{ component.source_artifact.name }}</a>{% else %}<span class="text-secondary">Manual</span>{% endif %}</td>
-                    <td>{{ component.validation_messages|length }}</td>
+                    <td>
+                      {% if component.source_artifact %}
+                        <a href="{{ component.source_artifact.get_absolute_url }}">{{ component.source_artifact.name }}</a>
+                        <div class="small text-secondary">
+                          <code>{{ component.source_artifact.parser_key }}</code>
+                          · <code>{{ component.source_artifact.content_sha256|slice:":12" }}</code>
+                        </div>
+                      {% else %}
+                        <span class="text-secondary">Manual</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {{ component.validation_messages|length }}
+                      {% if component.provenance.source_field %}
+                        <div class="small text-secondary">{{ component.provenance.source_field }}</div>
+                      {% endif %}
+                    </td>
                   </tr>
                 {% empty %}
                   <tr><td colspan="5" class="text-secondary">No normalized architecture components yet.</td></tr>
@@ -177,7 +304,33 @@
         </details>
 
         <details class="mb-3" open>
-          <summary class="fw-semibold">Validation Runs</summary>
+          <summary class="fw-semibold">Validation And Import Triage</summary>
+          {% if architecture_workspace_context.issue_rows %}
+            <div class="table-responsive mt-2">
+              <table class="table table-sm table-hover mb-0">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Code</th>
+                    <th>Path</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for issue in architecture_workspace_context.issue_rows %}
+                    <tr>
+                      <td>{{ issue.severity }}</td>
+                      <td><code>{{ issue.code }}</code></td>
+                      <td><code>{{ issue.path|default:"-" }}</code></td>
+                      <td>{{ issue.message }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="small text-secondary mt-2">No validation or component issues surfaced.</div>
+          {% endif %}
           <div class="table-responsive mt-2">
             <table class="table table-sm table-hover mb-0">
               <thead>
@@ -196,7 +349,12 @@
                     <td><a href="{{ run.get_absolute_url }}">#{{ run.pk }}</a></td>
                     <td>{{ run.get_status_display }}</td>
                     <td><code>{{ run.validation_kind }}</code></td>
-                    <td><code>{{ run.workspace_revision|slice:":12" }}</code></td>
+                    <td>
+                      <code>{{ run.workspace_revision|slice:":12" }}</code>
+                      {% if run == architecture_workspace_context.latest_validation_run and architecture_workspace_context.latest_validation_is_stale %}
+                        <span class="badge bg-warning text-dark">stale</span>
+                      {% endif %}
+                    </td>
                     <td>{{ run.issues|length }}</td>
                     <td>
                       {{ run.import_plan.summary.create|default:"0" }} create /
@@ -231,7 +389,12 @@
                 {% for plan in architecture_workspace_context.publish_plans %}
                   <tr>
                     <td><a href="{{ plan.get_absolute_url }}"><code>{{ plan.plan_hash|slice:":12" }}</code></a></td>
-                    <td>{{ plan.get_status_display }}</td>
+                    <td>
+                      {{ plan.get_status_display }}
+                      {% if plan == architecture_workspace_context.current_plan and architecture_workspace_context.current_plan_is_stale %}
+                        <span class="badge bg-warning text-dark">stale</span>
+                      {% endif %}
+                    </td>
                     <td><code>{{ plan.workspace_revision|slice:":12" }}</code></td>
                     <td>{{ plan.validation_summary.status|default:"unknown" }}</td>
                     <td>
@@ -250,6 +413,9 @@
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm btn-outline-danger">Publish</button>
                       </form>
+                      {% if plan.status == 'published' %}
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ architecture_workspace_context.handoff_url }}">Handoff</a>
+                      {% endif %}
                     </td>
                   </tr>
                 {% empty %}
@@ -377,29 +543,116 @@
         </div>
       </div>
       <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          {% for step in onboarding_workspace_context.workflow_steps %}
+            <span class="badge {{ step.badge_class }}">{{ step.label }}: {{ step.state }}</span>
+          {% endfor %}
+        </div>
+
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+              <div class="small text-secondary">Next action</div>
+              <div class="h5 mb-1">{{ onboarding_workspace_context.next_action.title }}</div>
+              <div class="small">{{ onboarding_workspace_context.next_action.reason }}</div>
+              <div class="small text-secondary">{{ onboarding_workspace_context.next_action.target }}</div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <span class="badge bg-primary">{{ onboarding_workspace_context.next_action.label }}</span>
+              {% if onboarding_workspace_context.next_action.url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ onboarding_workspace_context.next_action.url }}">Open Target</a>
+              {% endif %}
+              {% if onboarding_workspace_context.current_plan_is_stale %}
+                <span class="badge bg-warning text-dark">stale plan</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
         <div class="row g-3 mb-3">
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Sources</div>
               <div class="fw-semibold">{{ onboarding_workspace_context.source_artifacts|length }}</div>
+              <div class="small">
+                {% for row in onboarding_workspace_context.source_status_counts %}
+                  <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="text-secondary">None attached</span>
+                {% endfor %}
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Design Items</div>
               <div class="fw-semibold">{{ onboarding_workspace_context.design_items|length }}</div>
+              <div class="small">
+                {% for row in onboarding_workspace_context.design_status_counts %}
+                  <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="text-secondary">Not normalized</span>
+                {% endfor %}
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
               <div class="small text-secondary">Prerequisites</div>
               <div class="fw-semibold">{{ onboarding_workspace_context.prerequisites|length }}</div>
+              <div class="small">
+                {% for row in onboarding_workspace_context.prerequisite_status_counts %}
+                  <span class="badge {% if row.key == 'blocked' %}bg-danger{% elif row.key == 'open' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="text-secondary">Not discovered</span>
+                {% endfor %}
+              </div>
             </div>
           </div>
           <div class="col-md-3">
             <div class="border rounded p-2 h-100">
-              <div class="small text-secondary">Readiness</div>
-              <div class="fw-semibold">{{ object.readiness_summary.status|default:"Not run" }}</div>
+              <div class="small text-secondary">Plan / Readiness</div>
+              <div class="fw-semibold">
+                {% if onboarding_workspace_context.current_plan %}
+                  {{ onboarding_workspace_context.current_plan.get_status_display }}
+                {% else %}
+                  No plan
+                {% endif %}
+              </div>
+              <div class="small">
+                Readiness {{ onboarding_workspace_context.readiness.status|default:"not run" }}
+                {% if onboarding_workspace_context.readiness.blocking_count %}· {{ onboarding_workspace_context.readiness.blocking_count }} blocking{% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mb-3">
+          <div class="col-md-4">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Unresolved Prerequisites</div>
+              <div class="fw-semibold">{{ onboarding_workspace_context.unresolved_prerequisite_count }}</div>
+              <div class="small">{{ onboarding_workspace_context.blocking_prerequisite_count }} blocking</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Current Plan Stages</div>
+              {% for row in onboarding_workspace_context.stage_status_counts %}
+                <span class="badge {% if row.key == 'failed' or row.key == 'rolled_back' %}bg-danger{% elif row.key == 'completed' %}bg-success{% else %}bg-secondary{% endif %}">{{ row.label }} {{ row.count }}</span>
+              {% empty %}
+                <span class="small text-secondary">No stages yet</span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-2 h-100">
+              <div class="small text-secondary">Object Links / Handoff</div>
+              {% for row in onboarding_workspace_context.object_link_counts %}
+                <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+              {% empty %}
+                <span class="small text-secondary">No object links yet</span>
+              {% endfor %}
             </div>
           </div>
         </div>
@@ -424,6 +677,7 @@
                   <th>Status</th>
                   <th>Parser</th>
                   <th>SHA256</th>
+                  <th>Parse Result</th>
                   <th></th>
                 </tr>
               </thead>
@@ -436,6 +690,16 @@
                     <td><code>{{ source.parser_key }}</code></td>
                     <td><code>{{ source.content_sha256|slice:":12" }}</code></td>
                     <td>
+                      {% if source.parse_result.created or source.parse_result.updated %}
+                        {{ source.parse_result.created|default:"0" }} created /
+                        {{ source.parse_result.updated|default:"0" }} updated
+                      {% elif source.parse_result.issues %}
+                        {{ source.parse_result.issues|length }} issue(s)
+                      {% else %}
+                        <span class="text-secondary">Not normalized</span>
+                      {% endif %}
+                    </td>
+                    <td>
                       <form method="post" action="{% url 'plugins:netbox_plant_graph:onboarding_source_artifact_normalize' pk=source.pk %}">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm btn-outline-secondary">Normalize</button>
@@ -443,7 +707,7 @@
                     </td>
                   </tr>
                 {% empty %}
-                  <tr><td colspan="6" class="text-secondary">No source artifacts attached yet.</td></tr>
+                  <tr><td colspan="7" class="text-secondary">No source artifacts attached yet.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -452,6 +716,13 @@
 
         <details class="mb-3">
           <summary class="fw-semibold">Design Inventory</summary>
+          <div class="mt-2 mb-2">
+            {% for row in onboarding_workspace_context.design_kind_counts %}
+              <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+            {% empty %}
+              <span class="small text-secondary">No staged design items yet.</span>
+            {% endfor %}
+          </div>
           <div class="table-responsive mt-2">
             <table class="table table-sm table-hover mb-0">
               <thead>
@@ -460,6 +731,7 @@
                   <th>Natural Key</th>
                   <th>Status</th>
                   <th>Source</th>
+                  <th>Messages</th>
                 </tr>
               </thead>
               <tbody>
@@ -467,11 +739,29 @@
                   <tr>
                     <td><code>{{ item.kind }}</code></td>
                     <td><a href="{{ item.get_absolute_url }}">{{ item.natural_key }}</a></td>
-                    <td>{{ item.get_validation_status_display }}</td>
-                    <td>{% if item.source_artifact %}<a href="{{ item.source_artifact.get_absolute_url }}">{{ item.source_artifact.name }}</a>{% else %}<span class="text-secondary">Manual</span>{% endif %}</td>
+                    <td>
+                      {{ item.get_validation_status_display }}
+                      {% if item.validation_status == 'conflict' %}
+                        <span class="badge bg-danger">conflict</span>
+                      {% elif item.validation_status == 'warning' %}
+                        <span class="badge bg-warning text-dark">warning</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if item.source_artifact %}
+                        <a href="{{ item.source_artifact.get_absolute_url }}">{{ item.source_artifact.name }}</a>
+                        <div class="small text-secondary">
+                          <code>{{ item.source_artifact.parser_key }}</code>
+                          · <code>{{ item.source_artifact.content_sha256|slice:":12" }}</code>
+                        </div>
+                      {% else %}
+                        <span class="text-secondary">Manual</span>
+                      {% endif %}
+                    </td>
+                    <td>{{ item.validation_messages|length }}</td>
                   </tr>
                 {% empty %}
-                  <tr><td colspan="4" class="text-secondary">No staged design items yet.</td></tr>
+                  <tr><td colspan="5" class="text-secondary">No staged design items yet.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -480,6 +770,14 @@
 
         <details class="mb-3" open>
           <summary class="fw-semibold">Prerequisites</summary>
+          <div class="small text-secondary mt-2">
+            {{ onboarding_workspace_context.unresolved_prerequisite_count }} unresolved or blocking prerequisites.
+          </div>
+          <div class="mt-2">
+            {% for row in onboarding_workspace_context.prerequisite_status_counts %}
+              <span class="badge {% if row.key == 'blocked' %}bg-danger{% elif row.key == 'open' %}bg-warning text-dark{% elif row.key == 'resolved' %}bg-success{% else %}bg-secondary{% endif %}">{{ row.label }} {{ row.count }}</span>
+            {% endfor %}
+          </div>
           <div class="table-responsive mt-2">
             <table class="table table-sm table-hover mb-0">
               <thead>
@@ -488,21 +786,43 @@
                   <th>Model</th>
                   <th>Status</th>
                   <th>Resolution</th>
+                  <th>Bound Object</th>
+                  <th>Create Payload</th>
                   <th>Resolve</th>
                 </tr>
               </thead>
               <tbody>
-                {% for prerequisite in onboarding_workspace_context.prerequisites %}
+                {% regroup onboarding_workspace_context.prerequisites by status as prerequisite_groups %}
+                {% for group in prerequisite_groups %}
+                  <tr class="table-light">
+                    <th colspan="7">{{ group.grouper|title }}</th>
+                  </tr>
+                  {% for prerequisite in group.list %}
                   <tr>
                     <td><a href="{{ prerequisite.get_absolute_url }}">{{ prerequisite.requirement_key }}</a></td>
                     <td><code>{{ prerequisite.object_model }}</code></td>
                     <td>{{ prerequisite.get_status_display }}</td>
                     <td>{{ prerequisite.get_resolution_mode_display }}</td>
                     <td>
+                      {% if prerequisite.resolved_object_id %}
+                        <code>{{ prerequisite.resolved_object_type.app_label }}.{{ prerequisite.resolved_object_type.model }}:{{ prerequisite.resolved_object_id }}</code>
+                      {% else %}
+                        <span class="text-secondary">None</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if prerequisite.planned_create %}
+                        <span class="badge bg-secondary">available</span>
+                      {% else %}
+                        <span class="text-secondary">None</span>
+                      {% endif %}
+                    </td>
+                    <td>
                       <form method="post" action="{% url 'plugins:netbox_plant_graph:onboarding_prerequisite_resolve' pk=prerequisite.pk %}" class="d-flex flex-wrap gap-1">
                         {% csrf_token %}
                         <select name="resolution_mode" class="form-select form-select-sm" style="width: 10rem">
                           <option value="bind">Bind</option>
+                          <option value="create">Create</option>
                           <option value="defer">Defer</option>
                           <option value="not_required">Not Required</option>
                           <option value="unresolved">Unresolved</option>
@@ -513,8 +833,9 @@
                       </form>
                     </td>
                   </tr>
+                  {% endfor %}
                 {% empty %}
-                  <tr><td colspan="5" class="text-secondary">No prerequisites discovered yet.</td></tr>
+                  <tr><td colspan="7" class="text-secondary">No prerequisites discovered yet.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -523,6 +844,38 @@
 
         <details class="mb-3" open>
           <summary class="fw-semibold">Plans & Execution</summary>
+          <div class="row g-3 mt-1 mb-2">
+            <div class="col-md-6">
+              <div class="border rounded p-2 h-100">
+                <div class="small text-secondary">Current Plan</div>
+                {% if onboarding_workspace_context.current_plan %}
+                  <div class="fw-semibold">
+                    <a href="{{ onboarding_workspace_context.current_plan.get_absolute_url }}"><code>{{ onboarding_workspace_context.current_plan.plan_hash|slice:":12" }}</code></a>
+                    {{ onboarding_workspace_context.current_plan.get_status_display }}
+                    {% if onboarding_workspace_context.current_plan_is_stale %}<span class="badge bg-warning text-dark">stale</span>{% endif %}
+                  </div>
+                  <div class="small">
+                    {{ onboarding_workspace_context.import_summary.create|default:"0" }} create /
+                    {{ onboarding_workspace_context.import_summary.update|default:"0" }} update /
+                    {{ onboarding_workspace_context.import_summary.skip|default:"0" }} skip /
+                    {{ onboarding_workspace_context.import_summary.conflict|default:"0" }} conflict
+                  </div>
+                {% else %}
+                  <span class="small text-secondary">No plan generated yet.</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="border rounded p-2 h-100">
+                <div class="small text-secondary">Stage Status</div>
+                {% for row in onboarding_workspace_context.stage_status_counts %}
+                  <span class="badge {% if row.key == 'failed' or row.key == 'rolled_back' %}bg-danger{% elif row.key == 'completed' %}bg-success{% else %}bg-secondary{% endif %}">{{ row.label }} {{ row.count }}</span>
+                {% empty %}
+                  <span class="small text-secondary">Generate and apply a plan to create stages.</span>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
           <div class="table-responsive mt-2">
             <table class="table table-sm table-hover mb-0">
               <thead>
@@ -538,7 +891,12 @@
                 {% for plan in onboarding_workspace_context.plans %}
                   <tr>
                     <td><a href="{{ plan.get_absolute_url }}"><code>{{ plan.plan_hash|slice:":12" }}</code></a></td>
-                    <td>{{ plan.get_status_display }}</td>
+                    <td>
+                      {{ plan.get_status_display }}
+                      {% if plan == onboarding_workspace_context.current_plan and onboarding_workspace_context.current_plan_is_stale %}
+                        <span class="badge bg-warning text-dark">stale</span>
+                      {% endif %}
+                    </td>
                     <td><code>{{ plan.workspace_revision|slice:":12" }}</code></td>
                     <td>{% if plan.approved_by %}{{ plan.approved_by }}{% else %}<span class="text-secondary">No</span>{% endif %}</td>
                     <td class="d-flex flex-wrap gap-2">
@@ -559,6 +917,35 @@
               </tbody>
             </table>
           </div>
+          {% if onboarding_workspace_context.stage_attention %}
+            <h5 class="mt-3">Stage Attention</h5>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0">
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th>Status</th>
+                    <th>Result / Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for stage in onboarding_workspace_context.stage_attention %}
+                    <tr>
+                      <td>{{ stage.stage_key }}</td>
+                      <td>{{ stage.get_status_display }}</td>
+                      <td>
+                        {% if stage.error_detail %}
+                          {{ stage.error_detail }}
+                        {% elif stage.result.message %}
+                          {{ stage.result.message }}
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
           {% if onboarding_workspace_context.current_stages %}
             <h5 class="mt-3">Current Plan Stages</h5>
             <div class="table-responsive">
@@ -581,13 +968,57 @@
                       <td>{{ stage.get_status_display }}</td>
                       <td>{% if stage.stamp_run %}<a href="{{ stage.stamp_run.get_absolute_url }}">#{{ stage.stamp_run.pk }}</a>{% else %}<span class="text-secondary">None</span>{% endif %}</td>
                       <td>{% if stage.operation_run %}<a href="{{ stage.operation_run.get_absolute_url }}">#{{ stage.operation_run.pk }}</a>{% else %}<span class="text-secondary">None</span>{% endif %}</td>
-                      <td>{{ stage.error_detail|default:"" }}</td>
+                      <td>
+                        {% if stage.error_detail %}
+                          {{ stage.error_detail }}
+                        {% elif stage.result.message %}
+                          {{ stage.result.message }}
+                        {% endif %}
+                      </td>
                     </tr>
                   {% endfor %}
                 </tbody>
               </table>
             </div>
           {% endif %}
+        </details>
+
+        <details class="mb-3" open>
+          <summary class="fw-semibold">Readiness & Handoff</summary>
+          <div class="row g-3 mt-1">
+            <div class="col-md-6">
+              <div class="border rounded p-2 h-100">
+                <div class="small text-secondary">Readiness</div>
+                <div class="fw-semibold">{{ onboarding_workspace_context.readiness.status|default:"Not run" }}</div>
+                <div class="small">{{ onboarding_workspace_context.readiness.reason|default:"Run readiness after apply." }}</div>
+                <div class="mt-1">
+                  {% for row in onboarding_workspace_context.readiness_rows %}
+                    <span class="badge bg-secondary">{{ row.label }} {{ row.count }}</span>
+                  {% empty %}
+                    <span class="small text-secondary">No readiness issues recorded.</span>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="border rounded p-2 h-100">
+                <div class="small text-secondary">Current Plan Object Links</div>
+                {% for link in onboarding_workspace_context.current_plan_links %}
+                  <div class="small">
+                    <span class="badge bg-secondary">{{ link.link_kind }}</span>
+                    {{ link.label|default:"Object link" }}
+                    {% if link.object_id %}<code>{{ link.object_type.app_label }}.{{ link.object_type.model }}:{{ link.object_id }}</code>{% endif %}
+                    {% if link.external_url %}<a href="{{ link.external_url }}">Open</a>{% endif %}
+                  </div>
+                {% empty %}
+                  <span class="small text-secondary">No object links recorded for the current plan yet.</span>
+                {% endfor %}
+                <div class="mt-2">
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ onboarding_workspace_context.handoff_url }}">Handoff JSON</a>
+                </div>
+              </div>
+            </div>
+          </div>
         </details>
       </div>
     </div>

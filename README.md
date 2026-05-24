@@ -3,7 +3,7 @@
 `netbox_plant_graph` is a NetBox plugin for modeling multi-planar optical
 fabrics, with the current V2 implementation focused on RoCE/GPU fabrics that
 use OSFP endpoints, MPO12 fanout, shuffle cassettes, bundled cable assemblies,
-and 200gbps transport channels.
+installed transceiver modules, and 200gbps transport channels.
 
 The plugin is intentionally **plugin-native** for modeled fabric connectivity.
 It anchors to NetBox devices and interfaces where those objects exist, but it
@@ -21,7 +21,15 @@ V2 provides:
 - a seeded architecture definition for
   `roce-4-plane-gb300-2x2-shuffle`, including a 4-plane topology, OSFP ->
   MPO12 child connector semantics, a 200gbps sub-interface channel-map matrix,
-  and the active-position 2x2 shuffle transform;
+  the active-position 2x2 shuffle transform, and explicit backend leaf-to-spine
+  shuffle semantics through spine-side cassettes, with 96f/72f trunk cable
+  profile candidates for structured cable plant segments;
+- first-class transceiver semantics layered onto NetBox module inventory:
+  NetBox `ModuleBay`/`ModuleType`/`Module` rows represent OSFP cages, optic
+  SKUs, and installed modules, while plugin `TransceiverProfile`,
+  `TransceiverConnectorProfile`, `TransceiverLaneProfile`, and
+  `TransceiverConnector` rows represent exact connector faces, APC/UPC polish,
+  MPO geometry, and 4x200gbps lane/channel mappings;
 - first-class `CableAssembly` rows for jumpers, trunks, and parent/child cable
   hierarchy, with each `FiberStrand` able to resolve back to an assembly by
   site-local cable ID;
@@ -74,8 +82,10 @@ The plugin menu is grouped around current workflows:
 
 The visual trace workflows render source/destination 200gbps interface groups,
 MPO12 connector positions, shuffle cassette transforms, cable assemblies, and
-per-lane paths. The trace sections support collapse/expand behavior and SVG
-export.
+per-lane paths. Interface Fanout Trace also surfaces the selected OSFP's
+installed NetBox module, matched plugin transceiver profile, and bound
+transceiver connector faces when those rows exist. The trace sections support
+collapse/expand behavior and SVG export.
 
 The Physical Cable Blast Radius workflow supports operator-first selection by
 site, device type, role, rack label, rack row, rack elevation, and partial device
@@ -90,6 +100,9 @@ V2 uses NetBox as inventory context, not as the fabric connection graph:
 - `Fabric` can scope to a NetBox site, location, and tenant.
 - `FabricNode` and `Endpoint` can anchor to NetBox objects through generic
   foreign keys.
+- NetBox `ModuleBay`, `ModuleType`, and `Module` objects are used for physical
+  transceiver inventory, with plugin transceiver rows providing the optical
+  semantics NetBox cannot express directly.
 - `TransportChannel.source_subinterface` can link to NetBox child interfaces
   created for 200gbps channels.
 - NetBox interface detail pages expose incoming multiplanar context through a
@@ -149,6 +162,7 @@ See [LOCAL_DEV_SETUP.md](LOCAL_DEV_SETUP.md) for local environment notes and
 - [First-class cabling plan](docs/v2_first_class_cabling_plan.md)
 - [First-class architecture workspace](docs/v2_first_class_architecture_workspace.md)
 - [First-class onboarding workspace](docs/v2_first_class_onboarding_workspace_design.md)
+- [Transceiver modeling](docs/v2_transceiver_modeling_plan.md)
 
 ## License
 
